@@ -16,6 +16,10 @@
       ]
     },
     "shell:allow-kill",
-    "shell:allow-stdin-write"
+    "shell:allow-stdin-write",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled",
+    "notification:default"
   ]
 }
