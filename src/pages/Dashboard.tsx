@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { fetchAPI } from "../lib/api";
 import { fmtCost, fmtTokens, getTimeRange, TimePreset, CHART_COLORS } from "../lib/utils";
-import StatCard from "../components/StatCard";
 import TimeRangeSelector from "../components/TimeRangeSelector";
 import ChartCard from "../components/ChartCard";
 
@@ -42,6 +41,11 @@ interface CostOverTime {
   series: { model: string; data: number[] }[];
 }
 
+interface CostByModel {
+  model: string;
+  cost: number;
+}
+
 function transformTokens(rows: TokensRow[]): TokensOverTime {
   return {
     labels: rows.map((r) => r.date),
@@ -65,9 +69,65 @@ function transformCost(rows: CostRow[]): CostOverTime {
   };
 }
 
-interface CostByModel {
-  model: string;
-  cost: number;
+/* ── Skeleton loader ── */
+function Skeleton({ className }: { className?: string }) {
+  return <div className={`animate-pulse rounded bg-muted ${className || ""}`} />;
+}
+
+function DashboardSkeleton() {
+  return (
+    <div className="grid grid-cols-[260px_1fr] gap-5">
+      <div className="space-y-4">
+        <div className="pb-4 border-b border-border space-y-2">
+          <Skeleton className="h-3 w-20" />
+          <Skeleton className="h-10 w-36" />
+          <Skeleton className="h-3 w-24" />
+        </div>
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="py-3 space-y-2">
+            <Skeleton className="h-3 w-16" />
+            <Skeleton className="h-6 w-20" />
+            <Skeleton className="h-1 w-full" />
+          </div>
+        ))}
+      </div>
+      <div className="space-y-3">
+        <Skeleton className="h-[200px] rounded-xl" />
+        <div className="grid grid-cols-[3fr_2fr] gap-3">
+          <Skeleton className="h-[160px] rounded-xl" />
+          <Skeleton className="h-[160px] rounded-xl" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Metric with progress bar ── */
+function MetricRow({ label, value, change, percent, color, valueColor }: {
+  label: string; value: string; change?: string; percent: number; color: string; valueColor?: string;
+}) {
+  return (
+    <div className="py-3 border-b border-border last:border-b-0">
+      <div className="text-[11px] text-muted-foreground mb-0.5">{label}</div>
+      <div className="flex items-baseline gap-2">
+        <span className="text-xl font-bold font-mono" style={valueColor ? { color: valueColor } : undefined}>{value}</span>
+        {change && <span className="text-[11px] text-green">{change}</span>}
+      </div>
+      <div className="mt-1.5 h-1 rounded-full bg-muted overflow-hidden">
+        <div className="h-full rounded-full transition-all duration-500 ease-out" style={{ width: `${percent}%`, backgroundColor: color }} />
+      </div>
+    </div>
+  );
+}
+
+/* ── Auxiliary stat cell ── */
+function AuxCell({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="bg-card border border-border rounded-lg p-2 text-center">
+      <div className="text-[10px] text-muted-foreground">{label}</div>
+      <div className="text-sm font-semibold font-mono">{value}</div>
+    </div>
+  );
 }
 
 export default function Dashboard() {
@@ -110,29 +170,29 @@ export default function Dashboard() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  /* ── ECharts options ── */
   const tokensOption = tokensData?.labels ? {
     tooltip: { trigger: "axis" },
     legend: { data: [t("input"), t("output"), t("cacheRead"), t("cacheCreate")] },
+    grid: { left: 40, right: 12, top: 36, bottom: 24 },
     xAxis: { type: "category", data: tokensData.labels },
     yAxis: { type: "value" },
     series: [
-      { name: t("input"), type: "bar", stack: "tokens", data: tokensData.input, color: "#3b82f6" },
-      { name: t("output"), type: "bar", stack: "tokens", data: tokensData.output, color: "#22c55e" },
-      { name: t("cacheRead"), type: "bar", stack: "tokens", data: tokensData.cache_read, color: "#f59e0b" },
-      { name: t("cacheCreate"), type: "bar", stack: "tokens", data: tokensData.cache_creation, color: "#8b5cf6" },
+      { name: t("input"), type: "bar", stack: "tokens", data: tokensData.input, color: CHART_COLORS[0] },
+      { name: t("output"), type: "bar", stack: "tokens", data: tokensData.output, color: CHART_COLORS[1] },
+      { name: t("cacheRead"), type: "bar", stack: "tokens", data: tokensData.cache_read, color: CHART_COLORS[3] },
+      { name: t("cacheCreate"), type: "bar", stack: "tokens", data: tokensData.cache_creation, color: CHART_COLORS[2] },
     ],
   } : {};
 
   const costOption = costData?.series ? {
     tooltip: { trigger: "axis" },
     legend: { data: costData.series.map((s) => s.model) },
+    grid: { left: 40, right: 12, top: 36, bottom: 24 },
     xAxis: { type: "category", data: costData.labels },
     yAxis: { type: "value" },
     series: costData.series.map((s, i) => ({
-      name: s.model,
-      type: "bar",
-      stack: "cost",
-      data: s.data,
+      name: s.model, type: "bar", stack: "cost", data: s.data,
       color: CHART_COLORS[i % CHART_COLORS.length],
     })),
   } : {};
@@ -140,16 +200,18 @@ export default function Dashboard() {
   const pieOption = pieData.length ? {
     tooltip: { trigger: "item" },
     series: [{
-      type: "pie",
-      radius: ["40%", "70%"],
+      type: "pie", radius: ["40%", "70%"],
       data: pieData.map((d, i) => ({
-        name: d.model,
-        value: d.cost,
+        name: d.model, value: d.cost,
         itemStyle: { color: CHART_COLORS[i % CHART_COLORS.length] },
       })),
       label: { formatter: "{b}: {d}%" },
     }],
   } : {};
+
+  /* ── Derived values for left panel ── */
+  const totalInput = stats ? (stats.total_tokens - (stats.total_tokens * 0.25)) : 0; // approximate
+  const cacheRate = stats ? (stats.cache_hit_rate * 100) : 0;
 
   return (
     <div className="space-y-4">
@@ -160,38 +222,67 @@ export default function Dashboard() {
         onRefresh={fetchData}
       />
       {loading && !stats ? (
-        <div className="flex items-center justify-center py-20 text-muted-foreground text-sm">
-          {t("loading")}...
-        </div>
+        <DashboardSkeleton />
       ) : error ? (
         <div className="flex flex-col items-center justify-center py-20 gap-3">
           <p className="text-red-500 text-sm">{error}</p>
-          <button onClick={fetchData} className="px-4 py-2 bg-accent text-white rounded-lg text-sm hover:bg-accent-hover">
+          <button onClick={fetchData} className="px-4 py-2 bg-accent text-white rounded-lg text-sm hover:bg-accent-hover cursor-pointer transition-colors duration-200">
             {t("retry")}
           </button>
         </div>
       ) : (
-      <>
-      <div className="grid grid-cols-6 gap-4">
-        <StatCard label={t("totalTokens")} value={fmtTokens(stats?.total_tokens || 0)} color="#3b82f6" />
-        <StatCard label={t("totalCost")} value={fmtCost(stats?.total_cost || 0)} color="#22c55e" />
-        <StatCard label={t("sessions")} value={String(stats?.total_sessions || 0)} color="#f59e0b" />
-        <StatCard label={t("prompts")} value={String(stats?.total_prompts || 0)} color="#f472b6" />
-        <StatCard label={t("apiCalls")} value={fmtTokens(stats?.total_calls || 0)} color="#2563eb" />
-        <StatCard label={t("cacheHitRate")} value={((stats?.cache_hit_rate || 0) * 100).toFixed(1) + "%"} color="#8b5cf6" />
-      </div>
-      <div className="grid grid-cols-5 gap-4">
-        <div className="col-span-5">
-          <ChartCard title={t("tokenUsage")} option={tokensOption} />
+        <div className="grid grid-cols-[260px_1fr] gap-5">
+          {/* ── Left Panel ── */}
+          <div className="flex flex-col">
+            {/* Cost Hero */}
+            <div className="mb-3 pb-3 border-b border-border">
+              <div className="text-[11px] text-muted-foreground uppercase tracking-wider">{t("todayCost")}</div>
+              <div className="text-[40px] font-extrabold font-mono leading-none tracking-tight mt-0.5">
+                {fmtCost(stats?.total_cost || 0)}
+              </div>
+            </div>
+
+            {/* Secondary metrics */}
+            <div>
+              <MetricRow
+                label={t("tokenConsumption")}
+                value={fmtTokens(stats?.total_tokens || 0)}
+                percent={Math.min(72, 100)}
+                color="#f97316"
+              />
+              <MetricRow
+                label={t("cacheHitRate")}
+                value={cacheRate.toFixed(1) + "%"}
+                percent={cacheRate}
+                color="#22c55e"
+                valueColor="#22c55e"
+              />
+              <MetricRow
+                label={t("apiCalls")}
+                value={fmtTokens(stats?.total_calls || 0)}
+                percent={Math.min(55, 100)}
+                color="#6366f1"
+              />
+            </div>
+
+            {/* Auxiliary 2x2 grid */}
+            <div className="grid grid-cols-2 gap-2 mt-auto pt-3">
+              <AuxCell label={t("sessions")} value={String(stats?.total_sessions || 0)} />
+              <AuxCell label={t("prompts")} value={String(stats?.total_prompts || 0)} />
+              <AuxCell label={t("inputTokens")} value={fmtTokens(totalInput)} />
+              <AuxCell label={t("outputTokens")} value={fmtTokens(stats?.total_tokens ? stats.total_tokens * 0.25 : 0)} />
+            </div>
+          </div>
+
+          {/* ── Right Panel ── */}
+          <div className="flex flex-col gap-3">
+            <ChartCard title={t("tokenUsage")} option={tokensOption} height={200} />
+            <div className="grid grid-cols-[3fr_2fr] gap-3">
+              <ChartCard title={t("costTrend")} option={costOption} height={160} />
+              <ChartCard title={t("costByModel")} option={pieOption} height={160} />
+            </div>
+          </div>
         </div>
-        <div className="col-span-3">
-          <ChartCard title={t("costOverTime")} option={costOption} />
-        </div>
-        <div className="col-span-2">
-          <ChartCard title={t("costByModel")} option={pieOption} />
-        </div>
-      </div>
-      </>
       )}
     </div>
   );

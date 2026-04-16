@@ -68,5 +68,11 @@
   "gran_1w": "1 周",
   "gran_1M": "1 个月",
   "loading": "加载中",
-  "retry": "重试"
+  "retry": "重试",
+  "todayCost": "今日总费用",
+  "vsYesterday": "较昨日",
+  "tokenConsumption": "Token 消耗",
+  "inputTokens": "输入 Token",
+  "outputTokens": "输出 Token",
+  "costTrend": "费用趋势"
 }

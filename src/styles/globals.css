@@ -1,16 +1,17 @@
 @import "tailwindcss";
 
 @theme {
-  --color-background: #f8fafc;
-  --color-foreground: #0f172a;
+  --color-background: #fafafa;
+  --color-foreground: #171717;
   --color-card: #ffffff;
-  --color-card-foreground: #0f172a;
-  --color-border: #e2e8f0;
-  --color-muted: #f1f5f9;
-  --color-muted-foreground: #64748b;
-  --color-accent: #2563eb;
-  --color-accent-hover: #1d4ed8;
+  --color-card-foreground: #171717;
+  --color-border: #e5e5e5;
+  --color-muted: #f5f5f5;
+  --color-muted-foreground: #737373;
+  --color-accent: #f97316;
+  --color-accent-hover: #ea580c;
   --color-green: #16a34a;
+  --color-accent-dim: rgba(249, 115, 22, 0.12);
 }
 
 :root {
@@ -18,14 +19,22 @@
 }
 
 .dark {
-  --color-background: #0b0f1a;
-  --color-foreground: #f1f5f9;
-  --color-card: #0e1223;
-  --color-card-foreground: #f1f5f9;
-  --color-border: #1e293b;
-  --color-muted: #1e293b;
-  --color-muted-foreground: #94a3b8;
-  --color-accent: #3b82f6;
-  --color-accent-hover: #2563eb;
+  --color-background: #171717;
+  --color-foreground: #e5e5e5;
+  --color-card: #1c1c1c;
+  --color-card-foreground: #e5e5e5;
+  --color-border: #262626;
+  --color-muted: #262626;
+  --color-muted-foreground: #a3a3a3;
+  --color-accent: #f97316;
+  --color-accent-hover: #fb923c;
   --color-green: #22c55e;
+  --color-accent-dim: rgba(249, 115, 22, 0.15);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

@@ -68,5 +68,11 @@
   "gran_1w": "1 week",
   "gran_1M": "1 month",
   "loading": "Loading",
-  "retry": "Retry"
+  "retry": "Retry",
+  "todayCost": "Total Cost Today",
+  "vsYesterday": "vs yesterday",
+  "tokenConsumption": "Token Usage",
+  "inputTokens": "Input Tokens",
+  "outputTokens": "Output Tokens",
+  "costTrend": "Cost Trend"
 }
