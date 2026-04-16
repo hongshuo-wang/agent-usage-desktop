@@ -38,3 +38,10 @@ skills-lock.json
 .vibe/
 .windsurf/
 .zencoder/
+
+# Tauri & Frontend
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/binaries/
+*.tsbuildinfo

@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+@theme {
+  --color-card: #ffffff;
+  --color-card-foreground: #0f172a;
+  --color-border: #e2e8f0;
+  --color-muted: #64748b;
+  --color-accent: #2563eb;
+  --color-accent-hover: #1d4ed8;
+  --color-green: #16a34a;
+}
+
+:root {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.dark {
+  --color-card: #0e1223;
+  --color-card-foreground: #f1f5f9;
+  --color-border: #1e293b;
+  --color-muted: #94a3b8;
+  --color-accent: #3b82f6;
+  --color-accent-hover: #2563eb;
+  --color-green: #22c55e;
+}
