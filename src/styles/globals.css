@@ -1,10 +1,13 @@
 @import "tailwindcss";
 
 @theme {
+  --color-background: #f8fafc;
+  --color-foreground: #0f172a;
   --color-card: #ffffff;
   --color-card-foreground: #0f172a;
   --color-border: #e2e8f0;
-  --color-muted: #64748b;
+  --color-muted: #f1f5f9;
+  --color-muted-foreground: #64748b;
   --color-accent: #2563eb;
   --color-accent-hover: #1d4ed8;
   --color-green: #16a34a;
@@ -15,10 +18,13 @@
 }
 
 .dark {
+  --color-background: #0b0f1a;
+  --color-foreground: #f1f5f9;
   --color-card: #0e1223;
   --color-card-foreground: #f1f5f9;
   --color-border: #1e293b;
-  --color-muted: #94a3b8;
+  --color-muted: #1e293b;
+  --color-muted-foreground: #94a3b8;
   --color-accent: #3b82f6;
   --color-accent-hover: #2563eb;
   --color-green: #22c55e;

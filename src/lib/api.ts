@@ -1,11 +1,23 @@
 import { invoke } from "@tauri-apps/api/core";
 
+let cachedPort: number | null = null;
+
 async function getPort(): Promise<number> {
-  try {
-    return await invoke<number>("get_sidecar_port");
-  } catch {
-    return 9800;
+  if (cachedPort) return cachedPort;
+  // Retry up to 100 times (10s total) waiting for sidecar to be ready
+  for (let i = 0; i < 100; i++) {
+    try {
+      const port = await invoke<number>("get_sidecar_port");
+      if (port > 0) {
+        cachedPort = port;
+        return port;
+      }
+    } catch {
+      // invoke failed, sidecar not ready yet
+    }
+    await new Promise((r) => setTimeout(r, 100));
   }
+  throw new Error("Sidecar not ready");
 }
 
 function buildQuery(params: {

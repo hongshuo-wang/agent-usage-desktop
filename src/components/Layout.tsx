@@ -19,8 +19,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   }, []);
 
   const handleOpenWebUI = async () => {
-    const url = await getWebUIUrl();
-    open(url);
+    try {
+      const url = await getWebUIUrl();
+      open(url);
+    } catch {
+      // sidecar not ready, ignore silently
+    }
   };
 
   const toggleTheme = () => {

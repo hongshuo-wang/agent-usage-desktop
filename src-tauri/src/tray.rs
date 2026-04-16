@@ -27,6 +27,10 @@ pub fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                 tauri::async_runtime::spawn(async move {
                     let state = handle.state::<crate::sidecar::SidecarState>();
                     let port = state.port.load(std::sync::atomic::Ordering::Relaxed);
+                    if port == 0 {
+                        eprintln!("[tray] sidecar not ready, cannot open Web UI");
+                        return;
+                    }
                     let url = format!("http://127.0.0.1:{}", port);
                     let _ = handle.shell().open(&url, None::<tauri_plugin_shell::open::Program>);
                 });

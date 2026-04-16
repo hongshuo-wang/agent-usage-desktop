@@ -76,11 +76,22 @@ export default function Sessions() {
   const [page, setPage] = useState(1);
   const [filter, setFilter] = useState("");
   const [expanded, setExpanded] = useState<Record<string, SessionDetail[] | null>>({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     const range = getTimeRange(preset);
-    const data = await fetchAPI<Session[]>("sessions", { ...range, granularity, source: source || undefined });
-    setSessions(data || []);
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await fetchAPI<Session[]>("sessions", { ...range, granularity, source: source || undefined });
+      setSessions(data || []);
+    } catch (e) {
+      console.error("Sessions fetch error:", e);
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
   }, [preset, granularity, source]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
@@ -107,10 +118,14 @@ export default function Sessions() {
       setExpanded((prev) => { const next = { ...prev }; delete next[sid]; return next; });
     } else {
       setExpanded((prev) => ({ ...prev, [sid]: null }));
-      const url = await getWebUIUrl();
-      const res = await fetch(`${url}/api/session-detail?session_id=${encodeURIComponent(sid)}`);
-      const data = await res.json();
-      setExpanded((prev) => ({ ...prev, [sid]: data }));
+      try {
+        const url = await getWebUIUrl();
+        const res = await fetch(`${url}/api/session-detail?session_id=${encodeURIComponent(sid)}`);
+        const data = await res.json();
+        setExpanded((prev) => ({ ...prev, [sid]: data }));
+      } catch {
+        setExpanded((prev) => { const next = { ...prev }; delete next[sid]; return next; });
+      }
     }
   };
 
@@ -128,6 +143,18 @@ export default function Sessions() {
             className="bg-background border border-border rounded-lg px-3 py-2 text-sm w-56" />
         </div>
         <div className="overflow-x-auto">
+          {loading && sessions.length === 0 ? (
+            <div className="flex items-center justify-center py-20 text-muted-foreground text-sm">
+              {t("loading")}...
+            </div>
+          ) : error ? (
+            <div className="flex flex-col items-center justify-center py-20 gap-3">
+              <p className="text-red-500 text-sm">{error}</p>
+              <button onClick={fetchData} className="px-4 py-2 bg-accent text-white rounded-lg text-sm hover:bg-accent-hover">
+                {t("retry")}
+              </button>
+            </div>
+          ) : (
           <table className="w-full text-sm">
             <thead>
               <tr>
@@ -185,6 +212,7 @@ export default function Sessions() {
               ))}
             </tbody>
           </table>
+          )}
         </div>
         <div className="px-6 py-4 flex items-center justify-end gap-2">
           <span className="text-muted-foreground text-sm mr-auto">

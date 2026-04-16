@@ -40,10 +40,16 @@ pub async fn start_sidecar(app: &tauri::AppHandle) -> Result<u16, String> {
     let config_dir = home.join(".config").join("agent-usage");
     let config_path = config_dir.join("config.yaml");
 
-    // Create default config if it doesn't exist
+    // Create default config if it doesn't exist — must specify absolute storage
+    // path so the Go sidecar doesn't write to a relative path inside the app bundle
+    std::fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
     if !config_path.exists() {
-        std::fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
-        // Go binary handles defaults when config file is missing, so just touch it
+        let db_path = config_dir.join("agent-usage.db");
+        let default_config = format!(
+            "storage:\n  path: \"{}\"\n",
+            db_path.to_str().unwrap().replace('\\', "/")
+        );
+        std::fs::write(&config_path, default_config).map_err(|e| e.to_string())?;
     }
 
     let sidecar_command = app

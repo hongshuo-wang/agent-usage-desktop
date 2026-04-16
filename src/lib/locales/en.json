@@ -66,5 +66,7 @@
   "gran_12h": "12 hours",
   "gran_1d": "1 day",
   "gran_1w": "1 week",
-  "gran_1M": "1 month"
+  "gran_1M": "1 month",
+  "loading": "Loading",
+  "retry": "Retry"
 }

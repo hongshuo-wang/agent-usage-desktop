@@ -15,6 +15,14 @@ interface DashboardStats {
   cache_hit_rate: number;
 }
 
+interface TokensRow {
+  date: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read: number;
+  cache_create: number;
+}
+
 interface TokensOverTime {
   labels: string[];
   input: number[];
@@ -23,9 +31,38 @@ interface TokensOverTime {
   cache_creation: number[];
 }
 
+interface CostRow {
+  date: string;
+  value: number;
+  model: string;
+}
+
 interface CostOverTime {
   labels: string[];
   series: { model: string; data: number[] }[];
+}
+
+function transformTokens(rows: TokensRow[]): TokensOverTime {
+  return {
+    labels: rows.map((r) => r.date),
+    input: rows.map((r) => r.input_tokens),
+    output: rows.map((r) => r.output_tokens),
+    cache_read: rows.map((r) => r.cache_read),
+    cache_creation: rows.map((r) => r.cache_create),
+  };
+}
+
+function transformCost(rows: CostRow[]): CostOverTime {
+  const labelSet = [...new Set(rows.map((r) => r.date))];
+  const models = [...new Set(rows.map((r) => r.model))];
+  const lookup = new Map(rows.map((r) => [`${r.date}|${r.model}`, r.value]));
+  return {
+    labels: labelSet,
+    series: models.map((m) => ({
+      model: m,
+      data: labelSet.map((l) => lookup.get(`${l}|${m}`) || 0),
+    })),
+  };
 }
 
 interface CostByModel {
@@ -44,29 +81,36 @@ export default function Dashboard() {
   const [tokensData, setTokensData] = useState<TokensOverTime | null>(null);
   const [costData, setCostData] = useState<CostOverTime | null>(null);
   const [pieData, setPieData] = useState<CostByModel[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     const range = getTimeRange(preset);
     const params = { ...range, granularity, source: source || undefined };
+    setLoading(true);
+    setError(null);
     try {
-      const [s, tok, cost, pie] = await Promise.all([
+      const [s, tokRaw, costRaw, pie] = await Promise.all([
         fetchAPI<DashboardStats>("stats", params),
-        fetchAPI<TokensOverTime>("tokens-over-time", params),
-        fetchAPI<CostOverTime>("cost-over-time", params),
+        fetchAPI<TokensRow[]>("tokens-over-time", params),
+        fetchAPI<CostRow[]>("cost-over-time", params),
         fetchAPI<CostByModel[]>("cost-by-model", params),
       ]);
       setStats(s);
-      setTokensData(tok);
-      setCostData(cost);
+      setTokensData(tokRaw?.length ? transformTokens(tokRaw) : null);
+      setCostData(costRaw?.length ? transformCost(costRaw) : null);
       setPieData(pie || []);
     } catch (e) {
       console.error("Dashboard fetch error:", e);
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
     }
   }, [preset, granularity, source]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  const tokensOption = tokensData ? {
+  const tokensOption = tokensData?.labels ? {
     tooltip: { trigger: "axis" },
     legend: { data: [t("input"), t("output"), t("cacheRead"), t("cacheCreate")] },
     xAxis: { type: "category", data: tokensData.labels },
@@ -79,7 +123,7 @@ export default function Dashboard() {
     ],
   } : {};
 
-  const costOption = costData ? {
+  const costOption = costData?.series ? {
     tooltip: { trigger: "axis" },
     legend: { data: costData.series.map((s) => s.model) },
     xAxis: { type: "category", data: costData.labels },
@@ -115,6 +159,19 @@ export default function Dashboard() {
         source={source} onSourceChange={setSource}
         onRefresh={fetchData}
       />
+      {loading && !stats ? (
+        <div className="flex items-center justify-center py-20 text-muted-foreground text-sm">
+          {t("loading")}...
+        </div>
+      ) : error ? (
+        <div className="flex flex-col items-center justify-center py-20 gap-3">
+          <p className="text-red-500 text-sm">{error}</p>
+          <button onClick={fetchData} className="px-4 py-2 bg-accent text-white rounded-lg text-sm hover:bg-accent-hover">
+            {t("retry")}
+          </button>
+        </div>
+      ) : (
+      <>
       <div className="grid grid-cols-6 gap-4">
         <StatCard label={t("totalTokens")} value={fmtTokens(stats?.total_tokens || 0)} color="#3b82f6" />
         <StatCard label={t("totalCost")} value={fmtCost(stats?.total_cost || 0)} color="#22c55e" />
@@ -134,6 +191,8 @@ export default function Dashboard() {
           <ChartCard title={t("costByModel")} option={pieOption} />
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 }

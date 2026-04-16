@@ -7,7 +7,7 @@ mod tray;
 use sidecar::SidecarState;
 use std::sync::atomic::AtomicU16;
 use std::sync::Mutex;
-use tauri::{Listener, Manager};
+use tauri::{Emitter, Listener, Manager};
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_notification::NotificationExt;
 
@@ -33,9 +33,11 @@ fn main() {
                 match sidecar::start_sidecar(&handle).await {
                     Ok(port) => {
                         println!("Sidecar started on port {}", port);
+                        let _ = handle.emit("sidecar-ready", port);
                     }
                     Err(e) => {
                         eprintln!("Failed to start sidecar: {}", e);
+                        let _ = handle.emit("sidecar-failed", e);
                     }
                 }
             });
