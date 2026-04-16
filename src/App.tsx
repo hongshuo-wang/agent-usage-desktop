@@ -2,9 +2,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Layout from "./components/Layout";
 import Dashboard from "./pages/Dashboard";
 import Sessions from "./pages/Sessions";
-function Settings() {
-  return <div>Settings placeholder</div>;
-}
+import Settings from "./pages/Settings";
 
 function App() {
   return (
