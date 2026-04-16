@@ -27,11 +27,16 @@ func main() {
 	}
 
 	configPath := flag.String("config", "", "path to config file")
+	portFlag := flag.Int("port", 0, "override server port")
 	flag.Parse()
 
 	cfg, err := config.Load(config.ResolveConfigPath(*configPath))
 	if err != nil {
 		log.Fatalf("config: %v", err)
+	}
+
+	if *portFlag > 0 {
+		cfg.Server.Port = *portFlag
 	}
 
 	db, err := storage.Open(cfg.Storage.Path)

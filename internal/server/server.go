@@ -26,13 +26,27 @@ func New(db *storage.DB, addr string) *Server {
 	return &Server{db: db, addr: addr}
 }
 
-// Start registers HTTP handlers and begins listening. It blocks until the server stops.
-func (s *Server) Start() error {
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(204)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// Handler builds and returns the HTTP handler with all routes and middleware.
+func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	sub, _ := fs.Sub(staticFS, "static")
 	mux.Handle("/", http.FileServer(http.FS(sub)))
 
+	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/stats", s.handleStats)
 	mux.HandleFunc("/api/cost-by-model", s.handleCostByModel)
 	mux.HandleFunc("/api/cost-over-time", s.handleCostOverTime)
@@ -40,8 +54,17 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/sessions", s.handleSessions)
 	mux.HandleFunc("/api/session-detail", s.handleSessionDetail)
 
+	return corsMiddleware(mux)
+}
+
+// Start registers HTTP handlers and begins listening. It blocks until the server stops.
+func (s *Server) Start() error {
 	log.Printf("server: listening on %s", s.addr)
-	return http.ListenAndServe(s.addr, mux)
+	return http.ListenAndServe(s.addr, s.Handler())
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 func (s *Server) parseTimeRange(r *http.Request) (time.Time, time.Time, int, error) {
