@@ -33,8 +33,9 @@ export default function TimeRangeSelector({
   const { t } = useTranslation();
 
   return (
-    <div className="flex flex-wrap items-center gap-3">
-      <div className="flex bg-card border border-border rounded-lg p-0.5">
+    <div className="space-y-2">
+      {/* Row 1: Preset buttons */}
+      <div className="flex flex-wrap items-center gap-2 bg-card border border-border rounded-lg p-1">
         {PRESETS.map((p) => (
           <button
             key={p}
@@ -48,36 +49,39 @@ export default function TimeRangeSelector({
         ))}
       </div>
 
-      {preset === "custom" && (
-        <div className="flex items-center gap-2">
-          <input type="date" value={customFrom} onChange={(e) => onCustomFromChange?.(e.target.value)}
-            className="bg-card border border-border rounded-lg px-3 py-1.5 text-sm" />
-          <span className="text-muted-foreground text-sm">{t("to")}</span>
-          <input type="date" value={customTo} onChange={(e) => onCustomToChange?.(e.target.value)}
-            className="bg-card border border-border rounded-lg px-3 py-1.5 text-sm" />
-        </div>
-      )}
+      {/* Row 2: Filters + refresh */}
+      <div className="flex flex-wrap items-center gap-2">
+        {preset === "custom" && (
+          <div className="flex items-center gap-2">
+            <input type="date" value={customFrom} onChange={(e) => onCustomFromChange?.(e.target.value)}
+              className="bg-card border border-border rounded-lg px-3 py-1.5 text-sm" />
+            <span className="text-muted-foreground text-sm">{t("to")}</span>
+            <input type="date" value={customTo} onChange={(e) => onCustomToChange?.(e.target.value)}
+              className="bg-card border border-border rounded-lg px-3 py-1.5 text-sm" />
+          </div>
+        )}
 
-      <select value={granularity}
-        onChange={(e) => { onGranularityChange(e.target.value); localStorage.setItem("au-granularity", e.target.value); }}
-        className="bg-card border border-border rounded-lg px-3 py-1.5 text-sm">
-        {GRANULARITIES.map((g) => (
-          <option key={g} value={g}>{t(`gran_${g}`)}</option>
-        ))}
-      </select>
+        <select value={granularity}
+          onChange={(e) => { onGranularityChange(e.target.value); localStorage.setItem("au-granularity", e.target.value); }}
+          className="bg-card border border-border rounded-lg px-3 py-1.5 text-sm">
+          {GRANULARITIES.map((g) => (
+            <option key={g} value={g}>{t(`gran_${g}`)}</option>
+          ))}
+        </select>
 
-      <select value={source}
-        onChange={(e) => { onSourceChange(e.target.value); localStorage.setItem("au-source", e.target.value); }}
-        className="bg-card border border-border rounded-lg px-3 py-1.5 text-sm">
-        {SOURCES.map((s) => (
-          <option key={s.value} value={s.value}>{t(s.label)}</option>
-        ))}
-      </select>
+        <select value={source}
+          onChange={(e) => { onSourceChange(e.target.value); localStorage.setItem("au-source", e.target.value); }}
+          className="bg-card border border-border rounded-lg px-3 py-1.5 text-sm">
+          {SOURCES.map((s) => (
+            <option key={s.value} value={s.value}>{t(s.label)}</option>
+          ))}
+        </select>
 
-      <button onClick={onRefresh}
-        className="ml-auto bg-accent text-white px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-accent/90">
-        {t("refresh")}
-      </button>
+        <button onClick={onRefresh}
+          className="ml-auto bg-accent text-white px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-accent/90 cursor-pointer transition-colors">
+          {t("refresh")}
+        </button>
+      </div>
     </div>
   );
 }

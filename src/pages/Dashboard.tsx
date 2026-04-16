@@ -76,7 +76,7 @@ function Skeleton({ className }: { className?: string }) {
 
 function DashboardSkeleton() {
   return (
-    <div className="grid grid-cols-[260px_1fr] gap-5">
+    <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-5">
       <div className="space-y-4">
         <div className="pb-4 border-b border-border space-y-2">
           <Skeleton className="h-3 w-20" />
@@ -93,7 +93,7 @@ function DashboardSkeleton() {
       </div>
       <div className="space-y-3">
         <Skeleton className="h-[200px] rounded-xl" />
-        <div className="grid grid-cols-[3fr_2fr] gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-[3fr_2fr] gap-3">
           <Skeleton className="h-[160px] rounded-xl" />
           <Skeleton className="h-[160px] rounded-xl" />
         </div>
@@ -231,7 +231,7 @@ export default function Dashboard() {
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-[260px_1fr] gap-5">
+        <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-5">
           {/* ── Left Panel ── */}
           <div className="flex flex-col">
             {/* Cost Hero */}
@@ -275,9 +275,9 @@ export default function Dashboard() {
           </div>
 
           {/* ── Right Panel ── */}
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-3 min-w-0">
             <ChartCard title={t("tokenUsage")} option={tokensOption} height={200} />
-            <div className="grid grid-cols-[3fr_2fr] gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-[3fr_2fr] gap-3">
               <ChartCard title={t("costTrend")} option={costOption} height={160} />
               <ChartCard title={t("costByModel")} option={pieOption} height={160} />
             </div>
