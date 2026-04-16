@@ -1,9 +1,6 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Layout from "./components/Layout";
-
-function Dashboard() {
-  return <div>Dashboard placeholder</div>;
-}
+import Dashboard from "./pages/Dashboard";
 function Sessions() {
   return <div>Sessions placeholder</div>;
 }
