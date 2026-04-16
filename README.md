@@ -23,6 +23,7 @@ Collects local session data from Claude Code, Codex, OpenClaw, OpenCode and othe
 - 🔄 **Incremental scanning** — watches for new sessions, deduplicates automatically
 - 📦 **Single binary** — `go:embed` packs the web UI into the executable
 - 🖥️ **Cross-platform** — Linux, macOS, Windows
+- 🖥️ **Desktop app** — Tauri v2 native app with system tray, autostart, cost notifications, dark/light theme, i18n (EN/ZH)
 
 ## Quick Start (Docker)
 
@@ -97,6 +98,8 @@ Config search order: `--config` flag > `/etc/agent-usage/config.yaml` > `./confi
 
 ## Build from Source
 
+### Go backend only (web dashboard)
+
 ```bash
 # Clone
 git clone https://github.com/briqt/agent-usage.git
@@ -115,6 +118,63 @@ cp config.yaml config.local.yaml
 # Open dashboard
 open http://localhost:9800
 ```
+
+### Desktop app (Tauri)
+
+Prerequisites: [Node.js](https://nodejs.org/) 20+, [Rust](https://rustup.rs/), [Go](https://go.dev/) 1.24+.
+
+```bash
+git clone https://github.com/briqt/agent-usage.git
+cd agent-usage
+
+# Install frontend dependencies
+npm ci
+
+# Build Go sidecar for your platform
+mkdir -p src-tauri/binaries
+
+# macOS Apple Silicon:
+CGO_ENABLED=0 go build -o src-tauri/binaries/agent-usage-aarch64-apple-darwin .
+
+# macOS Intel:
+CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-apple-darwin .
+
+# Linux:
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-unknown-linux-gnu .
+
+# Windows:
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-pc-windows-msvc.exe .
+
+# Build desktop app
+npx tauri build
+```
+
+Output location:
+- macOS: `src-tauri/target/release/bundle/macos/Agent Usage.app` and `.dmg`
+- Windows: `src-tauri/target/release/bundle/msi/` and `nsis/`
+- Linux: `src-tauri/target/release/bundle/deb/` and `appimage/`
+
+For development with hot-reload:
+
+```bash
+npx tauri dev
+```
+
+### Creating a release
+
+Push a version tag to trigger the CI/CD pipeline, which builds for all platforms and creates a draft GitHub Release:
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+The GitHub Actions workflow (`.github/workflows/desktop.yml`) will:
+1. Build the Go sidecar for each platform (macOS arm64/x86_64, Windows, Linux)
+2. Build the Tauri desktop app
+3. Upload artifacts to a draft GitHub Release
+
+Go to **GitHub Releases**, review the draft, and publish it. Users can then download the installer for their platform directly from the release page.
 
 ## Supported Data Sources
 
@@ -210,6 +270,9 @@ Invalid date formats or reversed date ranges return a `400` JSON error with a de
 - **SQLite** via [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite) — pure Go SQLite driver
 - **ECharts** — charting library
 - **`go:embed`** — single binary deployment
+- **Tauri v2** — desktop app framework (Rust core + system WebView)
+- **React 18** + TypeScript + Vite — desktop app frontend
+- **Tailwind CSS v4** — styling
 
 ## Docker Details
 
@@ -238,11 +301,11 @@ docker build --build-arg GOPROXY=https://goproxy.cn,direct -t agent-usage:local 
 
 ## Roadmap
 
-- [ ] More agent sources (Cursor, Copilot, OpenCode, etc.)
+- [ ] More agent sources (Cursor, Copilot, etc.)
 - [ ] OTLP HTTP receiver for real-time telemetry
 - [ ] OS service management (systemd / launchd / Windows Service)
 - [ ] Export to CSV/JSON
-- [ ] Alerting (cost thresholds)
+- [x] ~~Alerting (cost thresholds)~~ — desktop app notifications
 - [ ] Multi-user support
 
 ## Community

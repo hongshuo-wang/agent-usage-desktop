@@ -23,6 +23,7 @@
 - 🔄 **增量扫描** —— 监听新会话，自动去重
 - 📦 **单二进制** —— `go:embed` 将 Web UI 打包进可执行文件
 - 🖥️ **跨平台** —— Linux、macOS、Windows
+- 🖥️ **桌面应用** —— Tauri v2 原生应用，支持系统托盘、开机自启、费用告警通知、深色/浅色主题、中英文切换
 
 ## 快速开始（Docker）
 
@@ -97,6 +98,8 @@ pricing:
 
 ## 从源码编译
 
+### 仅 Go 后端（Web 仪表板）
+
 ```bash
 # 克隆
 git clone https://github.com/briqt/agent-usage.git
@@ -115,6 +118,63 @@ cp config.yaml config.local.yaml
 # 打开仪表板
 open http://localhost:9800
 ```
+
+### 桌面应用（Tauri）
+
+前置条件：[Node.js](https://nodejs.org/) 20+、[Rust](https://rustup.rs/)、[Go](https://go.dev/) 1.24+。
+
+```bash
+git clone https://github.com/briqt/agent-usage.git
+cd agent-usage
+
+# 安装前端依赖
+npm ci
+
+# 为你的平台编译 Go sidecar
+mkdir -p src-tauri/binaries
+
+# macOS Apple Silicon：
+CGO_ENABLED=0 go build -o src-tauri/binaries/agent-usage-aarch64-apple-darwin .
+
+# macOS Intel：
+CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-apple-darwin .
+
+# Linux：
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-unknown-linux-gnu .
+
+# Windows：
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-pc-windows-msvc.exe .
+
+# 构建桌面应用
+npx tauri build
+```
+
+产物位置：
+- macOS：`src-tauri/target/release/bundle/macos/Agent Usage.app` 和 `.dmg`
+- Windows：`src-tauri/target/release/bundle/msi/` 和 `nsis/`
+- Linux：`src-tauri/target/release/bundle/deb/` 和 `appimage/`
+
+开发模式（热更新）：
+
+```bash
+npx tauri dev
+```
+
+### 创建发布
+
+推送版本标签即可触发 CI/CD 流水线，自动为所有平台构建并创建 GitHub Release 草稿：
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+GitHub Actions 工作流（`.github/workflows/desktop.yml`）会：
+1. 为每个平台编译 Go sidecar（macOS arm64/x86_64、Windows、Linux）
+2. 构建 Tauri 桌面应用
+3. 将产物上传到 GitHub Release 草稿
+
+前往 **GitHub Releases** 页面，审核草稿后点击发布。用户即可从 Release 页面直接下载对应平台的安装包。
 
 ## 支持的数据源
 
@@ -210,6 +270,9 @@ agent-usage
 - **SQLite** via [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite) —— 纯 Go SQLite 驱动
 - **ECharts** —— 图表库
 - **`go:embed`** —— 单二进制部署
+- **Tauri v2** —— 桌面应用框架（Rust 内核 + 系统 WebView）
+- **React 18** + TypeScript + Vite —— 桌面应用前端
+- **Tailwind CSS v4** —— 样式
 
 ## Docker 详情
 
@@ -238,11 +301,11 @@ docker build --build-arg GOPROXY=https://goproxy.cn,direct -t agent-usage:local 
 
 ## 路线图
 
-- [ ] 更多 agent 数据源（Cursor、Copilot、OpenCode 等）
+- [ ] 更多 agent 数据源（Cursor、Copilot 等）
 - [ ] OTLP HTTP 接收端，支持实时遥测
 - [ ] 系统服务管理（systemd / launchd / Windows Service）
 - [ ] 导出 CSV/JSON
-- [ ] 告警（费用阈值）
+- [x] ~~告警（费用阈值）~~ —— 桌面应用通知已实现
 - [ ] 多用户支持
 
 ## 社区

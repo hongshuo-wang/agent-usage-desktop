@@ -45,4 +45,8 @@ dist/
 src-tauri/target/
 src-tauri/binaries/
 src-tauri/gen/
+src-tauri/src-tauri/
 *.tsbuildinfo
+
+# Superpowers / brainstorming artifacts
+.superpowers/

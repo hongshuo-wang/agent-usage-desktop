@@ -4,12 +4,45 @@ This file provides guidance to AI coding agents when working with code in this r
 
 ## Build & Run
 
+### Go backend (standalone)
+
 ```bash
 go build -o agent-usage .                # build binary
 ./agent-usage                             # run (reads config.yaml by default)
 ./agent-usage --config path/to/config.yaml
+./agent-usage --port 9800                 # override server port
 ./agent-usage version                     # print version info
 ```
+
+### Desktop app (Tauri)
+
+```bash
+npm ci                                    # install frontend deps
+npx tauri dev                             # dev mode (hot-reload frontend + Rust)
+npx tauri build                           # production build → .app/.dmg/.msi/.deb
+```
+
+Before `tauri build`, place the Go sidecar binary in `src-tauri/binaries/`:
+
+```bash
+# macOS arm64 example:
+CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
+  go build -o src-tauri/binaries/agent-usage-aarch64-apple-darwin .
+
+# macOS x86_64:
+CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 \
+  go build -o src-tauri/binaries/agent-usage-x86_64-apple-darwin .
+
+# Linux:
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+  go build -o src-tauri/binaries/agent-usage-x86_64-unknown-linux-gnu .
+
+# Windows:
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+  go build -o src-tauri/binaries/agent-usage-x86_64-pc-windows-msvc.exe .
+```
+
+Binary naming must match Tauri's `externalBin` convention: `agent-usage-{rust-target-triple}[.exe]`.
 
 ## Testing
 
@@ -33,9 +66,24 @@ Container runs as UID 1000 by default; adjust `user:` in docker-compose.yml if y
 
 ## Architecture
 
-Single-binary Go application that collects AI coding agent token usage from local JSONL session files, stores it in SQLite, and serves a web dashboard.
+Single-binary Go application that collects AI coding agent token usage from local JSONL session files, stores it in SQLite, and serves a web dashboard. Also ships as a Tauri v2 desktop app wrapping the same Go backend as a sidecar process.
 
 **Data flow:** Collectors scan session dirs → parse JSONL → write to SQLite (with dedup) → pricing synced from litellm → costs calculated → served via REST API + embedded web UI.
+
+### Desktop app (Tauri)
+
+The desktop app uses a layered architecture:
+
+- **Go sidecar** — the same Go binary, bundled inside the Tauri app via `externalBin`. Tauri's Rust layer spawns it with `--port <dynamic>` and `--config ~/.config/agent-usage/config.yaml`. Port is discovered via `find_available_port()` (bind to `:0`), health-checked via `/api/health`.
+- **Rust layer** (`src-tauri/src/`) — manages sidecar lifecycle (start, health check, crash recovery), system tray, autostart, OS notifications, and Tauri commands.
+- **React frontend** (`src/`) — React 18 + TypeScript + Vite + Tailwind CSS v4. Communicates with Go backend via HTTP (port obtained through Tauri `invoke`). i18n (en/zh), dark/light/system theme.
+
+Key Rust files:
+- `src-tauri/src/main.rs` — app setup, plugin registration, sidecar spawn, notification loop
+- `src-tauri/src/sidecar.rs` — `SidecarState` (AtomicU16 port + Mutex child), start/kill/restart
+- `src-tauri/src/commands.rs` — Tauri commands: get_sidecar_port, get/set_cost_threshold, get/set_notifications_enabled
+- `src-tauri/src/tray.rs` — system tray: Show Panel, Open Web UI, Quit; left-click toggles window
+- `src-tauri/capabilities/default.json` — Tauri v2 permissions (shell, autostart, notification)
 
 ### Key packages
 
@@ -72,3 +120,6 @@ Usage records are deduped via a unique index on `(session_id, model, timestamp, 
 - Conventional Commits (`feat:`, `fix:`, `refactor:`, etc.) — GoReleaser generates changelog from these.
 - Releases built with GoReleaser; version/commit/date injected via ldflags.
 - Web UI is embedded via `go:embed` in `internal/server/static/` — changes to frontend files require rebuilding the binary.
+- Desktop app frontend lives in `src/` (React + TypeScript) — separate from the embedded Go web UI.
+- Tauri config is in `src-tauri/tauri.conf.json`. CSP restricts connect-src to `127.0.0.1` and `localhost`.
+- CI/CD: `.github/workflows/desktop.yml` builds for macOS (arm64 + x86_64), Windows, Linux via `tauri-apps/tauri-action`.
