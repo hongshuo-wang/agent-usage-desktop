@@ -1,11 +1,7 @@
 {
   "name": "agent-usage-desktop",
   "version": "1.0.0",
-  "description": "[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev) [![License: MIT](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE) [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-blue)]() [![Docker](https://img.shields.io/badge/Docker-ghcr.io-blue?logo=docker)](https://ghcr.io/briqt/agent-usage)",
-  "main": "index.js",
-  "directories": {
-    "doc": "docs"
-  },
+  "description": "Agent Usage desktop application",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
@@ -18,7 +14,6 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
   "bugs": {
     "url": "https://github.com/hongshuo-wang/agent-usage-desktop/issues"
   },
