@@ -1,0 +1,78 @@
+name: Desktop Build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            go_os: darwin
+            go_arch: arm64
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            go_os: darwin
+            go_arch: amd64
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            go_os: linux
+            go_arch: amd64
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            go_os: windows
+            go_arch: amd64
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Build Go sidecar
+        env:
+          GOOS: ${{ matrix.go_os }}
+          GOARCH: ${{ matrix.go_arch }}
+          CGO_ENABLED: "0"
+        run: |
+          EXT=""
+          if [ "${{ matrix.go_os }}" = "windows" ]; then EXT=".exe"; fi
+          go build -ldflags "-s -w -X main.version=${{ github.ref_name }}" \
+            -o src-tauri/binaries/agent-usage-${{ matrix.target }}${EXT} .
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Agent Usage ${{ github.ref_name }}"
+          releaseBody: "Desktop application release"
+          releaseDraft: true
