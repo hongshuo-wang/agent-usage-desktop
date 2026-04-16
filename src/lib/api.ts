@@ -1,15 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 
-let sidecarPort: number | null = null;
-
 async function getPort(): Promise<number> {
-  if (sidecarPort) return sidecarPort;
   try {
-    sidecarPort = await invoke<number>("get_sidecar_port");
+    return await invoke<number>("get_sidecar_port");
   } catch {
-    sidecarPort = 9800;
+    return 9800;
   }
-  return sidecarPort;
 }
 
 function buildQuery(params: {

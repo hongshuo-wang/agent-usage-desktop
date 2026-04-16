@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useLocation } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-shell";
@@ -12,6 +13,10 @@ const navItems = [
 export default function Layout({ children }: { children: React.ReactNode }) {
   const { t, i18n } = useTranslation();
   const location = useLocation();
+
+  useEffect(() => {
+    applyTheme(localStorage.getItem("au-theme") || "system");
+  }, []);
 
   const handleOpenWebUI = async () => {
     const url = await getWebUIUrl();

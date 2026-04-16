@@ -7,13 +7,12 @@ export default function Settings() {
   const [autostart, setAutostart] = useState(false);
   const [theme, setTheme] = useState(localStorage.getItem("au-theme") || "system");
   const [costThreshold, setCostThreshold] = useState(10);
-  const [notificationsEnabled, setNotificationsEnabled] = useState(
-    localStorage.getItem("au-notifications") !== "false"
-  );
+  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
 
-  // Load cost threshold from Tauri backend on mount
   useEffect(() => {
     invoke<number>("get_cost_threshold").then(setCostThreshold).catch(() => {});
+    invoke<boolean>("plugin:autostart|is_enabled").then(setAutostart).catch(() => {});
+    invoke<boolean>("get_notifications_enabled").then(setNotificationsEnabled).catch(() => {});
   }, []);
 
   const handleThemeChange = (value: string) => {
@@ -51,7 +50,7 @@ export default function Settings() {
   const handleNotificationsToggle = () => {
     const next = !notificationsEnabled;
     setNotificationsEnabled(next);
-    localStorage.setItem("au-notifications", String(next));
+    invoke("set_notifications_enabled", { enabled: next }).catch(() => {});
   };
 
   return (

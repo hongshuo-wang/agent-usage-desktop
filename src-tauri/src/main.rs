@@ -67,18 +67,25 @@ fn main() {
                         continue;
                     }
 
-                    let threshold = {
+                    let (threshold, enabled) = {
                         let path = notify_handle
                             .path()
                             .app_data_dir()
                             .unwrap()
                             .join("settings.json");
-                        std::fs::read_to_string(&path)
+                        let settings = std::fs::read_to_string(&path)
                             .ok()
                             .and_then(|data| serde_json::from_str::<serde_json::Value>(&data).ok())
-                            .and_then(|v| v["cost_threshold"].as_f64())
-                            .unwrap_or(10.0)
+                            .unwrap_or_else(|| serde_json::json!({}));
+                        (
+                            settings["cost_threshold"].as_f64().unwrap_or(10.0),
+                            settings["notifications_enabled"].as_bool().unwrap_or(true),
+                        )
                     };
+
+                    if !enabled {
+                        continue;
+                    }
 
                     let today = chrono::Local::now().format("%Y-%m-%d");
                     let url = format!(
@@ -112,6 +119,8 @@ fn main() {
             commands::get_sidecar_port,
             commands::get_cost_threshold,
             commands::set_cost_threshold,
+            commands::get_notifications_enabled,
+            commands::set_notifications_enabled,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
