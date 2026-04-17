@@ -34,7 +34,7 @@
 | 平台                    | 文件                                          |
 | --------------------- | ------------------------------------------- |
 | macOS (Apple Silicon) | `Agent Usage_x.x.x_aarch64.dmg`             |
-| Windows               | `Agent Usage_x.x.x_x64-setup.exe` 或 `.msi`  |
+| Windows               | `Agent Usage_x.x.x_x64-setup.exe`            |
 
 其他平台（macOS Intel、Linux）请参考[从源码构建](#从源码构建)。
 

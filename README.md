@@ -34,7 +34,7 @@ Download the latest installer for your platform from [GitHub Releases](https://g
 | Platform | File |
 |----------|------|
 | macOS (Apple Silicon) | `Agent Usage_x.x.x_aarch64.dmg` |
-| Windows | `Agent Usage_x.x.x_x64-setup.exe` or `.msi` |
+| Windows | `Agent Usage_x.x.x_x64-setup.exe` |
 
 For other platforms (macOS Intel, Linux), please [build from source](#build-from-source).
 
