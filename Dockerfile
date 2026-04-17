@@ -27,7 +27,7 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 RUN mkdir -p /data /sessions/claude /sessions/codex
 
 COPY --from=builder /agent-usage-desktop /agent-usage-desktop
-COPY config.docker.yaml /etc/agent-usage-desktop/config.yaml
+COPY config.docker.yaml /etc/agent-usage/config.yaml
 
 EXPOSE 9800
 

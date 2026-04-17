@@ -49,7 +49,7 @@ jobs:
           EXT=""
           if [ "${{ matrix.go_os }}" = "windows" ]; then EXT=".exe"; fi
           go build -ldflags "-s -w -X main.version=${{ github.ref_name }}" \
-            -o src-tauri/binaries/agent-usage-desktop-${{ matrix.target }}${EXT} .
+            -o src-tauri/binaries/agent-usage-${{ matrix.target }}${EXT} .
 
       - name: Setup Node
         uses: actions/setup-node@v4

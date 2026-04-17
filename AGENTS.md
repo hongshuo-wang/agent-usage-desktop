@@ -27,22 +27,22 @@ Before `tauri build`, place the Go sidecar binary in `src-tauri/binaries/`:
 ```bash
 # macOS arm64 example:
 CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
-  go build -o src-tauri/binaries/agent-usage-desktop-aarch64-apple-darwin .
+  go build -o src-tauri/binaries/agent-usage-aarch64-apple-darwin .
 
 # macOS x86_64:
 CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 \
-  go build -o src-tauri/binaries/agent-usage-desktop-x86_64-apple-darwin .
+  go build -o src-tauri/binaries/agent-usage-x86_64-apple-darwin .
 
 # Linux:
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go build -o src-tauri/binaries/agent-usage-desktop-x86_64-unknown-linux-gnu .
+  go build -o src-tauri/binaries/agent-usage-x86_64-unknown-linux-gnu .
 
 # Windows:
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
-  go build -o src-tauri/binaries/agent-usage-desktop-x86_64-pc-windows-msvc.exe .
+  go build -o src-tauri/binaries/agent-usage-x86_64-pc-windows-msvc.exe .
 ```
 
-Binary naming must match Tauri's `externalBin` convention: `agent-usage-desktop-{rust-target-triple}[.exe]`.
+Binary naming must match Tauri's `externalBin` convention: `agent-usage-{rust-target-triple}[.exe]`.
 
 ## Testing
 
@@ -74,7 +74,7 @@ Single-binary Go application that collects AI coding agent token usage from loca
 
 The desktop app uses a layered architecture:
 
-- **Go sidecar** — the same Go binary, bundled inside the Tauri app via `externalBin`. Tauri's Rust layer spawns it with `--port <dynamic>` and `--config ~/.config/agent-usage-desktop/config.yaml`. Port is discovered via `find_available_port()` (bind to `:0`), health-checked via `/api/health`.
+- **Go sidecar** — the same Go binary, bundled inside the Tauri app via `externalBin`. Tauri's Rust layer spawns it with `--port <dynamic>` and `--config ~/.config/agent-usage/config.yaml`. Port is discovered via `find_available_port()` (bind to `:0`), health-checked via `/api/health`.
 - **Rust layer** (`src-tauri/src/`) — manages sidecar lifecycle (start, health check, crash recovery), system tray, autostart, OS notifications, and Tauri commands.
 - **React frontend** (`src/`) — React 18 + TypeScript + Vite + Tailwind CSS v4. Communicates with Go backend via HTTP (port obtained through Tauri `invoke`). i18n (en/zh), dark/light/system theme.
 
@@ -91,7 +91,7 @@ Key Rust files:
 - `internal/storage` — SQLite layer. `sqlite.go` has schema + versioned migrations (tracked via `meta` table with `migration_{id}` keys, each runs once), `queries.go` handles writes, `api.go` handles reads, `costs.go` does cost recalculation. All DB access serialized through a mutex (`DB.mu`). Key tables: `usage_records` (per-API-call token/cost data), `sessions` (session metadata), `prompt_events` (per-prompt timestamps for time-range queries), `pricing` (model prices), `file_state` (scan offsets and parser context for incremental scanning).
 - `internal/pricing` — Fetches model prices from litellm's GitHub JSON. Cost formula: `input × input_price + cache_creation × cache_creation_price + cache_read × cache_read_price + output × output_price`.
 - `internal/server` — HTTP server with REST API endpoints (`/api/stats`, `/api/cost-by-model`, etc.) and `go:embed` static files (HTML + ECharts dashboard). `/api/stats` returns aggregate metrics including `cache_hit_rate` (ratio of cache read tokens to total input tokens). All endpoints accept `from`, `to`, `source` (optional: `claude`/`codex`/`openclaw`), and time-series endpoints accept `granularity`. Invalid dates or reversed ranges return `400` with a JSON error message.
-- `internal/config` — YAML config loader. Search order: `--config` flag → `/etc/agent-usage-desktop/config.yaml` → `./config.yaml`. Supports `~` expansion in paths.
+- `internal/config` — YAML config loader. Search order: `--config` flag → `/etc/agent-usage/config.yaml` → `./config.yaml`. Supports `~` expansion in paths.
 
 ### Token semantics
 

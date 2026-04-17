@@ -42,7 +42,7 @@ The container uses `config.docker.yaml` by default (binds to `0.0.0.0`, stores d
 ```yaml
 # In docker-compose.yml, uncomment:
 volumes:
-  - ./config.yaml:/etc/agent-usage-desktop/config.yaml:ro
+  - ./config.yaml:/etc/agent-usage/config.yaml:ro
 ```
 
 See [Docker Details](#docker-details) for UID/GID permissions and local builds.
@@ -88,13 +88,13 @@ collectors:
     scan_interval: 60s
 
 storage:
-  path: "./agent-usage-desktop.db"
+  path: "./agent-usage.db"
 
 pricing:
   sync_interval: 1h  # fetched from GitHub; set HTTPS_PROXY env var if this fails
 ```
 
-Config search order: `--config` flag > `/etc/agent-usage-desktop/config.yaml` > `./config.yaml`.
+Config search order: `--config` flag > `/etc/agent-usage/config.yaml` > `./config.yaml`.
 
 ## Build from Source
 
@@ -134,16 +134,16 @@ npm ci
 mkdir -p src-tauri/binaries
 
 # macOS Apple Silicon:
-CGO_ENABLED=0 go build -o src-tauri/binaries/agent-usage-desktop-aarch64-apple-darwin .
+CGO_ENABLED=0 go build -o src-tauri/binaries/agent-usage-aarch64-apple-darwin .
 
 # macOS Intel:
-CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-desktop-x86_64-apple-darwin .
+CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-apple-darwin .
 
 # Linux:
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-desktop-x86_64-unknown-linux-gnu .
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-unknown-linux-gnu .
 
 # Windows:
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-desktop-x86_64-pc-windows-msvc.exe .
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-pc-windows-msvc.exe .
 
 # Build desktop app
 npx tauri build
@@ -233,7 +233,7 @@ agent-usage-desktop
 │   └── server/
 │       ├── server.go           # HTTP server + REST API
 │       └── static/             # Embedded web UI (HTML + JS + ECharts)
-└── agent-usage-desktop.db              # SQLite database (generated at runtime)
+└── agent-usage.db              # SQLite database (generated at runtime)
 ```
 
 ## Cost Calculation

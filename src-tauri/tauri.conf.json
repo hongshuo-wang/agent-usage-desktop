@@ -33,7 +33,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/agent-usage-desktop"]
+    "externalBin": ["binaries/agent-usage"]
   },
   "plugins": {
     "shell": {

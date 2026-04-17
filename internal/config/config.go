@@ -83,21 +83,21 @@ func DefaultConfig() *Config {
 				ScanInterval: 60 * time.Second,
 			},
 		},
-		Storage: StorageConfig{Path: "./agent-usage-desktop.db"},
+		Storage: StorageConfig{Path: "./agent-usage.db"},
 		Pricing: PricingConfig{SyncInterval: time.Hour},
 	}
 }
 
 // ResolveConfigPath returns the config file path to use, checking in order:
 // 1. Explicit path from --config flag (if non-empty)
-// 2. /etc/agent-usage-desktop/config.yaml (Docker / system-wide)
+// 2. /etc/agent-usage/config.yaml (Docker / system-wide)
 // 3. ./config.yaml (local default)
 func ResolveConfigPath(flagPath string) string {
 	if flagPath != "" {
 		return flagPath
 	}
-	if _, err := os.Stat("/etc/agent-usage-desktop/config.yaml"); err == nil {
-		return "/etc/agent-usage-desktop/config.yaml"
+	if _, err := os.Stat("/etc/agent-usage/config.yaml"); err == nil {
+		return "/etc/agent-usage/config.yaml"
 	}
 	return "config.yaml"
 }

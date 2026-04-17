@@ -23,5 +23,5 @@ services:
       - ~/.openclaw/agents:/sessions/openclaw:ro
       - ~/.local/share/opencode:/sessions/opencode:ro
       # Optional: custom config override
-      # - ./config.yaml:/etc/agent-usage-desktop/config.yaml:ro
+      # - ./config.yaml:/etc/agent-usage/config.yaml:ro
 
