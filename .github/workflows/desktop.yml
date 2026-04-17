@@ -155,7 +155,9 @@ jobs:
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           echo "Artifact paths: $ARTIFACT_PATHS"
-          echo "$ARTIFACT_PATHS" | jq -r '.[]' | while read -r f; do
+          echo "$ARTIFACT_PATHS" | jq -r '.[]' | while IFS= read -r f; do
+            # Convert Windows backslash paths to forward slashes for Git Bash
+            f="${f//\\//}"
             echo "Uploading $f"
             gh release upload "$TAG" "$f" --clobber || true
           done
