@@ -34,9 +34,9 @@ Download the latest installer for your platform from [GitHub Releases](https://g
 | Platform | File |
 |----------|------|
 | macOS (Apple Silicon) | `Agent Usage_x.x.x_aarch64.dmg` |
-| macOS (Intel) | `Agent Usage_x.x.x_x64.dmg` |
-| Windows | `Agent Usage_x.x.x_x64-setup.exe` |
-| Linux | `Agent Usage_x.x.x_amd64.AppImage` or `.deb` |
+| Windows | `Agent Usage_x.x.x_x64-setup.exe` or `.msi` |
+
+For other platforms (macOS Intel, Linux), please [build from source](#build-from-source).
 
 **macOS note:** Since the app is not signed with an Apple Developer certificate, macOS will block it with a "damaged" error. Run this once after installing:
 

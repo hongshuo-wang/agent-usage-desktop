@@ -34,9 +34,9 @@
 | 平台                    | 文件                                          |
 | --------------------- | ------------------------------------------- |
 | macOS (Apple Silicon) | `Agent Usage_x.x.x_aarch64.dmg`             |
-| macOS (Intel)         | `Agent Usage_x.x.x_x64.dmg`                 |
-| Windows               | `Agent Usage_x.x.x_x64-setup.exe`           |
-| Linux                 | `Agent Usage_x.x.x_amd64.AppImage` 或 `.deb` |
+| Windows               | `Agent Usage_x.x.x_x64-setup.exe` 或 `.msi`  |
+
+其他平台（macOS Intel、Linux）请参考[从源码构建](#从源码构建)。
 
 **macOS 提示：** 由于应用未经 Apple 开发者签名，macOS 会提示"文件已损坏"。安装后运行一次以下命令即可：
 
