@@ -173,9 +173,9 @@ export default function Dashboard() {
   /* ── ECharts options ── */
   const tokensOption = tokensData?.labels ? {
     tooltip: { trigger: "axis" },
-    legend: { data: [t("input"), t("output"), t("cacheRead"), t("cacheCreate")] },
-    grid: { left: 40, right: 12, top: 36, bottom: 24 },
-    xAxis: { type: "category", data: tokensData.labels },
+    legend: { type: "scroll", data: [t("input"), t("output"), t("cacheRead"), t("cacheCreate")] },
+    grid: { left: 8, right: 8, top: 36, bottom: 4, containLabel: true },
+    xAxis: { type: "category", data: tokensData.labels, axisLabel: { hideOverlap: true } },
     yAxis: { type: "value" },
     series: [
       { name: t("input"), type: "bar", stack: "tokens", data: tokensData.input, color: CHART_COLORS[0] },
@@ -187,9 +187,9 @@ export default function Dashboard() {
 
   const costOption = costData?.series ? {
     tooltip: { trigger: "axis" },
-    legend: { data: costData.series.map((s) => s.model) },
-    grid: { left: 40, right: 12, top: 36, bottom: 24 },
-    xAxis: { type: "category", data: costData.labels },
+    legend: { type: "scroll", data: costData.series.map((s) => s.model) },
+    grid: { left: 8, right: 8, top: 36, bottom: 4, containLabel: true },
+    xAxis: { type: "category", data: costData.labels, axisLabel: { hideOverlap: true } },
     yAxis: { type: "value" },
     series: costData.series.map((s, i) => ({
       name: s.model, type: "bar", stack: "cost", data: s.data,
@@ -205,7 +205,7 @@ export default function Dashboard() {
         name: d.model, value: d.cost,
         itemStyle: { color: CHART_COLORS[i % CHART_COLORS.length] },
       })),
-      label: { formatter: "{b}: {d}%" },
+      label: { formatter: "{b}: {d}%", overflow: "truncate", width: 80 },
     }],
   } : {};
 

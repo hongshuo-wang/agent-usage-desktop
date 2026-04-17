@@ -28,13 +28,15 @@ export default function ChartCard({ title, option, className }: ChartCardProps) 
     const textColor = isDark ? "#a3a3a3" : "#737373";
     const axisLine = isDark ? "#262626" : "#e5e5e5";
     const base = option as Record<string, unknown>;
+    const baseXAxis = (base.xAxis as Record<string, unknown>) || {};
+    const baseYAxis = (base.yAxis as Record<string, unknown>) || {};
     return {
       ...base,
       backgroundColor: "transparent",
       tooltip: { ...(base.tooltip as object || {}), backgroundColor: isDark ? "#262626" : "#fff", borderColor: axisLine, textStyle: { color: isDark ? "#e5e5e5" : "#171717", fontSize: 12 } },
       legend: { ...(base.legend as object || {}), textStyle: { color: textColor, fontSize: 11 } },
-      xAxis: { ...(base.xAxis as object || {}), axisLine: { lineStyle: { color: axisLine } }, axisLabel: { color: textColor, fontSize: 11 }, splitLine: { lineStyle: { color: axisLine, type: "dashed" as const } } },
-      yAxis: { ...(base.yAxis as object || {}), axisLine: { show: false }, axisLabel: { color: textColor, fontSize: 11 }, splitLine: { lineStyle: { color: axisLine, type: "dashed" as const } } },
+      xAxis: { ...baseXAxis, axisLine: { lineStyle: { color: axisLine } }, axisLabel: { ...(baseXAxis.axisLabel as object || {}), color: textColor, fontSize: 11 }, splitLine: { lineStyle: { color: axisLine, type: "dashed" as const } } },
+      yAxis: { ...baseYAxis, axisLine: { show: false }, axisLabel: { ...(baseYAxis.axisLabel as object || {}), color: textColor, fontSize: 11 }, splitLine: { lineStyle: { color: axisLine, type: "dashed" as const } } },
     };
   }, [option, isDark]);
 
