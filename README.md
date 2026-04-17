@@ -10,7 +10,12 @@ Lightweight, cross-platform desktop app for tracking AI coding agent usage & cos
 
 Collects local session data from Claude Code, Codex, OpenClaw, OpenCode and other AI coding agents, calculates costs automatically, and presents token usage, cost trends, and session details through a built-in dashboard.
 
-![Dashboard](docs/dashboard.png)
+<p align="center">
+  <img src="docs/desktop.png" alt="Desktop App" width="700">
+</p>
+<p align="center">
+  <img src="docs/dashboard.png" alt="Web UI Dashboard" width="700">
+</p>
 
 ## Features
 
@@ -32,6 +37,12 @@ Download the latest installer for your platform from [GitHub Releases](https://g
 | macOS (Intel) | `Agent Usage_x.x.x_x64.dmg` |
 | Windows | `Agent Usage_x.x.x_x64-setup.exe` |
 | Linux | `Agent Usage_x.x.x_amd64.AppImage` or `.deb` |
+
+**macOS note:** Since the app is not signed with an Apple Developer certificate, macOS will block it with a "damaged" error. Run this once after installing:
+
+```bash
+xattr -cr "/Applications/Agent Usage.app"
+```
 
 Launch the app — it runs in the system tray and starts collecting data automatically.
 

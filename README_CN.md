@@ -1,6 +1,6 @@
 # agent-usage-desktop
 
-[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go\&logoColor=white)](https://go.dev)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-blue)]()
 
@@ -10,7 +10,12 @@
 
 统一采集 Claude Code、Codex、OpenClaw、OpenCode 等 AI 编程工具的本地会话数据，自动计算费用，通过内置仪表板展示 token 用量、费用趋势和会话明细。
 
-![仪表板](docs/dashboard.png)
+<p align="center">
+  <img src="docs/desktop.png" alt="桌面应用界面" width="700">
+</p>
+<p align="center">
+  <img src="docs/dashboard.png" alt="Web UI 仪表板" width="700">
+</p>
 
 ## 特性
 
@@ -26,12 +31,18 @@
 
 从 [GitHub Releases](https://github.com/hongshuo-wang/agent-usage-desktop/releases) 下载对应平台的安装包：
 
-| 平台 | 文件 |
-|------|------|
-| macOS (Apple Silicon) | `Agent Usage_x.x.x_aarch64.dmg` |
-| macOS (Intel) | `Agent Usage_x.x.x_x64.dmg` |
-| Windows | `Agent Usage_x.x.x_x64-setup.exe` |
-| Linux | `Agent Usage_x.x.x_amd64.AppImage` 或 `.deb` |
+| 平台                    | 文件                                          |
+| --------------------- | ------------------------------------------- |
+| macOS (Apple Silicon) | `Agent Usage_x.x.x_aarch64.dmg`             |
+| macOS (Intel)         | `Agent Usage_x.x.x_x64.dmg`                 |
+| Windows               | `Agent Usage_x.x.x_x64-setup.exe`           |
+| Linux                 | `Agent Usage_x.x.x_amd64.AppImage` 或 `.deb` |
+
+**macOS 提示：** 由于应用未经 Apple 开发者签名，macOS 会提示"文件已损坏"。安装后运行一次以下命令即可：
+
+```bash
+xattr -cr "/Applications/Agent Usage.app"
+```
 
 启动应用后，它会在系统托盘运行并自动开始采集数据。
 
@@ -86,12 +97,12 @@ pricing:
 
 ## 支持的数据源
 
-| 来源 | 会话路径 | 格式 |
-|------|---------|------|
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `~/.claude/projects/<项目>/<会话>.jsonl` | JSONL |
-| [Codex CLI](https://github.com/openai/codex) | `~/.codex/sessions/<年>/<月>/<日>/<会话>.jsonl` | JSONL |
-| [OpenClaw](https://github.com/openclaw/openclaw) | `~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl` | JSONL |
-| [OpenCode](https://github.com/anomalyco/opencode) | `~/.local/share/opencode/opencode.db` | SQLite |
+| 来源                                                            | 会话路径                                                      | 格式     |
+| ------------------------------------------------------------- | --------------------------------------------------------- | ------ |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `~/.claude/projects/<项目>/<会话>.jsonl`                      | JSONL  |
+| [Codex CLI](https://github.com/openai/codex)                  | `~/.codex/sessions/<年>/<月>/<日>/<会话>.jsonl`                | JSONL  |
+| [OpenClaw](https://github.com/openclaw/openclaw)              | `~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl` | JSONL  |
+| [OpenCode](https://github.com/anomalyco/opencode)             | `~/.local/share/opencode/opencode.db`                     | SQLite |
 
 ## 从源码构建
 
@@ -133,6 +144,7 @@ npx tauri build
 ```
 
 安装包位置：
+
 - **macOS**: `src-tauri/target/release/bundle/dmg/`
 - **Windows**: `src-tauri/target/release/bundle/nsis/`
 - **Linux**: `src-tauri/target/release/bundle/appimage/` 或 `deb/`
