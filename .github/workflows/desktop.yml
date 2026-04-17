@@ -90,10 +90,6 @@ jobs:
             target: aarch64-apple-darwin
             go_os: darwin
             go_arch: arm64
-          - platform: macos-13
-            target: x86_64-apple-darwin
-            go_os: darwin
-            go_arch: amd64
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             go_os: linux
@@ -165,9 +161,11 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARTIFACT_PATHS: ${{ steps.tauri.outputs.artifactPaths }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          for f in ${{ steps.tauri.outputs.artifactPaths }}; do
+          echo "Artifact paths: $ARTIFACT_PATHS"
+          echo "$ARTIFACT_PATHS" | jq -r '.[]' | while read -r f; do
             echo "Uploading $f"
             gh release upload "$TAG" "$f" --clobber || true
           done
