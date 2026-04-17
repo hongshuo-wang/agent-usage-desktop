@@ -41,9 +41,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="h-screen flex flex-col bg-background min-w-[900px]">
       <header className="sticky top-0 z-50 border-b border-border bg-background/85 backdrop-blur-sm">
-        <div className="mx-auto max-w-[1200px] px-6 py-3 flex items-center justify-between">
+        <div className="px-6 py-3 flex items-center justify-between">
           <nav className="flex items-center gap-6">
             {navItems.map((item) => (
               <Link
@@ -72,7 +72,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       </header>
-      <main className="mx-auto max-w-[1200px] px-6 py-6">
+      <main className="flex-1 overflow-auto px-6 py-6">
         {children}
       </main>
     </div>
