@@ -157,7 +157,7 @@ jobs:
           echo "Artifact paths: $ARTIFACT_PATHS"
           # Use noglob to prevent bash from interpreting spaces/special chars in paths
           set -o noglob
-          echo "$ARTIFACT_PATHS" | jq -r '.[]' | while IFS= read -r f; do
+          echo "$ARTIFACT_PATHS" | jq -r '.[]' | tr -d '\r' | while IFS= read -r f; do
             # Convert Windows backslash paths to forward slashes for Git Bash
             f="${f//\\//}"
             if [ ! -e "$f" ]; then
