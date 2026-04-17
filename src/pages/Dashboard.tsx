@@ -76,7 +76,7 @@ function Skeleton({ className }: { className?: string }) {
 
 function DashboardSkeleton() {
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-5">
+    <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-5 flex-1 min-h-0">
       <div className="space-y-4">
         <div className="pb-4 border-b border-border space-y-2">
           <Skeleton className="h-3 w-20" />
@@ -91,11 +91,11 @@ function DashboardSkeleton() {
           </div>
         ))}
       </div>
-      <div className="space-y-3">
-        <Skeleton className="h-[200px] rounded-xl" />
-        <div className="grid grid-cols-1 sm:grid-cols-[3fr_2fr] gap-3">
-          <Skeleton className="h-[160px] rounded-xl" />
-          <Skeleton className="h-[160px] rounded-xl" />
+      <div className="flex flex-col gap-3 min-h-0">
+        <Skeleton className="flex-[2] min-h-[160px] rounded-xl" />
+        <div className="grid grid-cols-1 sm:grid-cols-[3fr_2fr] gap-3 flex-[1] min-h-[120px]">
+          <Skeleton className="min-h-[120px] rounded-xl" />
+          <Skeleton className="min-h-[120px] rounded-xl" />
         </div>
       </div>
     </div>
@@ -214,7 +214,7 @@ export default function Dashboard() {
   const cacheRate = stats ? (stats.cache_hit_rate * 100) : 0;
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col flex-1 min-h-0 gap-4">
       <TimeRangeSelector
         preset={preset} onPresetChange={setPreset}
         granularity={granularity} onGranularityChange={setGranularity}
@@ -231,7 +231,7 @@ export default function Dashboard() {
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-5">
+        <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-5 flex-1 min-h-0">
           {/* ── Left Panel ── */}
           <div className="flex flex-col">
             {/* Cost Hero */}
@@ -275,11 +275,11 @@ export default function Dashboard() {
           </div>
 
           {/* ── Right Panel ── */}
-          <div className="flex flex-col gap-3 min-w-0">
-            <ChartCard title={t("tokenUsage")} option={tokensOption} height={200} />
-            <div className="grid grid-cols-1 sm:grid-cols-[3fr_2fr] gap-3">
-              <ChartCard title={t("costTrend")} option={costOption} height={160} />
-              <ChartCard title={t("costByModel")} option={pieOption} height={160} />
+          <div className="flex flex-col gap-3 min-w-0 min-h-0">
+            <ChartCard title={t("tokenUsage")} option={tokensOption} className="flex-[2] min-h-[160px]" />
+            <div className="grid grid-cols-1 sm:grid-cols-[3fr_2fr] gap-3 flex-[1] min-h-[120px]">
+              <ChartCard title={t("costTrend")} option={costOption} />
+              <ChartCard title={t("costByModel")} option={pieOption} />
             </div>
           </div>
         </div>
