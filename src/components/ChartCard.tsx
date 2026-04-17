@@ -5,7 +5,6 @@ interface ChartCardProps {
   title: string;
   option: object;
   className?: string;
-  height?: number;
 }
 
 function useIsDark() {
@@ -22,7 +21,7 @@ function useIsDark() {
   return dark;
 }
 
-export default function ChartCard({ title, option, className, height = 260 }: ChartCardProps) {
+export default function ChartCard({ title, option, className }: ChartCardProps) {
   const isDark = useIsDark();
 
   const themed = useCallback(() => {
@@ -40,9 +39,11 @@ export default function ChartCard({ title, option, className, height = 260 }: Ch
   }, [option, isDark]);
 
   return (
-    <div className={`bg-card border border-border rounded-xl p-4 shadow-sm ${className || ""}`}>
+    <div className={`bg-card border border-border rounded-xl p-4 shadow-sm flex flex-col ${className || ""}`}>
       <h3 className="text-xs font-medium text-muted-foreground mb-2">{title}</h3>
-      <ReactECharts option={themed()} style={{ height }} notMerge={true} />
+      <div className="flex-1 min-h-0">
+        <ReactECharts option={themed()} style={{ height: '100%', width: '100%' }} notMerge={true} />
+      </div>
     </div>
   );
 }
