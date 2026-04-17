@@ -9,7 +9,79 @@ permissions:
   contents: write
 
 jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get tag
+        id: tag
+        run: echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          PREV_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
+          if [ -z "$PREV_TAG" ]; then
+            RANGE="$TAG"
+          else
+            RANGE="${PREV_TAG}..${TAG}"
+          fi
+
+          {
+            echo 'body<<CHANGELOG_EOF'
+            echo "## What's Changed"
+            echo ""
+
+            # Collect commits by category
+            FEATS=$(git log "$RANGE" --pretty="format:- %s (%h)" --grep="^feat" 2>/dev/null || true)
+            FIXES=$(git log "$RANGE" --pretty="format:- %s (%h)" --grep="^fix" 2>/dev/null || true)
+            REFACTORS=$(git log "$RANGE" --pretty="format:- %s (%h)" --grep="^refactor" 2>/dev/null || true)
+            OTHERS=$(git log "$RANGE" --pretty="format:- %s (%h)" --invert-grep --grep="^feat" --grep="^fix" --grep="^refactor" --grep="^docs" --grep="^ci" --grep="^chore" --grep="^test" 2>/dev/null || true)
+
+            if [ -n "$FEATS" ]; then
+              echo "### Features"
+              echo "$FEATS"
+              echo ""
+            fi
+            if [ -n "$FIXES" ]; then
+              echo "### Fixes"
+              echo "$FIXES"
+              echo ""
+            fi
+            if [ -n "$REFACTORS" ]; then
+              echo "### Refactor"
+              echo "$REFACTORS"
+              echo ""
+            fi
+            if [ -n "$OTHERS" ]; then
+              echo "### Others"
+              echo "$OTHERS"
+              echo ""
+            fi
+
+            if [ -n "$PREV_TAG" ]; then
+              echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG}"
+            fi
+            echo 'CHANGELOG_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.tag.outputs.tag }}" \
+            --title "${{ steps.tag.outputs.tag }}" \
+            --notes "${{ steps.changelog.outputs.body }}" \
+            --repo "${{ github.repository }}"
+
   build:
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
@@ -18,7 +90,7 @@ jobs:
             target: aarch64-apple-darwin
             go_os: darwin
             go_arch: arm64
-          - platform: macos-latest
+          - platform: macos-13
             target: x86_64-apple-darwin
             go_os: darwin
             go_arch: amd64
@@ -41,9 +113,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           echo "Syncing version to $VERSION"
-          # Update tauri.conf.json
           jq --arg v "$VERSION" '.version = $v' src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
-          # Update package.json (use jq to avoid npm dependency resolution)
           jq --arg v "$VERSION" '.version = $v' package.json > tmp2.json && mv tmp2.json package.json
 
       - name: Setup Go
@@ -85,6 +155,8 @@ jobs:
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         id: tauri
+        with:
+          args: --target ${{ matrix.target }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -95,16 +167,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          # Wait for release to be created by GoReleaser (up to 10 min)
-          for i in $(seq 1 60); do
-            if gh release view "$TAG" &>/dev/null; then
-              echo "Release $TAG found"
-              break
-            fi
-            echo "Waiting for release $TAG... ($i/60)"
-            sleep 10
-          done
-          # Upload all Tauri artifacts
           for f in ${{ steps.tauri.outputs.artifactPaths }}; do
+            echo "Uploading $f"
             gh release upload "$TAG" "$f" --clobber || true
           done
