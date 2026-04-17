@@ -43,8 +43,8 @@ jobs:
           echo "Syncing version to $VERSION"
           # Update tauri.conf.json
           jq --arg v "$VERSION" '.version = $v' src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
-          # Update package.json
-          npm version "$VERSION" --no-git-tag-version
+          # Update package.json (use jq to avoid npm dependency resolution)
+          jq --arg v "$VERSION" '.version = $v' package.json > tmp2.json && mv tmp2.json package.json
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -69,7 +69,7 @@ jobs:
           node-version: "20"
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm install
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
