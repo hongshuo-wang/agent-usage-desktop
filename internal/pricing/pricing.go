@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/briqt/agent-usage/internal/storage"
+	"github.com/hongshuo-wang/agent-usage-desktop/internal/storage"
 )
 
 const pricingURL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"

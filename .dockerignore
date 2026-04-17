@@ -6,4 +6,4 @@ data/
 *.db
 *.db-shm
 *.db-wal
-agent-usage
+agent-usage-desktop

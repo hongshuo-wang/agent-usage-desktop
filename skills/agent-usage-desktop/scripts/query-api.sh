@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# query-api.sh — Wrapper for agent-usage REST API
+# query-api.sh — Wrapper for agent-usage-desktop REST API
 # Usage: query-api.sh <command> [--from DATE] [--to DATE] [--source SRC] [--granularity G] [--session-id SID]
 set -euo pipefail
 

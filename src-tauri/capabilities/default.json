@@ -9,7 +9,7 @@
       "identifier": "shell:allow-spawn",
       "allow": [
         {
-          "name": "binaries/agent-usage",
+          "name": "binaries/agent-usage-desktop",
           "sidecar": true,
           "args": true
         }

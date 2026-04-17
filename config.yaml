@@ -19,7 +19,7 @@ collectors:
     paths: ["~/.local/share/opencode/opencode.db"]
     scan_interval: 60s
 storage:
-  path: "./agent-usage.db"
+  path: "./agent-usage-desktop.db"
 pricing:
   # Prices are fetched from GitHub (litellm). Set HTTPS_PROXY env var if this fails.
   sync_interval: 1h

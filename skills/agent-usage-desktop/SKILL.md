@@ -1,9 +1,9 @@
 ---
-name: agent-usage
+name: agent-usage-desktop
 description: "Query AI coding agent usage, costs, and token consumption. Supports Claude Code, Codex CLI, OpenClaw, and OpenCode. Ask about spending, token usage, model costs, session history, API call counts. Actions: check usage, show cost, compare models, list sessions, analyze spending, token breakdown. Time ranges: today, this week, this month, this year, last N days, custom dates."
 ---
 
-# agent-usage — AI Coding Agent Usage Query
+# agent-usage-desktop — AI Coding Agent Usage Query
 
 Query your AI coding agent usage data directly in conversation. Supports Claude Code, Codex CLI, OpenClaw, and OpenCode.
 
@@ -24,7 +24,7 @@ This skill has two backends. Always detect which one to use first.
 
 ### Step 1: Detect Backend
 
-Run the detection script to check if the agent-usage server is running:
+Run the detection script to check if the agent-usage-desktop server is running:
 
 ```bash
 bash SKILL_DIR/scripts/detect.sh
@@ -37,7 +37,7 @@ Where `SKILL_DIR` is the directory containing this SKILL.md file.
 
 ### Step 2a: API Mode (preferred)
 
-Use `query-api.sh` to call the agent-usage REST API. This is faster and has accurate pricing data.
+Use `query-api.sh` to call the agent-usage-desktop REST API. This is faster and has accurate pricing data.
 
 ```bash
 bash SKILL_DIR/scripts/query-api.sh <command> [options]
@@ -131,5 +131,5 @@ User: "Token usage trend this week by hour"
 ## Notes
 
 - Local mode pricing is approximate — only common models have built-in prices
-- For accurate pricing, deploy the agent-usage server: https://github.com/briqt/agent-usage
+- For accurate pricing, deploy the agent-usage-desktop server: https://github.com/hongshuo-wang/agent-usage-desktop
 - Local mode scans `~/.claude/projects`, `~/.codex/sessions`, `~/.openclaw/agents`, `~/.local/share/opencode/opencode.db` by default

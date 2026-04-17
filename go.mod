@@ -1,4 +1,4 @@
-module github.com/briqt/agent-usage
+module github.com/hongshuo-wang/agent-usage-desktop
 
 go 1.25.0
 

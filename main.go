@@ -7,11 +7,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/briqt/agent-usage/internal/collector"
-	"github.com/briqt/agent-usage/internal/config"
-	"github.com/briqt/agent-usage/internal/pricing"
-	"github.com/briqt/agent-usage/internal/server"
-	"github.com/briqt/agent-usage/internal/storage"
+	"github.com/hongshuo-wang/agent-usage-desktop/internal/collector"
+	"github.com/hongshuo-wang/agent-usage-desktop/internal/config"
+	"github.com/hongshuo-wang/agent-usage-desktop/internal/pricing"
+	"github.com/hongshuo-wang/agent-usage-desktop/internal/server"
+	"github.com/hongshuo-wang/agent-usage-desktop/internal/storage"
 )
 
 var (
@@ -22,7 +22,7 @@ var (
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "version" {
-		fmt.Printf("agent-usage %s (commit: %s, built: %s)\n", version, commit, date)
+		fmt.Printf("agent-usage-desktop %s (commit: %s, built: %s)\n", version, commit, date)
 		os.Exit(0)
 	}
 

@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/briqt/agent-usage/internal/storage"
+	"github.com/hongshuo-wang/agent-usage-desktop/internal/storage"
 )
 
 // CodexCollector scans Codex CLI session JSONL files and extracts usage records.

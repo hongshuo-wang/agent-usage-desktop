@@ -1,6 +1,6 @@
 ---
 name: Bug Report
-about: Report a bug in agent-usage
+about: Report a bug in agent-usage-desktop
 title: "[Bug] "
 labels: bug
 ---
@@ -27,7 +27,7 @@ What actually happened.
 
 - OS: (e.g., Linux x86_64, macOS arm64, Windows amd64)
 - Go version: (e.g., 1.25)
-- agent-usage version: (run `./agent-usage version`)
+- agent-usage-desktop version: (run `./agent-usage-desktop version`)
 
 ## Logs
 

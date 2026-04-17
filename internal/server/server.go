@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/briqt/agent-usage/internal/storage"
+	"github.com/hongshuo-wang/agent-usage-desktop/internal/storage"
 )
 
 //go:embed static

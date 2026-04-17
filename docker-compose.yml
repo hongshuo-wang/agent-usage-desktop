@@ -1,7 +1,7 @@
 services:
-  agent-usage:
-    image: ghcr.io/briqt/agent-usage:latest
-    container_name: agent-usage
+  agent-usage-desktop:
+    image: ghcr.io/hongshuo-wang/agent-usage-desktop:latest
+    container_name: agent-usage-desktop
     restart: unless-stopped
     # Run as host user so bind-mounted dirs (especially ~/.claude with mode 700) are readable.
     # Change to match your UID/GID: run `id -u` and `id -g` to find yours.
@@ -23,5 +23,5 @@ services:
       - ~/.openclaw/agents:/sessions/openclaw:ro
       - ~/.local/share/opencode:/sessions/opencode:ro
       # Optional: custom config override
-      # - ./config.yaml:/etc/agent-usage/config.yaml:ro
+      # - ./config.yaml:/etc/agent-usage-desktop/config.yaml:ro
 

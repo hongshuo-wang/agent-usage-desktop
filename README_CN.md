@@ -1,9 +1,9 @@
-# agent-usage
+# agent-usage-desktop
 
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-blue)]()
-[![Docker](https://img.shields.io/badge/Docker-ghcr.io-blue?logo=docker)](https://ghcr.io/briqt/agent-usage)
+[![Docker](https://img.shields.io/badge/Docker-ghcr.io-blue?logo=docker)](https://ghcr.io/hongshuo-wang/agent-usage-desktop)
 
 轻量级、跨平台的 AI 编程工具用量与费用追踪器。  
 单二进制 + SQLite —— 零基础设施依赖。
@@ -42,21 +42,21 @@ open http://localhost:9800
 ```yaml
 # 在 docker-compose.yml 中取消注释：
 volumes:
-  - ./config.yaml:/etc/agent-usage/config.yaml:ro
+  - ./config.yaml:/etc/agent-usage-desktop/config.yaml:ro
 ```
 
 UID/GID 权限及本地构建详见 [Docker 详情](#docker-详情)。
 
 ## 在 Agent 对话中查询用量
 
-Skill 可独立使用，无需安装或运行 agent-usage 服务 —— 直接解析本地会话文件即可工作。如果检测到 agent-usage 服务在运行，自动切换到 API 查询以获取更精确的费用数据。
+Skill 可独立使用，无需安装或运行 agent-usage-desktop 服务 —— 直接解析本地会话文件即可工作。如果检测到 agent-usage-desktop 服务在运行，自动切换到 API 查询以获取更精确的费用数据。
 
 ```bash
 # 通过 vercel-labs/skills 安装，支持 Claude Code、Cursor、Kiro 等 40+ 种 agent
-npx skills add briqt/agent-usage -y
+npx skills add hongshuo-wang/agent-usage-desktop -y
 ```
 
-安装后试试：`查下 agent usage`、`agent usage 统计` 或 `check agent usage`。详见 [`skills/agent-usage/SKILL.md`](skills/agent-usage/SKILL.md)。
+安装后试试：`查下 agent usage`、`agent usage 统计` 或 `check agent usage`。详见 [`skills/agent-usage-desktop/SKILL.md`](skills/agent-usage-desktop/SKILL.md)。
 
 ## 配置
 
@@ -88,13 +88,13 @@ collectors:
     scan_interval: 60s
 
 storage:
-  path: "./agent-usage.db"
+  path: "./agent-usage-desktop.db"
 
 pricing:
   sync_interval: 1h  # 从 GitHub 获取价格；如失败请设置 HTTPS_PROXY 环境变量
 ```
 
-配置文件搜索顺序：`--config` 参数 > `/etc/agent-usage/config.yaml` > `./config.yaml`。
+配置文件搜索顺序：`--config` 参数 > `/etc/agent-usage-desktop/config.yaml` > `./config.yaml`。
 
 ## 从源码编译
 
@@ -102,18 +102,18 @@ pricing:
 
 ```bash
 # 克隆
-git clone https://github.com/briqt/agent-usage.git
-cd agent-usage
+git clone https://github.com/hongshuo-wang/agent-usage-desktop.git
+cd agent-usage-desktop
 
 # 编译
-go build -o agent-usage .
+go build -o agent-usage-desktop .
 
 # 编辑配置
 cp config.yaml config.local.yaml
 # 按需调整路径
 
 # 运行
-./agent-usage
+./agent-usage-desktop
 
 # 打开仪表板
 open http://localhost:9800
@@ -124,8 +124,8 @@ open http://localhost:9800
 前置条件：[Node.js](https://nodejs.org/) 20+、[Rust](https://rustup.rs/)、[Go](https://go.dev/) 1.24+。
 
 ```bash
-git clone https://github.com/briqt/agent-usage.git
-cd agent-usage
+git clone https://github.com/hongshuo-wang/agent-usage-desktop.git
+cd agent-usage-desktop
 
 # 安装前端依赖
 npm ci
@@ -134,16 +134,16 @@ npm ci
 mkdir -p src-tauri/binaries
 
 # macOS Apple Silicon：
-CGO_ENABLED=0 go build -o src-tauri/binaries/agent-usage-aarch64-apple-darwin .
+CGO_ENABLED=0 go build -o src-tauri/binaries/agent-usage-desktop-aarch64-apple-darwin .
 
 # macOS Intel：
-CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-apple-darwin .
+CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-desktop-x86_64-apple-darwin .
 
 # Linux：
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-unknown-linux-gnu .
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-desktop-x86_64-unknown-linux-gnu .
 
 # Windows：
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-pc-windows-msvc.exe .
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-desktop-x86_64-pc-windows-msvc.exe .
 
 # 构建桌面应用
 npx tauri build
@@ -211,7 +211,7 @@ Web 仪表板提供：
 ## 架构
 
 ```
-agent-usage
+agent-usage-desktop
 ├── main.go                     # 入口，编排各组件
 ├── config.yaml                 # 配置文件
 ├── internal/
@@ -233,7 +233,7 @@ agent-usage
 │   └── server/
 │       ├── server.go           # HTTP 服务 + REST API
 │       └── static/             # 内嵌 Web UI（HTML + JS + ECharts）
-└── agent-usage.db              # SQLite 数据库（运行时生成）
+└── agent-usage-desktop.db              # SQLite 数据库（运行时生成）
 ```
 
 ## 费用计算
@@ -276,7 +276,7 @@ agent-usage
 
 ## Docker 详情
 
-预构建多架构镜像（amd64 + arm64）发布在 `ghcr.io/briqt/agent-usage`。
+预构建多架构镜像（amd64 + arm64）发布在 `ghcr.io/hongshuo-wang/agent-usage-desktop`。
 
 默认 `docker-compose.yml` 以 UID 1000 运行。如果你的用户 UID 不同，请修改 `user:` 字段：
 
@@ -293,10 +293,10 @@ id -g  # 例如 1000
 ### 本地构建
 
 ```bash
-docker build -t agent-usage:local .
+docker build -t agent-usage-desktop:local .
 
 # 中国大陆用户，使用 GOPROXY 加速：
-docker build --build-arg GOPROXY=https://goproxy.cn,direct -t agent-usage:local .
+docker build --build-arg GOPROXY=https://goproxy.cn,direct -t agent-usage-desktop:local .
 ```
 
 ## 路线图

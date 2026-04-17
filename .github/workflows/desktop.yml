@@ -5,6 +5,9 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -35,7 +38,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.25"
 
       - name: Build Go sidecar
         env:
@@ -46,7 +49,7 @@ jobs:
           EXT=""
           if [ "${{ matrix.go_os }}" = "windows" ]; then EXT=".exe"; fi
           go build -ldflags "-s -w -X main.version=${{ github.ref_name }}" \
-            -o src-tauri/binaries/agent-usage-${{ matrix.target }}${EXT} .
+            -o src-tauri/binaries/agent-usage-desktop-${{ matrix.target }}${EXT} .
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -69,10 +72,26 @@ jobs:
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
+        id: tauri
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "Agent Usage ${{ github.ref_name }}"
-          releaseBody: "Desktop application release"
-          releaseDraft: true
+
+      - name: Upload to release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          # Wait for release to be created by GoReleaser (up to 10 min)
+          for i in $(seq 1 60); do
+            if gh release view "$TAG" &>/dev/null; then
+              echo "Release $TAG found"
+              break
+            fi
+            echo "Waiting for release $TAG... ($i/60)"
+            sleep 10
+          done
+          # Upload all Tauri artifacts
+          for f in ${{ steps.tauri.outputs.artifactPaths }}; do
+            gh release upload "$TAG" "$f" --clobber || true
+          done

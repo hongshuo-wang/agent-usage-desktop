@@ -37,14 +37,14 @@ pub async fn start_sidecar(app: &tauri::AppHandle) -> Result<u16, String> {
 
     // Resolve config path: ~/.config/agent-usage/config.yaml
     let home = dirs::home_dir().ok_or("Cannot find home directory")?;
-    let config_dir = home.join(".config").join("agent-usage");
+    let config_dir = home.join(".config").join("agent-usage-desktop");
     let config_path = config_dir.join("config.yaml");
 
     // Create default config if it doesn't exist — must specify absolute storage
     // path so the Go sidecar doesn't write to a relative path inside the app bundle
     std::fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
     if !config_path.exists() {
-        let db_path = config_dir.join("agent-usage.db");
+        let db_path = config_dir.join("agent-usage-desktop.db");
         let default_config = format!(
             "storage:\n  path: \"{}\"\n",
             db_path.to_str().unwrap().replace('\\', "/")
@@ -54,7 +54,7 @@ pub async fn start_sidecar(app: &tauri::AppHandle) -> Result<u16, String> {
 
     let sidecar_command = app
         .shell()
-        .sidecar("agent-usage")
+        .sidecar("agent-usage-desktop")
         .map_err(|e| e.to_string())?
         .args(["--config", config_path.to_str().unwrap(), "--port", &port.to_string()]);
 

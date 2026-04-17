@@ -21,7 +21,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/briqt/agent-usage
+          images: ghcr.io/hongshuo-wang/agent-usage-desktop
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}

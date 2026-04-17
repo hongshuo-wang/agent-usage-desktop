@@ -5,14 +5,14 @@
 If you discover a security vulnerability, please report it responsibly:
 
 1. **Do NOT** open a public GitHub issue
-2. Email the maintainer directly or use [GitHub Security Advisories](https://github.com/briqt/agent-usage/security/advisories/new)
+2. Email the maintainer directly or use [GitHub Security Advisories](https://github.com/hongshuo-wang/agent-usage-desktop/security/advisories/new)
 3. Include steps to reproduce and potential impact
 
 We will respond within 72 hours and work on a fix promptly.
 
 ## Scope
 
-agent-usage runs locally and processes local files. Key security considerations:
+agent-usage-desktop runs locally and processes local files. Key security considerations:
 
 - **Session data** may contain prompts, code snippets, and API usage details
 - **SQLite database** stores aggregated usage data locally

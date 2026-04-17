@@ -75,11 +75,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - Docker support: multi-stage Dockerfile with distroless runtime
 - Docker Compose for one-command deployment
 - Docker CI/CD workflow for multi-arch images (amd64 + arm64) on ghcr.io
-- `--config` CLI flag with search order: flag > `/etc/agent-usage/config.yaml` > `./config.yaml`
+- `--config` CLI flag with search order: flag > `/etc/agent-usage-desktop/config.yaml` > `./config.yaml`
 - Docker-specific config (`config.docker.yaml`) with 0.0.0.0 bind and container paths
 
 ### Changed
 - Server binds to `127.0.0.1` by default instead of `0.0.0.0`
 - Added `bind_address` config option for server
-- Default database filename changed from `devobs.db` to `agent-usage.db`
+- Default database filename changed from `devobs.db` to `agent-usage-desktop.db`
 - INSERT statements use `INSERT OR IGNORE` for idempotent crash recovery

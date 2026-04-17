@@ -1,9 +1,9 @@
-# agent-usage
+# agent-usage-desktop
 
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-blue)]()
-[![Docker](https://img.shields.io/badge/Docker-ghcr.io-blue?logo=docker)](https://ghcr.io/briqt/agent-usage)
+[![Docker](https://img.shields.io/badge/Docker-ghcr.io-blue?logo=docker)](https://ghcr.io/hongshuo-wang/agent-usage-desktop)
 
 Lightweight, cross-platform AI coding agent usage & cost tracker.  
 Single binary + SQLite — zero infrastructure required.
@@ -42,21 +42,21 @@ The container uses `config.docker.yaml` by default (binds to `0.0.0.0`, stores d
 ```yaml
 # In docker-compose.yml, uncomment:
 volumes:
-  - ./config.yaml:/etc/agent-usage/config.yaml:ro
+  - ./config.yaml:/etc/agent-usage-desktop/config.yaml:ro
 ```
 
 See [Docker Details](#docker-details) for UID/GID permissions and local builds.
 
 ## Query Usage from Agent Conversations
 
-The skill works standalone — no need to install or run the agent-usage server. It parses local JSONL session files directly. If the agent-usage server is detected, it automatically switches to API queries for more accurate cost data.
+The skill works standalone — no need to install or run the agent-usage-desktop server. It parses local JSONL session files directly. If the agent-usage-desktop server is detected, it automatically switches to API queries for more accurate cost data.
 
 ```bash
 # Installed via vercel-labs/skills, supports Claude Code, Cursor, Kiro, and 40+ agents
-npx skills add briqt/agent-usage -y
+npx skills add hongshuo-wang/agent-usage-desktop -y
 ```
 
-Once installed, try: `查下 agent usage`、`agent usage 统计` or `check agent usage`. See [`skills/agent-usage/SKILL.md`](skills/agent-usage/SKILL.md) for details.
+Once installed, try: `查下 agent usage`、`agent usage 统计` or `check agent usage`. See [`skills/agent-usage-desktop/SKILL.md`](skills/agent-usage-desktop/SKILL.md) for details.
 
 ## Configuration
 
@@ -88,13 +88,13 @@ collectors:
     scan_interval: 60s
 
 storage:
-  path: "./agent-usage.db"
+  path: "./agent-usage-desktop.db"
 
 pricing:
   sync_interval: 1h  # fetched from GitHub; set HTTPS_PROXY env var if this fails
 ```
 
-Config search order: `--config` flag > `/etc/agent-usage/config.yaml` > `./config.yaml`.
+Config search order: `--config` flag > `/etc/agent-usage-desktop/config.yaml` > `./config.yaml`.
 
 ## Build from Source
 
@@ -102,18 +102,18 @@ Config search order: `--config` flag > `/etc/agent-usage/config.yaml` > `./confi
 
 ```bash
 # Clone
-git clone https://github.com/briqt/agent-usage.git
-cd agent-usage
+git clone https://github.com/hongshuo-wang/agent-usage-desktop.git
+cd agent-usage-desktop
 
 # Build
-go build -o agent-usage .
+go build -o agent-usage-desktop .
 
 # Edit config
 cp config.yaml config.local.yaml
 # Adjust paths if needed
 
 # Run
-./agent-usage
+./agent-usage-desktop
 
 # Open dashboard
 open http://localhost:9800
@@ -124,8 +124,8 @@ open http://localhost:9800
 Prerequisites: [Node.js](https://nodejs.org/) 20+, [Rust](https://rustup.rs/), [Go](https://go.dev/) 1.24+.
 
 ```bash
-git clone https://github.com/briqt/agent-usage.git
-cd agent-usage
+git clone https://github.com/hongshuo-wang/agent-usage-desktop.git
+cd agent-usage-desktop
 
 # Install frontend dependencies
 npm ci
@@ -134,16 +134,16 @@ npm ci
 mkdir -p src-tauri/binaries
 
 # macOS Apple Silicon:
-CGO_ENABLED=0 go build -o src-tauri/binaries/agent-usage-aarch64-apple-darwin .
+CGO_ENABLED=0 go build -o src-tauri/binaries/agent-usage-desktop-aarch64-apple-darwin .
 
 # macOS Intel:
-CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-apple-darwin .
+CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-desktop-x86_64-apple-darwin .
 
 # Linux:
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-unknown-linux-gnu .
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-desktop-x86_64-unknown-linux-gnu .
 
 # Windows:
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-pc-windows-msvc.exe .
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-desktop-x86_64-pc-windows-msvc.exe .
 
 # Build desktop app
 npx tauri build
@@ -211,7 +211,7 @@ The web dashboard provides:
 ## Architecture
 
 ```
-agent-usage
+agent-usage-desktop
 ├── main.go                     # Entry point, orchestrates components
 ├── config.yaml                 # Configuration
 ├── internal/
@@ -233,7 +233,7 @@ agent-usage
 │   └── server/
 │       ├── server.go           # HTTP server + REST API
 │       └── static/             # Embedded web UI (HTML + JS + ECharts)
-└── agent-usage.db              # SQLite database (generated at runtime)
+└── agent-usage-desktop.db              # SQLite database (generated at runtime)
 ```
 
 ## Cost Calculation
@@ -276,7 +276,7 @@ Invalid date formats or reversed date ranges return a `400` JSON error with a de
 
 ## Docker Details
 
-Pre-built multi-arch images (amd64 + arm64) are published to `ghcr.io/briqt/agent-usage`.
+Pre-built multi-arch images (amd64 + arm64) are published to `ghcr.io/hongshuo-wang/agent-usage-desktop`.
 
 The default `docker-compose.yml` runs as UID 1000. If your host user has a different UID, edit the `user:` field:
 
@@ -293,10 +293,10 @@ This is required because `~/.claude/projects` is mode 700 — only the owning UI
 ### Building locally
 
 ```bash
-docker build -t agent-usage:local .
+docker build -t agent-usage-desktop:local .
 
 # For China mainland, use GOPROXY:
-docker build --build-arg GOPROXY=https://goproxy.cn,direct -t agent-usage:local .
+docker build --build-arg GOPROXY=https://goproxy.cn,direct -t agent-usage-desktop:local .
 ```
 
 ## Roadmap

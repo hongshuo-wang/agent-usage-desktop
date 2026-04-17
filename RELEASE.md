@@ -1,8 +1,8 @@
 # Release Guide
 
-本文档描述 agent-usage 的发版流程和规范。
+本文档描述 agent-usage-desktop 的发版流程和规范。
 
-This document describes the release process and conventions for agent-usage.
+This document describes the release process and conventions for agent-usage-desktop.
 
 ## Version Scheme
 
@@ -74,8 +74,8 @@ Tag message 格式：`Release v<VERSION>: <one-line summary>`
 
 ### Step 3: Verify
 
-1. 前往 [GitHub Actions](https://github.com/briqt/agent-usage/actions) 确认 Release workflow 成功
-2. 检查 [Releases](https://github.com/briqt/agent-usage/releases) 页面：
+1. 前往 [GitHub Actions](https://github.com/hongshuo-wang/agent-usage-desktop/actions) 确认 Release workflow 成功
+2. 检查 [Releases](https://github.com/hongshuo-wang/agent-usage-desktop/releases) 页面：
    - Changelog 自动生成且正确
    - 6 个平台二进制已上传（linux/darwin/windows × amd64/arm64）
    - checksums.txt 存在
@@ -94,12 +94,12 @@ GoReleaser 自动交叉编译以下平台：
 
 | OS | Arch | 产物 |
 |----|------|------|
-| Linux | amd64 | `agent-usage_<ver>_linux_amd64.tar.gz` |
-| Linux | arm64 | `agent-usage_<ver>_linux_arm64.tar.gz` |
-| macOS | amd64 | `agent-usage_<ver>_darwin_amd64.tar.gz` |
-| macOS | arm64 (Apple Silicon) | `agent-usage_<ver>_darwin_arm64.tar.gz` |
-| Windows | amd64 | `agent-usage_<ver>_windows_amd64.zip` |
-| Windows | arm64 | `agent-usage_<ver>_windows_arm64.zip` |
+| Linux | amd64 | `agent-usage-desktop_<ver>_linux_amd64.tar.gz` |
+| Linux | arm64 | `agent-usage-desktop_<ver>_linux_arm64.tar.gz` |
+| macOS | amd64 | `agent-usage-desktop_<ver>_darwin_amd64.tar.gz` |
+| macOS | arm64 (Apple Silicon) | `agent-usage-desktop_<ver>_darwin_arm64.tar.gz` |
+| Windows | amd64 | `agent-usage-desktop_<ver>_windows_amd64.zip` |
+| Windows | arm64 | `agent-usage-desktop_<ver>_windows_arm64.zip` |
 
 所有二进制使用 `-s -w` ldflags 去除调试信息，CGO_ENABLED=0 确保静态链接。
 

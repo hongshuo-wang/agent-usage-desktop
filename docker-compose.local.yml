@@ -1,7 +1,7 @@
 services:
-  agent-usage:
-    image: agent-usage:local
-    container_name: agent-usage
+  agent-usage-desktop:
+    image: agent-usage-desktop:local
+    container_name: agent-usage-desktop
     restart: unless-stopped
     user: "1000:1000"
     network_mode: host

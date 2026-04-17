@@ -1,25 +1,25 @@
 # Contributing
 
-感谢你对 agent-usage 的关注！欢迎提交 Issue 和 Pull Request。
+感谢你对 agent-usage-desktop 的关注！欢迎提交 Issue 和 Pull Request。
 
-Thanks for your interest in agent-usage! Issues and Pull Requests are welcome.
+Thanks for your interest in agent-usage-desktop! Issues and Pull Requests are welcome.
 
 ## Development Setup
 
 ```bash
 # Clone
-git clone https://github.com/briqt/agent-usage.git
-cd agent-usage
+git clone https://github.com/hongshuo-wang/agent-usage-desktop.git
+cd agent-usage-desktop
 
 # Requirements
 # Go 1.25+
 
 # Build
-go build -o agent-usage .
+go build -o agent-usage-desktop .
 
 # Run
 cp config.yaml config.local.yaml  # edit as needed
-./agent-usage
+./agent-usage-desktop
 ```
 
 ## Project Structure

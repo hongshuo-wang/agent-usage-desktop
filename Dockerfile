@@ -16,7 +16,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOPROXY=${GOPROXY} go build \
       -X main.version=${VERSION} \
       -X main.commit=${COMMIT} \
       -X main.date=${DATE}" \
-    -o /agent-usage .
+    -o /agent-usage-desktop .
 
 # ---- Runtime Stage ----
 FROM alpine:3.21
@@ -26,11 +26,11 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 RUN mkdir -p /data /sessions/claude /sessions/codex
 
-COPY --from=builder /agent-usage /agent-usage
-COPY config.docker.yaml /etc/agent-usage/config.yaml
+COPY --from=builder /agent-usage-desktop /agent-usage-desktop
+COPY config.docker.yaml /etc/agent-usage-desktop/config.yaml
 
 EXPOSE 9800
 
 VOLUME ["/data"]
 
-ENTRYPOINT ["/agent-usage"]
+ENTRYPOINT ["/agent-usage-desktop"]
