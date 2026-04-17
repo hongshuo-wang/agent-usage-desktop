@@ -19,6 +19,7 @@
   },
   "homepage": "https://github.com/hongshuo-wang/agent-usage-desktop#readme",
   "dependencies": {
+    "@tauri-apps/plugin-opener": "^2.5.3",
     "@tauri-apps/plugin-shell": "^2.3.5",
     "echarts": "^6.0.0",
     "echarts-for-react": "^3.0.6",

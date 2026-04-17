@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useLocation } from "react-router-dom";
-import { open } from "@tauri-apps/plugin-shell";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { getWebUIUrl } from "../lib/api";
 
 const navItems = [
@@ -21,7 +21,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const handleOpenWebUI = async () => {
     try {
       const url = await getWebUIUrl();
-      open(url);
+      openUrl(url);
     } catch {
       // sidecar not ready, ignore silently
     }
@@ -41,7 +41,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <div className="h-screen flex flex-col bg-background min-w-[900px]">
+    <div className="h-screen flex flex-col bg-background overflow-hidden">
       <header className="sticky top-0 z-50 border-b border-border bg-background/85 backdrop-blur-sm">
         <div className="px-6 py-3 flex items-center justify-between">
           <nav className="flex items-center gap-6">
@@ -72,7 +72,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       </header>
-      <main className="flex-1 overflow-auto px-6 py-6">
+      <main className="flex-1 min-h-0 min-w-0 flex flex-col px-5 py-4">
         {children}
       </main>
     </div>

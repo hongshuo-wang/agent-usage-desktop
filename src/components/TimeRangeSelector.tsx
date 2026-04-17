@@ -33,7 +33,7 @@ export default function TimeRangeSelector({
   const { t } = useTranslation();
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-1.5">
       {/* Row 1: Preset buttons */}
       <div className="flex flex-wrap items-center gap-2 bg-card border border-border rounded-lg p-1">
         {PRESETS.map((p) => (

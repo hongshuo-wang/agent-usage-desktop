@@ -3,7 +3,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager,
 };
-use tauri_plugin_shell::ShellExt;
+use tauri_plugin_opener::OpenerExt;
 
 pub fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show Panel", true, None::<&str>)?;
@@ -32,7 +32,7 @@ pub fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                         return;
                     }
                     let url = format!("http://127.0.0.1:{}", port);
-                    let _ = handle.shell().open(&url, None::<tauri_plugin_shell::open::Program>);
+                    let _ = handle.opener().open_url(&url, None::<&str>);
                 });
             }
             "quit" => {

@@ -130,19 +130,19 @@ export default function Sessions() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="flex-1 min-h-0 flex flex-col gap-3">
       <TimeRangeSelector preset={preset} onPresetChange={setPreset}
         granularity={granularity} onGranularityChange={setGranularity}
         source={source} onSourceChange={setSource} onRefresh={fetchData} />
 
-      <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+      <div className="bg-card border border-border rounded-xl shadow-sm flex-1 min-h-0 flex flex-col overflow-hidden">
         <div className="p-5 border-b border-border flex items-center justify-between">
           <h3 className="text-base font-semibold">{t("sessionLog")}</h3>
           <input type="text" value={filter} onChange={(e) => { setFilter(e.target.value); setPage(1); }}
             placeholder={t("filterProject")}
             className="bg-background border border-border rounded-lg px-3 py-2 text-sm w-56" />
         </div>
-        <div className="overflow-x-auto">
+        <div className="overflow-auto flex-1 min-h-0">
           {loading && sessions.length === 0 ? (
             <div className="flex items-center justify-center py-20 text-muted-foreground text-sm">
               {t("loading")}...

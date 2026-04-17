@@ -16,16 +16,18 @@
 
 :root {
   font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--color-foreground);
+  background-color: var(--color-background);
 }
 
 .dark {
-  --color-background: #171717;
-  --color-foreground: #e5e5e5;
-  --color-card: #1c1c1c;
-  --color-card-foreground: #e5e5e5;
-  --color-border: #262626;
-  --color-muted: #262626;
-  --color-muted-foreground: #a3a3a3;
+  --color-background: #0f0f0f;
+  --color-foreground: #ededed;
+  --color-card: #1a1a1a;
+  --color-card-foreground: #ededed;
+  --color-border: #2e2e2e;
+  --color-muted: #252525;
+  --color-muted-foreground: #a8a8a8;
   --color-accent: #f97316;
   --color-accent-hover: #fb923c;
   --color-green: #22c55e;

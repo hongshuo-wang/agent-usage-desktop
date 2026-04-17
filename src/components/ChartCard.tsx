@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import ReactECharts from "echarts-for-react";
 
 interface ChartCardProps {
@@ -25,26 +25,39 @@ export default function ChartCard({ title, option, className }: ChartCardProps) 
   const isDark = useIsDark();
 
   const themed = useCallback(() => {
-    const textColor = isDark ? "#a3a3a3" : "#737373";
-    const axisLine = isDark ? "#262626" : "#e5e5e5";
+    const textColor = isDark ? "#a8a8a8" : "#737373";
+    const axisLine = isDark ? "#2e2e2e" : "#e5e5e5";
     const base = option as Record<string, unknown>;
     const baseXAxis = (base.xAxis as Record<string, unknown>) || {};
     const baseYAxis = (base.yAxis as Record<string, unknown>) || {};
     return {
       ...base,
       backgroundColor: "transparent",
-      tooltip: { ...(base.tooltip as object || {}), backgroundColor: isDark ? "#262626" : "#fff", borderColor: axisLine, textStyle: { color: isDark ? "#e5e5e5" : "#171717", fontSize: 12 } },
+      tooltip: { ...(base.tooltip as object || {}), backgroundColor: isDark ? "#1a1a1a" : "#fff", borderColor: axisLine, textStyle: { color: isDark ? "#ededed" : "#171717", fontSize: 12 } },
       legend: { ...(base.legend as object || {}), textStyle: { color: textColor, fontSize: 11 } },
       xAxis: { ...baseXAxis, axisLine: { lineStyle: { color: axisLine } }, axisLabel: { ...(baseXAxis.axisLabel as object || {}), color: textColor, fontSize: 11 }, splitLine: { lineStyle: { color: axisLine, type: "dashed" as const } } },
       yAxis: { ...baseYAxis, axisLine: { show: false }, axisLabel: { ...(baseYAxis.axisLabel as object || {}), color: textColor, fontSize: 11 }, splitLine: { lineStyle: { color: axisLine, type: "dashed" as const } } },
     };
   }, [option, isDark]);
 
+  const chartRef = useRef<ReactECharts>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const ro = new ResizeObserver(() => {
+      chartRef.current?.getEchartsInstance()?.resize();
+    });
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, []);
+
   return (
-    <div className={`bg-card border border-border rounded-xl p-4 shadow-sm flex flex-col ${className || ""}`}>
-      <h3 className="text-xs font-medium text-muted-foreground mb-2">{title}</h3>
-      <div className="flex-1 min-h-0">
-        <ReactECharts option={themed()} style={{ height: '100%', width: '100%' }} notMerge={true} />
+    <div className={`bg-card border border-border rounded-xl p-3 shadow-sm flex flex-col min-w-0 min-h-0 overflow-hidden ${className || ""}`}>
+      <h3 className="text-xs font-medium text-muted-foreground mb-1.5">{title}</h3>
+      <div ref={containerRef} className="flex-1 min-h-0">
+        <ReactECharts ref={chartRef} option={themed()} style={{ height: '100%', width: '100%' }} notMerge={true} />
       </div>
     </div>
   );

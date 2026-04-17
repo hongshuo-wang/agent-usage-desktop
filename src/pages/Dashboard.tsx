@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { fetchAPI } from "../lib/api";
 import { fmtCost, fmtTokens, getTimeRange, TimePreset, CHART_COLORS } from "../lib/utils";
 import TimeRangeSelector from "../components/TimeRangeSelector";
 import ChartCard from "../components/ChartCard";
+import Sparkline from "../components/Sparkline";
 
 interface DashboardStats {
   total_tokens: number;
@@ -76,8 +77,8 @@ function Skeleton({ className }: { className?: string }) {
 
 function DashboardSkeleton() {
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-5 flex-1 min-h-0">
-      <div className="space-y-4">
+    <div className="grid grid-cols-[220px_1fr] gap-4 flex-1 min-h-0 min-w-0 overflow-hidden">
+      <div className="space-y-4 min-h-0 overflow-hidden">
         <div className="pb-4 border-b border-border space-y-2">
           <Skeleton className="h-3 w-20" />
           <Skeleton className="h-10 w-36" />
@@ -91,31 +92,30 @@ function DashboardSkeleton() {
           </div>
         ))}
       </div>
-      <div className="flex flex-col gap-3 min-h-0">
-        <Skeleton className="flex-[2] min-h-[160px] rounded-xl" />
-        <div className="grid grid-cols-1 sm:grid-cols-[3fr_2fr] gap-3 flex-[1] min-h-[120px]">
-          <Skeleton className="min-h-[120px] rounded-xl" />
-          <Skeleton className="min-h-[120px] rounded-xl" />
+      <div className="flex flex-col gap-2 min-h-0 min-w-0 overflow-hidden">
+        <Skeleton className="flex-[2] rounded-xl" />
+        <div className="grid grid-cols-[3fr_2fr] gap-2 flex-[1] min-h-0 min-w-0">
+          <Skeleton className="rounded-xl" />
+          <Skeleton className="rounded-xl" />
         </div>
       </div>
     </div>
   );
 }
 
-/* ── Metric with progress bar ── */
-function MetricRow({ label, value, change, percent, color, valueColor }: {
-  label: string; value: string; change?: string; percent: number; color: string; valueColor?: string;
+/* ── Metric with sparkline ── */
+function MetricRow({ label, value, color, valueColor, sparkData }: {
+  label: string; value: string; color: string; valueColor?: string; sparkData?: number[];
 }) {
   return (
-    <div className="py-3 border-b border-border last:border-b-0">
+    <div className="py-2 border-b border-border last:border-b-0">
       <div className="text-[11px] text-muted-foreground mb-0.5">{label}</div>
-      <div className="flex items-baseline gap-2">
-        <span className="text-xl font-bold font-mono" style={valueColor ? { color: valueColor } : undefined}>{value}</span>
-        {change && <span className="text-[11px] text-green">{change}</span>}
-      </div>
-      <div className="mt-1.5 h-1 rounded-full bg-muted overflow-hidden">
-        <div className="h-full rounded-full transition-all duration-500 ease-out" style={{ width: `${percent}%`, backgroundColor: color }} />
-      </div>
+      <div className="text-lg font-bold font-mono" style={valueColor ? { color: valueColor } : undefined}>{value}</div>
+      {sparkData && sparkData.length > 0 && (
+        <div className="mt-1.5">
+          <Sparkline data={sparkData} color={color} height={24} />
+        </div>
+      )}
     </div>
   );
 }
@@ -137,6 +137,8 @@ export default function Dashboard() {
   );
   const [granularity, setGranularity] = useState(localStorage.getItem("au-granularity") || "1h");
   const [source, setSource] = useState(localStorage.getItem("au-source") || "");
+  const [customFrom, setCustomFrom] = useState(localStorage.getItem("au-custom-from") || "");
+  const [customTo, setCustomTo] = useState(localStorage.getItem("au-custom-to") || "");
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [tokensData, setTokensData] = useState<TokensOverTime | null>(null);
   const [costData, setCostData] = useState<CostOverTime | null>(null);
@@ -145,7 +147,7 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
-    const range = getTimeRange(preset);
+    const range = getTimeRange(preset, customFrom, customTo);
     const params = { ...range, granularity, source: source || undefined };
     setLoading(true);
     setError(null);
@@ -166,16 +168,28 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }, [preset, granularity, source]);
+  }, [preset, granularity, source, customFrom, customTo]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  /* ── Shorten axis labels: "2026-04-15 10" → "04-15 10h" ── */
+  const fmtAxisLabel = (v: string) => {
+    const m = String(v).match(/\d{4}-(\d{2}-\d{2})(?:\s+(\d+))?/);
+    if (m) return m[2] !== undefined ? `${m[1]} ${m[2]}h` : m[1];
+    return v;
+  };
+  /* Auto-calculate label interval to avoid overlap */
+  const calcInterval = (count: number, chartWidth = 800) => {
+    const maxLabels = Math.floor(chartWidth / 70); // ~70px per rotated label
+    return count <= maxLabels ? 0 : Math.ceil(count / maxLabels) - 1;
+  };
 
   /* ── ECharts options ── */
   const tokensOption = tokensData?.labels ? {
     tooltip: { trigger: "axis" },
-    legend: { type: "scroll", data: [t("input"), t("output"), t("cacheRead"), t("cacheCreate")] },
-    grid: { left: 8, right: 8, top: 36, bottom: 4, containLabel: true },
-    xAxis: { type: "category", data: tokensData.labels, axisLabel: { hideOverlap: true } },
+    legend: { type: "scroll", top: 0, left: "center" },
+    grid: { left: 8, right: 8, top: 30, bottom: 4, containLabel: true },
+    xAxis: { type: "category", data: tokensData.labels, axisLabel: { hideOverlap: true, rotate: 40, fontSize: 11, formatter: fmtAxisLabel, interval: calcInterval(tokensData.labels.length) } },
     yAxis: { type: "value" },
     series: [
       { name: t("input"), type: "bar", stack: "tokens", data: tokensData.input, color: CHART_COLORS[0] },
@@ -187,9 +201,9 @@ export default function Dashboard() {
 
   const costOption = costData?.series ? {
     tooltip: { trigger: "axis" },
-    legend: { type: "scroll", data: costData.series.map((s) => s.model) },
-    grid: { left: 8, right: 8, top: 36, bottom: 4, containLabel: true },
-    xAxis: { type: "category", data: costData.labels, axisLabel: { hideOverlap: true } },
+    legend: { type: "scroll", top: 0, left: "center" },
+    grid: { left: 8, right: 8, top: 30, bottom: 4, containLabel: true },
+    xAxis: { type: "category", data: costData.labels, axisLabel: { hideOverlap: true, rotate: 40, fontSize: 11, formatter: fmtAxisLabel, interval: calcInterval(costData.labels.length, 500) } },
     yAxis: { type: "value" },
     series: costData.series.map((s, i) => ({
       name: s.model, type: "bar", stack: "cost", data: s.data,
@@ -198,14 +212,16 @@ export default function Dashboard() {
   } : {};
 
   const pieOption = pieData.length ? {
-    tooltip: { trigger: "item" },
+    tooltip: { trigger: "item", formatter: "{b}: ${c} ({d}%)" },
+    legend: { type: "scroll", bottom: 0, left: "center" },
     series: [{
-      type: "pie", radius: ["40%", "70%"],
+      type: "pie", radius: ["35%", "65%"], center: ["50%", "45%"],
       data: pieData.map((d, i) => ({
         name: d.model, value: d.cost,
         itemStyle: { color: CHART_COLORS[i % CHART_COLORS.length] },
       })),
-      label: { formatter: "{b}: {d}%", overflow: "truncate", width: 80 },
+      label: { show: false },
+      emphasis: { label: { show: true, formatter: "{b}\n{d}%", fontSize: 12 } },
     }],
   } : {};
 
@@ -213,13 +229,36 @@ export default function Dashboard() {
   const totalInput = stats ? (stats.total_tokens - (stats.total_tokens * 0.25)) : 0; // approximate
   const cacheRate = stats ? (stats.cache_hit_rate * 100) : 0;
 
+  /* ── Sparkline data derived from existing time-series ── */
+  const tokenSpark = useMemo(() => {
+    if (!tokensData?.labels) return [];
+    return tokensData.input.map((v, i) => v + tokensData.output[i] + tokensData.cache_read[i] + tokensData.cache_creation[i]);
+  }, [tokensData]);
+
+  const cacheSpark = useMemo(() => {
+    if (!tokensData?.labels) return [];
+    return tokensData.input.map((v, i) => {
+      const total = v + tokensData.cache_read[i] + tokensData.cache_creation[i];
+      return total > 0 ? (tokensData.cache_read[i] / total) * 100 : 0;
+    });
+  }, [tokensData]);
+
+  const apiSpark = useMemo(() => {
+    if (!costData?.series) return [];
+    // sum all model costs per time point as a proxy for call volume
+    return costData.labels.map((_, i) => costData.series.reduce((sum, s) => sum + (s.data[i] > 0 ? 1 : 0), 0));
+  }, [costData]);
+
   return (
-    <div className="flex flex-col flex-1 min-h-0 gap-4">
+    <div className="flex flex-col flex-1 min-h-0 min-w-0 gap-3">
       <TimeRangeSelector
         preset={preset} onPresetChange={setPreset}
         granularity={granularity} onGranularityChange={setGranularity}
         source={source} onSourceChange={setSource}
         onRefresh={fetchData}
+        customFrom={customFrom} customTo={customTo}
+        onCustomFromChange={(v) => { setCustomFrom(v); localStorage.setItem("au-custom-from", v); }}
+        onCustomToChange={(v) => { setCustomTo(v); localStorage.setItem("au-custom-to", v); }}
       />
       {loading && !stats ? (
         <DashboardSkeleton />
@@ -231,13 +270,13 @@ export default function Dashboard() {
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-5 flex-1 min-h-0">
+        <div className="grid grid-cols-[220px_1fr] gap-4 flex-1 min-h-0 min-w-0 overflow-hidden">
           {/* ── Left Panel ── */}
-          <div className="flex flex-col">
+          <div className="flex flex-col min-h-0 overflow-hidden">
             {/* Cost Hero */}
-            <div className="mb-3 pb-3 border-b border-border">
+            <div className="mb-2 pb-2 border-b border-border">
               <div className="text-[11px] text-muted-foreground uppercase tracking-wider">{t("todayCost")}</div>
-              <div className="text-[40px] font-extrabold font-mono leading-none tracking-tight mt-0.5">
+              <div className="text-[36px] font-extrabold font-mono leading-none tracking-tight mt-0.5">
                 {fmtCost(stats?.total_cost || 0)}
               </div>
             </div>
@@ -247,26 +286,28 @@ export default function Dashboard() {
               <MetricRow
                 label={t("tokenConsumption")}
                 value={fmtTokens(stats?.total_tokens || 0)}
-                percent={Math.min(72, 100)}
                 color="#f97316"
+                valueColor="#f97316"
+                sparkData={tokenSpark}
               />
               <MetricRow
                 label={t("cacheHitRate")}
                 value={cacheRate.toFixed(1) + "%"}
-                percent={cacheRate}
                 color="#22c55e"
                 valueColor="#22c55e"
+                sparkData={cacheSpark}
               />
               <MetricRow
                 label={t("apiCalls")}
                 value={fmtTokens(stats?.total_calls || 0)}
-                percent={Math.min(55, 100)}
                 color="#6366f1"
+                valueColor="#818cf8"
+                sparkData={tokenSpark}
               />
             </div>
 
             {/* Auxiliary 2x2 grid */}
-            <div className="grid grid-cols-2 gap-2 mt-auto pt-3">
+            <div className="grid grid-cols-2 gap-1.5 mt-auto pt-2">
               <AuxCell label={t("sessions")} value={String(stats?.total_sessions || 0)} />
               <AuxCell label={t("prompts")} value={String(stats?.total_prompts || 0)} />
               <AuxCell label={t("inputTokens")} value={fmtTokens(totalInput)} />
@@ -275,9 +316,9 @@ export default function Dashboard() {
           </div>
 
           {/* ── Right Panel ── */}
-          <div className="flex flex-col gap-3 min-w-0 min-h-0">
-            <ChartCard title={t("tokenUsage")} option={tokensOption} className="flex-[2] min-h-[160px]" />
-            <div className="grid grid-cols-1 sm:grid-cols-[3fr_2fr] gap-3 flex-[1] min-h-[120px]">
+          <div className="flex flex-col gap-2 min-w-0 min-h-0 overflow-hidden">
+            <ChartCard title={t("tokenUsage")} option={tokensOption} className="flex-[2] min-h-0" />
+            <div className="grid grid-cols-[3fr_2fr] gap-2 flex-[1] min-h-0 min-w-0">
               <ChartCard title={t("costTrend")} option={costOption} />
               <ChartCard title={t("costByModel")} option={pieOption} />
             </div>

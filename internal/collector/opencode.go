@@ -78,6 +78,12 @@ func (c *OpenCodeCollector) processDB(dbPath string) error {
 	}
 	defer srcDB.Close()
 
+	// Check if required tables exist (db may be empty or a different schema version)
+	var tableName string
+	if err := srcDB.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='message'`).Scan(&tableName); err != nil {
+		return nil // table doesn't exist yet, skip silently
+	}
+
 	// Query assistant messages newer than watermark
 	rows, err := srcDB.Query(`
 		SELECT m.data, m.session_id, m.time_created, s.directory
