@@ -243,12 +243,6 @@ export default function Dashboard() {
     });
   }, [tokensData]);
 
-  const apiSpark = useMemo(() => {
-    if (!costData?.series) return [];
-    // sum all model costs per time point as a proxy for call volume
-    return costData.labels.map((_, i) => costData.series.reduce((sum, s) => sum + (s.data[i] > 0 ? 1 : 0), 0));
-  }, [costData]);
-
   return (
     <div className="flex flex-col flex-1 min-h-0 min-w-0 gap-3">
       <TimeRangeSelector
