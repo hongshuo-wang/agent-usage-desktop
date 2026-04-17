@@ -4,20 +4,10 @@ This file provides guidance to AI coding agents when working with code in this r
 
 ## Build & Run
 
-### Go backend (standalone)
-
-```bash
-go build -o agent-usage-desktop .                # build binary
-./agent-usage-desktop                             # run (reads config.yaml by default)
-./agent-usage-desktop --config path/to/config.yaml
-./agent-usage-desktop --port 9800                 # override server port
-./agent-usage-desktop version                     # print version info
-```
-
 ### Desktop app (Tauri)
 
 ```bash
-npm ci                                    # install frontend deps
+npm install                               # install frontend deps
 npx tauri dev                             # dev mode (hot-reload frontend + Rust)
 npx tauri build                           # production build → .app/.dmg/.msi/.deb
 ```
@@ -44,6 +34,16 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
 
 Binary naming must match Tauri's `externalBin` convention: `agent-usage-{rust-target-triple}[.exe]`.
 
+### Go backend (standalone, for development)
+
+```bash
+go build -o agent-usage-desktop .                # build binary
+./agent-usage-desktop                             # run (reads config.yaml by default)
+./agent-usage-desktop --config path/to/config.yaml
+./agent-usage-desktop --port 9800                 # override server port
+./agent-usage-desktop version                     # print version info
+```
+
 ## Testing
 
 ```bash
@@ -53,16 +53,6 @@ go test ./internal/storage/... -run TestDedup  # single test
 ```
 
 No CGO required — the SQLite driver (`modernc.org/sqlite`) is pure Go.
-
-## Docker
-
-```bash
-docker compose up -d                      # start with default compose
-docker build -t agent-usage-desktop:local .       # local image build
-docker build --build-arg GOPROXY=https://goproxy.cn,direct -t agent-usage-desktop:local .  # China proxy
-```
-
-Container runs as UID 1000 by default; adjust `user:` in docker-compose.yml if your host UID differs (needed because `~/.claude/projects` is mode 700).
 
 ## Architecture
 
@@ -91,7 +81,7 @@ Key Rust files:
 - `internal/storage` — SQLite layer. `sqlite.go` has schema + versioned migrations (tracked via `meta` table with `migration_{id}` keys, each runs once), `queries.go` handles writes, `api.go` handles reads, `costs.go` does cost recalculation. All DB access serialized through a mutex (`DB.mu`). Key tables: `usage_records` (per-API-call token/cost data), `sessions` (session metadata), `prompt_events` (per-prompt timestamps for time-range queries), `pricing` (model prices), `file_state` (scan offsets and parser context for incremental scanning).
 - `internal/pricing` — Fetches model prices from litellm's GitHub JSON. Cost formula: `input × input_price + cache_creation × cache_creation_price + cache_read × cache_read_price + output × output_price`.
 - `internal/server` — HTTP server with REST API endpoints (`/api/stats`, `/api/cost-by-model`, etc.) and `go:embed` static files (HTML + ECharts dashboard). `/api/stats` returns aggregate metrics including `cache_hit_rate` (ratio of cache read tokens to total input tokens). All endpoints accept `from`, `to`, `source` (optional: `claude`/`codex`/`openclaw`), and time-series endpoints accept `granularity`. Invalid dates or reversed ranges return `400` with a JSON error message.
-- `internal/config` — YAML config loader. Search order: `--config` flag → `/etc/agent-usage/config.yaml` → `./config.yaml`. Supports `~` expansion in paths.
+- `internal/config` — YAML config loader. Search order: `--config` flag → `./config.yaml`. Supports `~` expansion in paths.
 
 ### Token semantics
 
@@ -117,8 +107,8 @@ Usage records are deduped via a unique index on `(session_id, model, timestamp, 
 
 ## Conventions
 
-- Conventional Commits (`feat:`, `fix:`, `refactor:`, etc.) — GoReleaser generates changelog from these.
-- Releases built with GoReleaser; version/commit/date injected via ldflags.
+- Conventional Commits (`feat:`, `fix:`, `refactor:`, etc.).
+- Version/commit/date injected via ldflags at build time.
 - Web UI is embedded via `go:embed` in `internal/server/static/` — changes to frontend files require rebuilding the binary.
 - Desktop app frontend lives in `src/` (React + TypeScript) — separate from the embedded Go web UI.
 - Tauri config is in `src-tauri/tauri.conf.json`. CSP restricts connect-src to `127.0.0.1` and `localhost`.

@@ -74,34 +74,30 @@ Tag message 格式：`Release v<VERSION>: <one-line summary>`
 
 ### Step 3: Verify
 
-1. 前往 [GitHub Actions](https://github.com/hongshuo-wang/agent-usage-desktop/actions) 确认 Release workflow 成功
+1. 前往 [GitHub Actions](https://github.com/hongshuo-wang/agent-usage-desktop/actions) 确认 Desktop Build workflow 成功
 2. 检查 [Releases](https://github.com/hongshuo-wang/agent-usage-desktop/releases) 页面：
    - Changelog 自动生成且正确
-   - 6 个平台二进制已上传（linux/darwin/windows × amd64/arm64）
-   - checksums.txt 存在
+   - 各平台桌面安装包已上传（macOS .dmg、Windows .exe、Linux .AppImage/.deb）
 
 ### Alternative: GitHub UI
 
 也可以通过 GitHub Actions 页面手动触发：
 
-1. 进入 Actions → Release → Run workflow
-2. 输入版本号（如 `v0.1.0`）
-3. 点击 Run
+1. 进入 Actions → Desktop Build → Run workflow
+2. 点击 Run
 
 ## Build Matrix
 
-GoReleaser 自动交叉编译以下平台：
+Desktop Build workflow 自动为以下平台构建 Tauri 桌面应用：
 
 | OS | Arch | 产物 |
 |----|------|------|
-| Linux | amd64 | `agent-usage-desktop_<ver>_linux_amd64.tar.gz` |
-| Linux | arm64 | `agent-usage-desktop_<ver>_linux_arm64.tar.gz` |
-| macOS | amd64 | `agent-usage-desktop_<ver>_darwin_amd64.tar.gz` |
-| macOS | arm64 (Apple Silicon) | `agent-usage-desktop_<ver>_darwin_arm64.tar.gz` |
-| Windows | amd64 | `agent-usage-desktop_<ver>_windows_amd64.zip` |
-| Windows | arm64 | `agent-usage-desktop_<ver>_windows_arm64.zip` |
+| macOS | arm64 (Apple Silicon) | `Agent Usage_<ver>_aarch64.dmg` |
+| macOS | amd64 (Intel) | `Agent Usage_<ver>_x64.dmg` |
+| Linux | amd64 | `Agent Usage_<ver>_amd64.AppImage` / `.deb` |
+| Windows | amd64 | `Agent Usage_<ver>_x64-setup.exe` / `.msi` |
 
-所有二进制使用 `-s -w` ldflags 去除调试信息，CGO_ENABLED=0 确保静态链接。
+Go sidecar 使用 CGO_ENABLED=0 确保静态链接。
 
 ## Hotfix Process
 

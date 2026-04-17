@@ -90,14 +90,10 @@ func DefaultConfig() *Config {
 
 // ResolveConfigPath returns the config file path to use, checking in order:
 // 1. Explicit path from --config flag (if non-empty)
-// 2. /etc/agent-usage/config.yaml (Docker / system-wide)
-// 3. ./config.yaml (local default)
+// 2. ./config.yaml (local default)
 func ResolveConfigPath(flagPath string) string {
 	if flagPath != "" {
 		return flagPath
-	}
-	if _, err := os.Stat("/etc/agent-usage/config.yaml"); err == nil {
-		return "/etc/agent-usage/config.yaml"
 	}
 	return "config.yaml"
 }

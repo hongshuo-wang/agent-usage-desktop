@@ -26,8 +26,7 @@ What actually happened.
 ## Environment
 
 - OS: (e.g., Linux x86_64, macOS arm64, Windows amd64)
-- Go version: (e.g., 1.25)
-- agent-usage-desktop version: (run `./agent-usage-desktop version`)
+- App version: (check in app settings or About dialog)
 
 ## Logs
 

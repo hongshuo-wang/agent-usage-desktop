@@ -1,55 +1,43 @@
 # agent-usage-desktop
 
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![License: MIT](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-blue)]()
-[![Docker](https://img.shields.io/badge/Docker-ghcr.io-blue?logo=docker)](https://ghcr.io/hongshuo-wang/agent-usage-desktop)
 
-轻量级、跨平台的 AI 编程工具用量与费用追踪器。  
-单二进制 + SQLite —— 零基础设施依赖。
+轻量级、跨平台的 AI 编程工具用量与费用追踪桌面应用。
 
 **[English](README.md)**
 
-统一采集 Claude Code、Codex、OpenClaw、OpenCode 等 AI 编程工具的本地会话数据，自动计算费用，通过 Web 仪表板展示 token 用量、费用趋势和会话明细。
+统一采集 Claude Code、Codex、OpenClaw、OpenCode 等 AI 编程工具的本地会话数据，自动计算费用，通过内置仪表板展示 token 用量、费用趋势和会话明细。
 
 ![仪表板](docs/dashboard.png)
 
 ## 特性
 
-- 📁 **本地文件解析** —— 直接读取 Claude Code、Codex CLI、OpenClaw 的会话文件和 OpenCode 的 SQLite 数据库
-- 💰 **自动费用计算** —— 从 [litellm](https://github.com/BerriAI/litellm) 获取模型价格，价格更新后自动回填历史记录
-- 🗄️ **SQLite 存储** —— 单文件、零运维、数据可修正
-- 📊 **Web 仪表板** —— 暗色主题 UI，ECharts 图表：费用分布、token 趋势、会话列表
-- 🔄 **增量扫描** —— 监听新会话，自动去重
-- 📦 **单二进制** —— `go:embed` 将 Web UI 打包进可执行文件
-- 🖥️ **跨平台** —— Linux、macOS、Windows
-- 🖥️ **桌面应用** —— Tauri v2 原生应用，支持系统托盘、开机自启、费用告警通知、深色/浅色主题、中英文切换
+- **本地文件解析** — 直接读取 Claude Code、Codex CLI、OpenClaw 的会话文件和 OpenCode 的 SQLite 数据库
+- **自动费用计算** — 从 [litellm](https://github.com/BerriAI/litellm) 获取模型价格，价格更新后自动回填历史记录
+- **SQLite 存储** — 单文件、零运维、数据可修正
+- **仪表板** — 深色/浅色主题 UI，ECharts 图表：费用分布、token 趋势、会话列表
+- **增量扫描** — 监听新会话，自动去重
+- **跨平台** — macOS、Windows、Linux
+- **原生桌面应用** — Tauri v2，支持系统托盘、开机自启、费用告警通知、深色/浅色主题、中英文切换
 
-## 快速开始（Docker）
+## 安装
 
-```bash
-# 一条命令启动
-mkdir -p ./data && docker compose up -d
+从 [GitHub Releases](https://github.com/hongshuo-wang/agent-usage-desktop/releases) 下载对应平台的安装包：
 
-# 打开仪表板
-open http://localhost:9800
-```
+| 平台 | 文件 |
+|------|------|
+| macOS (Apple Silicon) | `Agent Usage_x.x.x_aarch64.dmg` |
+| macOS (Intel) | `Agent Usage_x.x.x_x64.dmg` |
+| Windows | `Agent Usage_x.x.x_x64-setup.exe` |
+| Linux | `Agent Usage_x.x.x_amd64.AppImage` 或 `.deb` |
 
-默认 `docker-compose.yml` 以只读方式挂载 `~/.claude/projects`、`~/.codex/sessions`、`~/.openclaw/agents` 和 `~/.local/share/opencode`，数据持久化在 `./data/` 目录。
-
-容器默认使用 `config.docker.yaml`（绑定 `0.0.0.0`，数据存储在 `/data/`）。如需自定义配置，挂载你自己的配置文件：
-
-```yaml
-# 在 docker-compose.yml 中取消注释：
-volumes:
-  - ./config.yaml:/etc/agent-usage/config.yaml:ro
-```
-
-UID/GID 权限及本地构建详见 [Docker 详情](#docker-详情)。
+启动应用后，它会在系统托盘运行并自动开始采集数据。
 
 ## 在 Agent 对话中查询用量
 
-Skill 可独立使用，无需安装或运行 agent-usage-desktop 服务 —— 直接解析本地会话文件即可工作。如果检测到 agent-usage-desktop 服务在运行，自动切换到 API 查询以获取更精确的费用数据。
+Skill 可独立使用，无需安装或运行 agent-usage-desktop 服务 — 直接解析本地会话文件即可工作。如果检测到 agent-usage-desktop 服务在运行，自动切换到 API 查询以获取更精确的费用数据。
 
 ```bash
 # 通过 vercel-labs/skills 安装，支持 Claude Code、Cursor、Kiro 等 40+ 种 agent
@@ -60,10 +48,12 @@ npx skills add hongshuo-wang/agent-usage-desktop -y
 
 ## 配置
 
+桌面应用的配置文件位于 `~/.config/agent-usage/config.yaml`（首次启动时自动创建）。也可以在应用设置中编辑。
+
 ```yaml
 server:
   port: 9800
-  bind_address: "127.0.0.1"  # 远程访问请改为 "0.0.0.0"
+  bind_address: "127.0.0.1"
 
 collectors:
   claude:
@@ -94,88 +84,6 @@ pricing:
   sync_interval: 1h  # 从 GitHub 获取价格；如失败请设置 HTTPS_PROXY 环境变量
 ```
 
-配置文件搜索顺序：`--config` 参数 > `/etc/agent-usage/config.yaml` > `./config.yaml`。
-
-## 从源码编译
-
-### 仅 Go 后端（Web 仪表板）
-
-```bash
-# 克隆
-git clone https://github.com/hongshuo-wang/agent-usage-desktop.git
-cd agent-usage-desktop
-
-# 编译
-go build -o agent-usage-desktop .
-
-# 编辑配置
-cp config.yaml config.local.yaml
-# 按需调整路径
-
-# 运行
-./agent-usage-desktop
-
-# 打开仪表板
-open http://localhost:9800
-```
-
-### 桌面应用（Tauri）
-
-前置条件：[Node.js](https://nodejs.org/) 20+、[Rust](https://rustup.rs/)、[Go](https://go.dev/) 1.24+。
-
-```bash
-git clone https://github.com/hongshuo-wang/agent-usage-desktop.git
-cd agent-usage-desktop
-
-# 安装前端依赖
-npm ci
-
-# 为你的平台编译 Go sidecar
-mkdir -p src-tauri/binaries
-
-# macOS Apple Silicon：
-CGO_ENABLED=0 go build -o src-tauri/binaries/agent-usage-aarch64-apple-darwin .
-
-# macOS Intel：
-CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-apple-darwin .
-
-# Linux：
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-unknown-linux-gnu .
-
-# Windows：
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-pc-windows-msvc.exe .
-
-# 构建桌面应用
-npx tauri build
-```
-
-产物位置：
-- macOS：`src-tauri/target/release/bundle/macos/Agent Usage.app` 和 `.dmg`
-- Windows：`src-tauri/target/release/bundle/msi/` 和 `nsis/`
-- Linux：`src-tauri/target/release/bundle/deb/` 和 `appimage/`
-
-开发模式（热更新）：
-
-```bash
-npx tauri dev
-```
-
-### 创建发布
-
-推送版本标签即可触发 CI/CD 流水线，自动为所有平台构建并创建 GitHub Release 草稿：
-
-```bash
-git tag v0.2.0
-git push origin v0.2.0
-```
-
-GitHub Actions 工作流（`.github/workflows/desktop.yml`）会：
-1. 为每个平台编译 Go sidecar（macOS arm64/x86_64、Windows、Linux）
-2. 构建 Tauri 桌面应用
-3. 将产物上传到 GitHub Release 草稿
-
-前往 **GitHub Releases** 页面，审核草稿后点击发布。用户即可从 Release 页面直接下载对应平台的安装包。
-
 ## 支持的数据源
 
 | 来源 | 会话路径 | 格式 |
@@ -185,56 +93,70 @@ GitHub Actions 工作流（`.github/workflows/desktop.yml`）会：
 | [OpenClaw](https://github.com/openclaw/openclaw) | `~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl` | JSONL |
 | [OpenCode](https://github.com/anomalyco/opencode) | `~/.local/share/opencode/opencode.db` | SQLite |
 
-### 添加新数据源
+## 从源码构建
 
-每个数据源需要一个采集器：
-1. 扫描会话目录中的 JSONL 文件
-2. 解析条目，提取每次 API 调用的 token 用量
-3. 通过存储层写入 SQLite
+如果你不想使用预构建的安装包，可以自己从源码构建：
 
-参考 `internal/collector/claude.go` 的实现。
+### 前置条件
+
+- [Go](https://go.dev/) 1.25+
+- [Node.js](https://nodejs.org/) 20+
+- [Rust](https://rustup.rs/)（stable）
+- 平台特定依赖：
+  - **Linux**: `libwebkit2gtk-4.1-dev`、`libappindicator3-dev`
+
+### 构建步骤
+
+```bash
+git clone https://github.com/hongshuo-wang/agent-usage-desktop.git
+cd agent-usage-desktop
+
+# 1. 安装前端依赖
+npm install
+
+# 2. 为你的平台编译 Go sidecar（选一个）：
+
+#    macOS Apple Silicon：
+CGO_ENABLED=0 go build -o src-tauri/binaries/agent-usage-aarch64-apple-darwin .
+
+#    macOS Intel：
+CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-apple-darwin .
+
+#    Linux x86_64：
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-unknown-linux-gnu .
+
+#    Windows x86_64：
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-pc-windows-msvc.exe .
+
+# 3. 构建桌面应用
+npx tauri build
+```
+
+安装包位置：
+- **macOS**: `src-tauri/target/release/bundle/dmg/`
+- **Windows**: `src-tauri/target/release/bundle/nsis/`
+- **Linux**: `src-tauri/target/release/bundle/appimage/` 或 `deb/`
+
+### 开发模式（热更新）
+
+```bash
+# 先编译 sidecar（上面的步骤 2），然后：
+npx tauri dev
+```
 
 ## 仪表板
 
-Web 仪表板提供：
+内置仪表板提供：
 
-- **吸顶控制栏** —— 时间预设、粒度、来源筛选（Claude/Codex/OpenClaw/OpenCode）、自动刷新
-- **汇总卡片** —— 总 Tokens、总费用、会话数、Prompt 数、API 调用数
-- **Token 用量** —— 堆叠柱状图（输入/输出/缓存读取/缓存写入）
-- **费用趋势** —— 按模型堆叠柱状图，颜色映射一致
-- **模型费用占比** —— 环形图，带百分比标签
-- **会话列表** —— 可排序、可筛选，展开查看模型明细
-- **深色/浅色主题** —— 跟随系统，支持手动切换
-- **国际化** —— 中英文
-- **时区处理** —— 所有时间戳以 UTC 存储；前端根据浏览器时区自动转换日期选择器、图表 X 轴标签和会话时间显示
-
-## 架构
-
-```
-agent-usage-desktop
-├── main.go                     # 入口，编排各组件
-├── config.yaml                 # 配置文件
-├── internal/
-│   ├── config/                 # YAML 配置加载
-│   ├── collector/
-│   │   ├── collector.go        # Collector 接口
-│   │   ├── claude.go           # Claude Code 会话扫描
-│   │   ├── claude_process.go   # Claude Code JSONL 解析
-│   │   ├── codex.go            # Codex CLI JSONL 解析
-│   │   ├── openclaw.go         # OpenClaw 会话扫描
-│   │   ├── openclaw_process.go # OpenClaw JSONL 解析
-│   │   └── opencode.go         # OpenCode SQLite 采集器
-│   ├── pricing/                # litellm 价格获取 + 计费公式
-│   ├── storage/
-│   │   ├── sqlite.go           # 数据库初始化 + 迁移
-│   │   ├── api.go              # 查询类型 + 读取操作
-│   │   ├── queries.go          # 写入操作
-│   │   └── costs.go            # 费用重算 + 回填
-│   └── server/
-│       ├── server.go           # HTTP 服务 + REST API
-│       └── static/             # 内嵌 Web UI（HTML + JS + ECharts）
-└── agent-usage.db              # SQLite 数据库（运行时生成）
-```
+- **吸顶控制栏** — 时间预设、粒度、来源筛选（Claude/Codex/OpenClaw/OpenCode）、自动刷新
+- **汇总卡片** — 总 Tokens、总费用、会话数、Prompt 数、API 调用数
+- **Token 用量** — 堆叠柱状图（输入/输出/缓存读取/缓存写入）
+- **费用趋势** — 按模型堆叠柱状图，颜色映射一致
+- **模型费用占比** — 环形图，带百分比标签
+- **会话列表** — 可排序、可筛选，展开查看模型明细
+- **深色/浅色主题** — 跟随系统，支持手动切换
+- **国际化** — 中英文
+- **时区处理** — 时间戳以 UTC 存储，显示时自动转换为本地时区
 
 ## 费用计算
 
@@ -249,63 +171,20 @@ agent-usage-desktop
 
 价格更新后，历史记录会自动回填。
 
-## API 接口
-
-所有接口支持 `from` 和 `to`（YYYY-MM-DD）查询参数。可选：`source`（`claude`、`codex`、`openclaw`、`opencode`）按来源筛选，`granularity`（`1m`、`30m`、`1h`、`6h`、`12h`、`1d`、`1w`、`1M`）用于时序接口。
-
-| 接口 | 说明 |
-|------|------|
-| `GET /api/stats` | 汇总：总费用、总 token、会话数、Prompt 数、API 调用数 |
-| `GET /api/cost-by-model` | 按模型分组的费用 |
-| `GET /api/cost-over-time` | 费用时序（支持 `granularity`） |
-| `GET /api/tokens-over-time` | Token 用量时序（支持 `granularity`） |
-| `GET /api/sessions` | 会话列表及费用/token 汇总 |
-| `GET /api/session-detail?session_id=ID` | 单个会话的模型明细 |
-
-日期格式错误或日期范围倒置时返回 `400` JSON 错误，包含具体原因。
-
 ## 技术栈
 
-- **Go** —— 纯 Go 实现，无需 CGO
-- **SQLite** via [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite) —— 纯 Go SQLite 驱动
-- **ECharts** —— 图表库
-- **`go:embed`** —— 单二进制部署
-- **Tauri v2** —— 桌面应用框架（Rust 内核 + 系统 WebView）
-- **React 18** + TypeScript + Vite —— 桌面应用前端
-- **Tailwind CSS v4** —— 样式
-
-## Docker 详情
-
-预构建多架构镜像（amd64 + arm64）发布在 `ghcr.io/hongshuo-wang/agent-usage-desktop`。
-
-默认 `docker-compose.yml` 以 UID 1000 运行。如果你的用户 UID 不同，请修改 `user:` 字段：
-
-```bash
-# 查看你的 UID/GID
-id -u  # 例如 1000
-id -g  # 例如 1000
-
-# 编辑 docker-compose.yml: user: "你的UID:你的GID"
-```
-
-这是必需的，因为 `~/.claude/projects` 目录权限为 700，只有对应 UID 才能读取。
-
-### 本地构建
-
-```bash
-docker build -t agent-usage-desktop:local .
-
-# 中国大陆用户，使用 GOPROXY 加速：
-docker build --build-arg GOPROXY=https://goproxy.cn,direct -t agent-usage-desktop:local .
-```
+- **Tauri v2** — 桌面应用框架（Rust 内核 + 系统 WebView）
+- **React 18** + TypeScript + Vite — 前端
+- **Tailwind CSS v4** — 样式
+- **Go** — 后端（纯 Go 实现，无需 CGO）
+- **SQLite** via [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite) — 纯 Go SQLite 驱动
+- **ECharts** — 图表库
 
 ## 路线图
 
 - [ ] 更多 agent 数据源（Cursor、Copilot 等）
-- [ ] OTLP HTTP 接收端，支持实时遥测
-- [ ] 系统服务管理（systemd / launchd / Windows Service）
 - [ ] 导出 CSV/JSON
-- [x] ~~告警（费用阈值）~~ —— 桌面应用通知已实现
+- [x] ~~费用告警通知~~ — 已实现
 - [ ] 多用户支持
 
 ## 社区

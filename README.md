@@ -1,51 +1,39 @@
 # agent-usage-desktop
 
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![License: MIT](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-blue)]()
-[![Docker](https://img.shields.io/badge/Docker-ghcr.io-blue?logo=docker)](https://ghcr.io/hongshuo-wang/agent-usage-desktop)
 
-Lightweight, cross-platform AI coding agent usage & cost tracker.  
-Single binary + SQLite — zero infrastructure required.
+Lightweight, cross-platform desktop app for tracking AI coding agent usage & costs.
 
 **[中文文档](README_CN.md)**
 
-Collects local session data from Claude Code, Codex, OpenClaw, OpenCode and other AI coding agents, calculates costs automatically, and presents token usage, cost trends, and session details through a web dashboard.
+Collects local session data from Claude Code, Codex, OpenClaw, OpenCode and other AI coding agents, calculates costs automatically, and presents token usage, cost trends, and session details through a built-in dashboard.
 
 ![Dashboard](docs/dashboard.png)
 
 ## Features
 
-- 📁 **Local file parsing** — reads Claude Code, Codex CLI, OpenClaw session files and OpenCode SQLite database directly
-- 💰 **Automatic cost calculation** — fetches model pricing from [litellm](https://github.com/BerriAI/litellm), supports backfill when prices update
-- 🗄️ **SQLite storage** — single file, zero ops, data is correctable
-- 📊 **Web dashboard** — dark-themed UI with ECharts: cost breakdown, token trends, session list
-- 🔄 **Incremental scanning** — watches for new sessions, deduplicates automatically
-- 📦 **Single binary** — `go:embed` packs the web UI into the executable
-- 🖥️ **Cross-platform** — Linux, macOS, Windows
-- 🖥️ **Desktop app** — Tauri v2 native app with system tray, autostart, cost notifications, dark/light theme, i18n (EN/ZH)
+- **Local file parsing** — reads Claude Code, Codex CLI, OpenClaw session files and OpenCode SQLite database directly
+- **Automatic cost calculation** — fetches model pricing from [litellm](https://github.com/BerriAI/litellm), supports backfill when prices update
+- **SQLite storage** — single file, zero ops, data is correctable
+- **Dashboard** — dark/light themed UI with ECharts: cost breakdown, token trends, session list
+- **Incremental scanning** — watches for new sessions, deduplicates automatically
+- **Cross-platform** — macOS, Windows, Linux
+- **Native desktop app** — Tauri v2 with system tray, autostart, cost alert notifications, dark/light theme, i18n (EN/ZH)
 
-## Quick Start (Docker)
+## Install
 
-```bash
-# One command to start
-mkdir -p ./data && docker compose up -d
+Download the latest installer for your platform from [GitHub Releases](https://github.com/hongshuo-wang/agent-usage-desktop/releases):
 
-# Open dashboard
-open http://localhost:9800
-```
+| Platform | File |
+|----------|------|
+| macOS (Apple Silicon) | `Agent Usage_x.x.x_aarch64.dmg` |
+| macOS (Intel) | `Agent Usage_x.x.x_x64.dmg` |
+| Windows | `Agent Usage_x.x.x_x64-setup.exe` |
+| Linux | `Agent Usage_x.x.x_amd64.AppImage` or `.deb` |
 
-The default `docker-compose.yml` mounts `~/.claude/projects`, `~/.codex/sessions`, `~/.openclaw/agents`, and `~/.local/share/opencode` read-only. Data persists in `./data/`.
-
-The container uses `config.docker.yaml` by default (binds to `0.0.0.0`, stores data in `/data/`). To override, mount your own config:
-
-```yaml
-# In docker-compose.yml, uncomment:
-volumes:
-  - ./config.yaml:/etc/agent-usage/config.yaml:ro
-```
-
-See [Docker Details](#docker-details) for UID/GID permissions and local builds.
+Launch the app — it runs in the system tray and starts collecting data automatically.
 
 ## Query Usage from Agent Conversations
 
@@ -56,14 +44,16 @@ The skill works standalone — no need to install or run the agent-usage-desktop
 npx skills add hongshuo-wang/agent-usage-desktop -y
 ```
 
-Once installed, try: `查下 agent usage`、`agent usage 统计` or `check agent usage`. See [`skills/agent-usage-desktop/SKILL.md`](skills/agent-usage-desktop/SKILL.md) for details.
+Once installed, try: `check agent usage` or `agent usage stats`. See [`skills/agent-usage-desktop/SKILL.md`](skills/agent-usage-desktop/SKILL.md) for details.
 
 ## Configuration
+
+The desktop app stores its config at `~/.config/agent-usage/config.yaml` (created on first launch with sensible defaults). You can also edit it from the app's settings.
 
 ```yaml
 server:
   port: 9800
-  bind_address: "127.0.0.1"  # use "0.0.0.0" for remote access
+  bind_address: "127.0.0.1"
 
 collectors:
   claude:
@@ -94,88 +84,6 @@ pricing:
   sync_interval: 1h  # fetched from GitHub; set HTTPS_PROXY env var if this fails
 ```
 
-Config search order: `--config` flag > `/etc/agent-usage/config.yaml` > `./config.yaml`.
-
-## Build from Source
-
-### Go backend only (web dashboard)
-
-```bash
-# Clone
-git clone https://github.com/hongshuo-wang/agent-usage-desktop.git
-cd agent-usage-desktop
-
-# Build
-go build -o agent-usage-desktop .
-
-# Edit config
-cp config.yaml config.local.yaml
-# Adjust paths if needed
-
-# Run
-./agent-usage-desktop
-
-# Open dashboard
-open http://localhost:9800
-```
-
-### Desktop app (Tauri)
-
-Prerequisites: [Node.js](https://nodejs.org/) 20+, [Rust](https://rustup.rs/), [Go](https://go.dev/) 1.24+.
-
-```bash
-git clone https://github.com/hongshuo-wang/agent-usage-desktop.git
-cd agent-usage-desktop
-
-# Install frontend dependencies
-npm ci
-
-# Build Go sidecar for your platform
-mkdir -p src-tauri/binaries
-
-# macOS Apple Silicon:
-CGO_ENABLED=0 go build -o src-tauri/binaries/agent-usage-aarch64-apple-darwin .
-
-# macOS Intel:
-CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-apple-darwin .
-
-# Linux:
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-unknown-linux-gnu .
-
-# Windows:
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-pc-windows-msvc.exe .
-
-# Build desktop app
-npx tauri build
-```
-
-Output location:
-- macOS: `src-tauri/target/release/bundle/macos/Agent Usage.app` and `.dmg`
-- Windows: `src-tauri/target/release/bundle/msi/` and `nsis/`
-- Linux: `src-tauri/target/release/bundle/deb/` and `appimage/`
-
-For development with hot-reload:
-
-```bash
-npx tauri dev
-```
-
-### Creating a release
-
-Push a version tag to trigger the CI/CD pipeline, which builds for all platforms and creates a draft GitHub Release:
-
-```bash
-git tag v0.2.0
-git push origin v0.2.0
-```
-
-The GitHub Actions workflow (`.github/workflows/desktop.yml`) will:
-1. Build the Go sidecar for each platform (macOS arm64/x86_64, Windows, Linux)
-2. Build the Tauri desktop app
-3. Upload artifacts to a draft GitHub Release
-
-Go to **GitHub Releases**, review the draft, and publish it. Users can then download the installer for their platform directly from the release page.
-
 ## Supported Data Sources
 
 | Source | Session Location | Format |
@@ -185,18 +93,60 @@ Go to **GitHub Releases**, review the draft, and publish it. Users can then down
 | [OpenClaw](https://github.com/openclaw/openclaw) | `~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl` | JSONL |
 | [OpenCode](https://github.com/anomalyco/opencode) | `~/.local/share/opencode/opencode.db` | SQLite |
 
-### Adding New Sources
+## Build from Source
 
-Each source needs a collector that:
-1. Scans session directories for JSONL files
-2. Parses entries and extracts token usage per API call
-3. Writes records to SQLite via the storage layer
+If you prefer to build the app yourself instead of using the pre-built installers:
 
-See `internal/collector/claude.go` as a reference implementation.
+### Prerequisites
+
+- [Go](https://go.dev/) 1.25+
+- [Node.js](https://nodejs.org/) 20+
+- [Rust](https://rustup.rs/) (stable)
+- Platform-specific dependencies:
+  - **Linux**: `libwebkit2gtk-4.1-dev`, `libappindicator3-dev`
+
+### Steps
+
+```bash
+git clone https://github.com/hongshuo-wang/agent-usage-desktop.git
+cd agent-usage-desktop
+
+# 1. Install frontend dependencies
+npm install
+
+# 2. Build the Go sidecar for your platform (pick ONE):
+
+#    macOS Apple Silicon:
+CGO_ENABLED=0 go build -o src-tauri/binaries/agent-usage-aarch64-apple-darwin .
+
+#    macOS Intel:
+CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-apple-darwin .
+
+#    Linux x86_64:
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-unknown-linux-gnu .
+
+#    Windows x86_64:
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o src-tauri/binaries/agent-usage-x86_64-pc-windows-msvc.exe .
+
+# 3. Build the desktop app
+npx tauri build
+```
+
+The installer will be in:
+- **macOS**: `src-tauri/target/release/bundle/dmg/`
+- **Windows**: `src-tauri/target/release/bundle/nsis/`
+- **Linux**: `src-tauri/target/release/bundle/appimage/` or `deb/`
+
+### Development (hot-reload)
+
+```bash
+# Build sidecar first (step 2 above), then:
+npx tauri dev
+```
 
 ## Dashboard
 
-The web dashboard provides:
+The built-in dashboard provides:
 
 - **Sticky top bar** — time presets, granularity, source filter (Claude/Codex/OpenClaw/OpenCode), auto-refresh
 - **Summary cards** — total tokens, cost, sessions, prompts, API calls
@@ -206,35 +156,7 @@ The web dashboard provides:
 - **Session list** — sortable, filterable table with expandable per-model detail
 - **Dark/Light theme** — system-aware with manual toggle
 - **i18n** — English and Chinese
-- **Timezone handling** — all timestamps are stored in UTC; the frontend automatically converts to your browser's local timezone for date pickers, chart X-axis labels, and session timestamps
-
-## Architecture
-
-```
-agent-usage-desktop
-├── main.go                     # Entry point, orchestrates components
-├── config.yaml                 # Configuration
-├── internal/
-│   ├── config/                 # YAML config loader
-│   ├── collector/
-│   │   ├── collector.go        # Collector interface
-│   │   ├── claude.go           # Claude Code session scanner
-│   │   ├── claude_process.go   # Claude Code JSONL parser
-│   │   ├── codex.go            # Codex CLI JSONL parser
-│   │   ├── openclaw.go         # OpenClaw session scanner
-│   │   ├── openclaw_process.go # OpenClaw JSONL parser
-│   │   └── opencode.go         # OpenCode SQLite collector
-│   ├── pricing/                # litellm price fetcher + cost formula
-│   ├── storage/
-│   │   ├── sqlite.go           # DB init + migrations
-│   │   ├── api.go              # Query types + read operations
-│   │   ├── queries.go          # Write operations
-│   │   └── costs.go            # Cost recalculation + backfill
-│   └── server/
-│       ├── server.go           # HTTP server + REST API
-│       └── static/             # Embedded web UI (HTML + JS + ECharts)
-└── agent-usage.db              # SQLite database (generated at runtime)
-```
+- **Timezone handling** — timestamps stored in UTC, displayed in your local timezone
 
 ## Cost Calculation
 
@@ -249,63 +171,20 @@ cost = (input - cache_read - cache_creation) × input_price
 
 When prices update, historical records are automatically backfilled.
 
-## API Endpoints
-
-All endpoints accept `from` and `to` (YYYY-MM-DD) query parameters. Optional: `source` (`claude`, `codex`, `openclaw`, `opencode`) to filter by agent, `granularity` (`1m`, `30m`, `1h`, `6h`, `12h`, `1d`, `1w`, `1M`) for time-series endpoints.
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/stats` | Summary: total cost, tokens, sessions, prompts, API calls |
-| `GET /api/cost-by-model` | Cost grouped by model |
-| `GET /api/cost-over-time` | Cost time series (supports `granularity`) |
-| `GET /api/tokens-over-time` | Token usage time series (supports `granularity`) |
-| `GET /api/sessions` | Session list with cost/token totals |
-| `GET /api/session-detail?session_id=ID` | Per-model breakdown for a session |
-
-Invalid date formats or reversed date ranges return a `400` JSON error with a descriptive message.
-
 ## Tech Stack
 
-- **Go** — pure Go, no CGO required
-- **SQLite** via [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite) — pure Go SQLite driver
-- **ECharts** — charting library
-- **`go:embed`** — single binary deployment
 - **Tauri v2** — desktop app framework (Rust core + system WebView)
-- **React 18** + TypeScript + Vite — desktop app frontend
+- **React 18** + TypeScript + Vite — frontend
 - **Tailwind CSS v4** — styling
-
-## Docker Details
-
-Pre-built multi-arch images (amd64 + arm64) are published to `ghcr.io/hongshuo-wang/agent-usage-desktop`.
-
-The default `docker-compose.yml` runs as UID 1000. If your host user has a different UID, edit the `user:` field:
-
-```bash
-# Check your UID/GID
-id -u  # e.g. 1000
-id -g  # e.g. 1000
-
-# Edit docker-compose.yml: user: "YOUR_UID:YOUR_GID"
-```
-
-This is required because `~/.claude/projects` is mode 700 — only the owning UID can read it.
-
-### Building locally
-
-```bash
-docker build -t agent-usage-desktop:local .
-
-# For China mainland, use GOPROXY:
-docker build --build-arg GOPROXY=https://goproxy.cn,direct -t agent-usage-desktop:local .
-```
+- **Go** — backend (pure Go, no CGO required)
+- **SQLite** via [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite) — pure Go SQLite driver
+- **ECharts** — charting
 
 ## Roadmap
 
 - [ ] More agent sources (Cursor, Copilot, etc.)
-- [ ] OTLP HTTP receiver for real-time telemetry
-- [ ] OS service management (systemd / launchd / Windows Service)
 - [ ] Export to CSV/JSON
-- [x] ~~Alerting (cost thresholds)~~ — desktop app notifications
+- [x] ~~Cost alert notifications~~ — implemented
 - [ ] Multi-user support
 
 ## Community

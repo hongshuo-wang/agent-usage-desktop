@@ -11,15 +11,16 @@ Thanks for your interest in agent-usage-desktop! Issues and Pull Requests are we
 git clone https://github.com/hongshuo-wang/agent-usage-desktop.git
 cd agent-usage-desktop
 
-# Requirements
-# Go 1.25+
+# Requirements: Go 1.25+, Node.js 20+, Rust (stable)
 
-# Build
-go build -o agent-usage-desktop .
+# Install frontend deps
+npm install
 
-# Run
-cp config.yaml config.local.yaml  # edit as needed
-./agent-usage-desktop
+# Build Go sidecar (macOS arm64 example)
+CGO_ENABLED=0 go build -o src-tauri/binaries/agent-usage-aarch64-apple-darwin .
+
+# Run in dev mode
+npx tauri dev
 ```
 
 ## Project Structure
@@ -63,22 +64,19 @@ We use [Conventional Commits](https://www.conventionalcommits.org/):
 | `chore:` | Maintenance | `chore: update dependencies` |
 | `test:` | Tests | `test: add collector unit tests` |
 
-GoReleaser uses these prefixes to generate changelogs.
+The changelog is generated from these prefixes during release.
 
 ## Release Process
 
 Releases are manual. Two options:
 
 ```bash
-# Option 1: Push a tag
+# Push a tag to trigger CI
 git tag v0.1.0
 git push origin v0.1.0
-
-# Option 2: GitHub Actions UI
-# Go to Actions → Release → Run workflow → Enter version
 ```
 
-This triggers GoReleaser to cross-compile binaries for 6 platforms and publish a GitHub Release.
+This triggers the Desktop Build workflow to build Tauri apps for all platforms and create a GitHub Release.
 
 ## Versioning
 
