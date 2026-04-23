@@ -1,8 +1,6 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useLocation } from "react-router-dom";
-import { openUrl } from "@tauri-apps/plugin-opener";
-import { getWebUIUrl } from "../lib/api";
 
 const navItems = [
   { path: "/", label: "title" },
@@ -17,15 +15,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     applyTheme(localStorage.getItem("au-theme") || "system");
   }, []);
-
-  const handleOpenWebUI = async () => {
-    try {
-      const url = await getWebUIUrl();
-      openUrl(url);
-    } catch {
-      // sidecar not ready, ignore silently
-    }
-  };
 
   const toggleTheme = () => {
     const current = localStorage.getItem("au-theme") || "system";
@@ -60,9 +49,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             ))}
           </nav>
           <div className="flex items-center gap-3">
-            <button onClick={handleOpenWebUI} className="text-sm text-muted-foreground hover:text-foreground">
-              {t("openWebUI")}
-            </button>
             <button onClick={toggleTheme} className="text-sm text-muted-foreground hover:text-foreground">
               {t("theme")}
             </button>

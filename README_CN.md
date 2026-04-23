@@ -8,13 +8,10 @@
 
 **[English](README.md)**
 
-统一采集 Claude Code、Codex、OpenClaw、OpenCode 等 AI 编程工具的本地会话数据，自动计算费用，通过内置仪表板展示 token 用量、费用趋势和会话明细。
+统一采集 Claude Code、Codex、OpenClaw、OpenCode 等 AI 编程工具的本地会话数据，自动计算费用，通过桌面应用展示 token 用量、费用趋势和会话明细。
 
 <p align="center">
   <img src="docs/desktop.png" alt="桌面应用界面" width="700">
-</p>
-<p align="center">
-  <img src="docs/dashboard.png" alt="Web UI 仪表板" width="700">
 </p>
 
 ## 特性
@@ -22,7 +19,6 @@
 - **本地文件解析** — 直接读取 Claude Code、Codex CLI、OpenClaw 的会话文件和 OpenCode 的 SQLite 数据库
 - **自动费用计算** — 从 [litellm](https://github.com/BerriAI/litellm) 获取模型价格，价格更新后自动回填历史记录
 - **SQLite 存储** — 单文件、零运维、数据可修正
-- **仪表板** — 深色/浅色主题 UI，ECharts 图表：费用分布、token 趋势、会话列表
 - **增量扫描** — 监听新会话，自动去重
 - **跨平台** — macOS、Windows、Linux
 - **原生桌面应用** — Tauri v2，支持系统托盘、开机自启、费用告警通知、深色/浅色主题、中英文切换
@@ -155,20 +151,6 @@ npx tauri build
 # 先编译 sidecar（上面的步骤 2），然后：
 npx tauri dev
 ```
-
-## 仪表板
-
-内置仪表板提供：
-
-- **吸顶控制栏** — 时间预设、粒度、来源筛选（Claude/Codex/OpenClaw/OpenCode）、自动刷新
-- **汇总卡片** — 总 Tokens、总费用、会话数、Prompt 数、API 调用数
-- **Token 用量** — 堆叠柱状图（输入/输出/缓存读取/缓存写入）
-- **费用趋势** — 按模型堆叠柱状图，颜色映射一致
-- **模型费用占比** — 环形图，带百分比标签
-- **会话列表** — 可排序、可筛选，展开查看模型明细
-- **深色/浅色主题** — 跟随系统，支持手动切换
-- **国际化** — 中英文
-- **时区处理** — 时间戳以 UTC 存储，显示时自动转换为本地时区
 
 ## 费用计算
 

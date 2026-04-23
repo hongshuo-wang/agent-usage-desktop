@@ -56,9 +56,9 @@ No CGO required — the SQLite driver (`modernc.org/sqlite`) is pure Go.
 
 ## Architecture
 
-Single-binary Go application that collects AI coding agent token usage from local JSONL session files, stores it in SQLite, and serves a web dashboard. Also ships as a Tauri v2 desktop app wrapping the same Go backend as a sidecar process.
+Single-binary Go application that collects AI coding agent token usage from local JSONL session files, stores it in SQLite, and serves a REST API. Also ships as a Tauri v2 desktop app wrapping the same Go backend as a sidecar process.
 
-**Data flow:** Collectors scan session dirs → parse JSONL → write to SQLite (with dedup) → pricing synced from litellm → costs calculated → served via REST API + embedded web UI.
+**Data flow:** Collectors scan session dirs → parse JSONL → write to SQLite (with dedup) → pricing synced from litellm → costs calculated → served via REST API.
 
 ### Desktop app (Tauri)
 
@@ -72,7 +72,7 @@ Key Rust files:
 - `src-tauri/src/main.rs` — app setup, plugin registration, sidecar spawn, notification loop
 - `src-tauri/src/sidecar.rs` — `SidecarState` (AtomicU16 port + Mutex child), start/kill/restart
 - `src-tauri/src/commands.rs` — Tauri commands: get_sidecar_port, get/set_cost_threshold, get/set_notifications_enabled
-- `src-tauri/src/tray.rs` — system tray: Show Panel, Open Web UI, Quit; left-click toggles window
+- `src-tauri/src/tray.rs` — system tray: Show Panel, Quit; left-click toggles window
 - `src-tauri/capabilities/default.json` — Tauri v2 permissions (shell, autostart, notification)
 
 ### Key packages
@@ -80,7 +80,7 @@ Key Rust files:
 - `internal/collector` — Source-specific JSONL parsers. Each collector implements `Scan()` which walks session directories and calls `processFile()` for incremental parsing. File offsets tracked in `file_state` table to avoid re-reading. `claude.go`/`claude_process.go` is the reference implementation for adding new sources. Collectors must normalize token fields to match the non-overlapping semantics defined below. Collectors also extract individual user prompt events (with timestamps) into the `prompt_events` table for time-accurate prompt counting.
 - `internal/storage` — SQLite layer. `sqlite.go` has schema + versioned migrations (tracked via `meta` table with `migration_{id}` keys, each runs once), `queries.go` handles writes, `api.go` handles reads, `costs.go` does cost recalculation. All DB access serialized through a mutex (`DB.mu`). Key tables: `usage_records` (per-API-call token/cost data), `sessions` (session metadata), `prompt_events` (per-prompt timestamps for time-range queries), `pricing` (model prices), `file_state` (scan offsets and parser context for incremental scanning).
 - `internal/pricing` — Fetches model prices from litellm's GitHub JSON. Cost formula: `input × input_price + cache_creation × cache_creation_price + cache_read × cache_read_price + output × output_price`.
-- `internal/server` — HTTP server with REST API endpoints (`/api/stats`, `/api/cost-by-model`, etc.) and `go:embed` static files (HTML + ECharts dashboard). `/api/stats` returns aggregate metrics including `cache_hit_rate` (ratio of cache read tokens to total input tokens). All endpoints accept `from`, `to`, `source` (optional: `claude`/`codex`/`openclaw`), and time-series endpoints accept `granularity`. Invalid dates or reversed ranges return `400` with a JSON error message.
+- `internal/server` — HTTP server with REST API endpoints (`/api/stats`, `/api/cost-by-model`, etc.). `/api/stats` returns aggregate metrics including `cache_hit_rate` (ratio of cache read tokens to total input tokens). All endpoints accept `from`, `to`, `source` (optional: `claude`/`codex`/`openclaw`), and time-series endpoints accept `granularity`. Invalid dates or reversed ranges return `400` with a JSON error message.
 - `internal/config` — YAML config loader. Search order: `--config` flag → `./config.yaml`. Supports `~` expansion in paths.
 
 ### Token semantics
@@ -109,7 +109,6 @@ Usage records are deduped via a unique index on `(session_id, model, timestamp, 
 
 - Conventional Commits (`feat:`, `fix:`, `refactor:`, etc.).
 - Version/commit/date injected via ldflags at build time.
-- Web UI is embedded via `go:embed` in `internal/server/static/` — changes to frontend files require rebuilding the binary.
-- Desktop app frontend lives in `src/` (React + TypeScript) — separate from the embedded Go web UI.
+- Desktop app frontend lives in `src/` (React + TypeScript).
 - Tauri config is in `src-tauri/tauri.conf.json`. CSP restricts connect-src to `127.0.0.1` and `localhost`.
 - CI/CD: `.github/workflows/desktop.yml` builds for macOS (arm64 + x86_64), Windows, Linux via `tauri-apps/tauri-action`.

@@ -32,7 +32,7 @@ npx tauri dev
 │   ├── collector/           # Data source parsers (Claude Code, Codex, OpenClaw)
 │   ├── pricing/             # litellm price sync + cost calculation
 │   ├── storage/             # SQLite schema, read/write, cost backfill
-│   └── server/              # HTTP server, REST API, embedded web UI
+│   └── server/              # HTTP server, REST API
 ├── skills/                  # npx skills for AI agent integration
 └── .github/workflows/       # CI/CD
 ```
@@ -92,7 +92,6 @@ We follow [Semantic Versioning](https://semver.org/):
 - `go test ./...` must pass
 - Keep dependencies minimal — prefer stdlib where reasonable
 - Pure Go only (no CGO) to ensure easy cross-compilation
-- Embed static assets via `go:embed`
 
 ## Pull Request Guidelines
 

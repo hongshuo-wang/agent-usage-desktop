@@ -1,10 +1,8 @@
 package server
 
 import (
-	"embed"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"log"
 	"net/http"
 	"time"
@@ -12,10 +10,7 @@ import (
 	"github.com/hongshuo-wang/agent-usage-desktop/internal/storage"
 )
 
-//go:embed static
-var staticFS embed.FS
-
-// Server serves the web dashboard and REST API.
+// Server serves the REST API.
 type Server struct {
 	db   *storage.DB
 	addr string
@@ -42,9 +37,6 @@ func corsMiddleware(next http.Handler) http.Handler {
 // Handler builds and returns the HTTP handler with all routes and middleware.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-
-	sub, _ := fs.Sub(staticFS, "static")
-	mux.Handle("/", http.FileServer(http.FS(sub)))
 
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/stats", s.handleStats)

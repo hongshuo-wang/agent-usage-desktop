@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, Fragment } from "react";
 import { useTranslation } from "react-i18next";
-import { fetchAPI, getWebUIUrl } from "../lib/api";
+import { fetchAPI, fetchRaw } from "../lib/api";
 import { fmtCost, fmtTokens, getTimeRange, relativeTime, TimePreset } from "../lib/utils";
 import TimeRangeSelector from "../components/TimeRangeSelector";
 
@@ -119,9 +119,7 @@ export default function Sessions() {
     } else {
       setExpanded((prev) => ({ ...prev, [sid]: null }));
       try {
-        const url = await getWebUIUrl();
-        const res = await fetch(`${url}/api/session-detail?session_id=${encodeURIComponent(sid)}`);
-        const data = await res.json();
+        const data = await fetchRaw<SessionDetail[]>(`session-detail?session_id=${encodeURIComponent(sid)}`);
         setExpanded((prev) => ({ ...prev, [sid]: data }));
       } catch {
         setExpanded((prev) => { const next = { ...prev }; delete next[sid]; return next; });

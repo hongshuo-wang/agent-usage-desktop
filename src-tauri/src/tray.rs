@@ -3,14 +3,12 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager,
 };
-use tauri_plugin_opener::OpenerExt;
 
 pub fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show Panel", true, None::<&str>)?;
-    let web_ui = MenuItem::with_id(app, "web_ui", "Open Web UI", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
 
-    let menu = Menu::with_items(app, &[&show, &web_ui, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
 
     TrayIconBuilder::new()
         .icon(app.default_window_icon().unwrap().clone())
@@ -21,19 +19,6 @@ pub fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
-            }
-            "web_ui" => {
-                let handle = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    let state = handle.state::<crate::sidecar::SidecarState>();
-                    let port = state.port.load(std::sync::atomic::Ordering::Relaxed);
-                    if port == 0 {
-                        eprintln!("[tray] sidecar not ready, cannot open Web UI");
-                        return;
-                    }
-                    let url = format!("http://127.0.0.1:{}", port);
-                    let _ = handle.opener().open_url(&url, None::<&str>);
-                });
             }
             "quit" => {
                 crate::sidecar::kill_sidecar(app);

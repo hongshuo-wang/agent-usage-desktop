@@ -48,7 +48,9 @@ export async function fetchAPI<T>(path: string, params: {
   return res.json();
 }
 
-export async function getWebUIUrl(): Promise<string> {
+export async function fetchRaw<T>(path: string): Promise<T> {
   const port = await getPort();
-  return `http://127.0.0.1:${port}`;
+  const res = await fetch(`http://127.0.0.1:${port}/api/${path}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
 }

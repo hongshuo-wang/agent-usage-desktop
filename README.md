@@ -8,13 +8,10 @@ Lightweight, cross-platform desktop app for tracking AI coding agent usage & cos
 
 **[中文文档](README_CN.md)**
 
-Collects local session data from Claude Code, Codex, OpenClaw, OpenCode and other AI coding agents, calculates costs automatically, and presents token usage, cost trends, and session details through a built-in dashboard.
+Collects local session data from Claude Code, Codex, OpenClaw, OpenCode and other AI coding agents, calculates costs automatically, and presents token usage, cost trends, and session details through the desktop app.
 
 <p align="center">
   <img src="docs/desktop.png" alt="Desktop App" width="700">
-</p>
-<p align="center">
-  <img src="docs/dashboard.png" alt="Web UI Dashboard" width="700">
 </p>
 
 ## Features
@@ -22,7 +19,6 @@ Collects local session data from Claude Code, Codex, OpenClaw, OpenCode and othe
 - **Local file parsing** — reads Claude Code, Codex CLI, OpenClaw session files and OpenCode SQLite database directly
 - **Automatic cost calculation** — fetches model pricing from [litellm](https://github.com/BerriAI/litellm), supports backfill when prices update
 - **SQLite storage** — single file, zero ops, data is correctable
-- **Dashboard** — dark/light themed UI with ECharts: cost breakdown, token trends, session list
 - **Incremental scanning** — watches for new sessions, deduplicates automatically
 - **Cross-platform** — macOS, Windows, Linux
 - **Native desktop app** — Tauri v2 with system tray, autostart, cost alert notifications, dark/light theme, i18n (EN/ZH)
@@ -154,20 +150,6 @@ The installer will be in:
 # Build sidecar first (step 2 above), then:
 npx tauri dev
 ```
-
-## Dashboard
-
-The built-in dashboard provides:
-
-- **Sticky top bar** — time presets, granularity, source filter (Claude/Codex/OpenClaw/OpenCode), auto-refresh
-- **Summary cards** — total tokens, cost, sessions, prompts, API calls
-- **Token usage** — stacked bar chart (input/output/cache read/cache write)
-- **Cost trend** — stacked bar chart by model with consistent color mapping
-- **Cost by model** — doughnut chart with percentage labels
-- **Session list** — sortable, filterable table with expandable per-model detail
-- **Dark/Light theme** — system-aware with manual toggle
-- **i18n** — English and Chinese
-- **Timezone handling** — timestamps stored in UTC, displayed in your local timezone
 
 ## Cost Calculation
 
