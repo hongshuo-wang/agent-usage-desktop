@@ -336,40 +336,41 @@ export default function FilesBackups() {
       : Math.max(syncStatus?.changes_count ?? 0, syncStatus?.conflicts ?? 0);
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold text-foreground">{t("filesBackups")}</h2>
-          <p className="mt-1 text-sm text-muted-foreground">{t("syncStatus")}</p>
+    <div className="h-full overflow-y-auto pr-1">
+      <div className="flex flex-col gap-4 pb-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-foreground">{t("filesBackups")}</h2>
+            <p className="mt-1 text-sm text-muted-foreground">{t("syncStatus")}</p>
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <SyncStatus />
+            <button
+              type="button"
+              onClick={requestManualBackup}
+              disabled={loadingFiles || submitting || refreshing}
+              className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {submitting && pendingAction?.type === "manual-backup" ? t("loading") : t("manualBackup")}
+            </button>
+          </div>
         </div>
-        <div className="flex items-center gap-3">
-          <SyncStatus />
-          <button
-            type="button"
-            onClick={requestManualBackup}
-            disabled={loadingFiles || submitting || refreshing}
-            className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {submitting && pendingAction?.type === "manual-backup" ? t("loading") : t("manualBackup")}
-          </button>
-        </div>
-      </div>
 
-      {error ? (
-        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-500">
-          {error}
-        </div>
-      ) : null}
+        {error ? (
+          <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-500">
+            {error}
+          </div>
+        ) : null}
 
-      {status ? (
-        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-600 dark:text-emerald-400">
-          {status}
-        </div>
-      ) : null}
+        {status ? (
+          <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-600 dark:text-emerald-400">
+            {status}
+          </div>
+        ) : null}
 
-      <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-2">
-        <section className="min-h-0 rounded-xl border border-border bg-card p-5">
-          <div className="flex items-center justify-between gap-3">
+      <div className="space-y-4">
+        <section className="rounded-xl border border-border bg-card p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h3 className="text-base font-semibold text-foreground">{t("filesBackups")}</h3>
               <p className="mt-1 text-sm text-muted-foreground">
@@ -390,7 +391,7 @@ export default function FilesBackups() {
             </button>
           </div>
 
-          <div className="mt-4 min-h-0 overflow-y-auto">
+          <div className="mt-4">
             {loadingFiles ? (
               <div className="rounded-lg border border-dashed border-border px-4 py-8 text-sm text-muted-foreground">
                 {t("loading")}
@@ -404,7 +405,7 @@ export default function FilesBackups() {
                 {t("noConflicts")}
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="grid gap-3 2xl:grid-cols-2">
                 {files.map((file) => {
                   const key = getFileKey(file.tool, file.path);
                   const change = changesByKey.get(key);
@@ -415,7 +416,7 @@ export default function FilesBackups() {
                     : "border-border bg-background/40";
 
                   return (
-                    <div key={key} className={`rounded-xl border ${rowClass}`}>
+                    <div key={key} className={`min-w-0 rounded-xl border ${rowClass}`}>
                       <div
                         role={isConflict ? "button" : undefined}
                         tabIndex={isConflict ? 0 : -1}
@@ -434,18 +435,29 @@ export default function FilesBackups() {
                           }
                         }}
                         className={`grid gap-3 p-4 ${
-                          isConflict ? "cursor-pointer xl:grid-cols-[90px_minmax(0,1.4fr)_minmax(0,1.1fr)_120px_140px_110px]" : "xl:grid-cols-[90px_minmax(0,1.4fr)_minmax(0,1.1fr)_120px_140px_110px]"
+                          isConflict ? "cursor-pointer" : ""
                         }`}
                       >
-                        <div className="text-sm font-medium text-foreground">{file.tool}</div>
-                        <div className="min-w-0">
-                          <div className="break-all text-sm text-foreground">{file.path}</div>
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="text-sm font-semibold text-foreground">{file.tool}</div>
+                          <span
+                            className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${
+                              isConflict
+                                ? "bg-orange-500 text-white"
+                                : "border border-border text-muted-foreground"
+                            }`}
+                          >
+                            {isConflict ? t("conflict") : t("synced")}
+                          </span>
+                        </div>
+                        <div className="min-w-0 space-y-1">
+                          <div className="break-words text-sm text-foreground">{file.path}</div>
                           {!file.exists ? (
                             <div className="mt-1 text-xs text-muted-foreground">Not found</div>
                           ) : null}
                         </div>
                         <div className="text-sm text-muted-foreground">{file.description || "—"}</div>
-                        <div>
+                        <div className="flex flex-wrap items-center gap-3">
                           {file.doc_url ? (
                             <a
                               href={file.doc_url}
@@ -459,19 +471,6 @@ export default function FilesBackups() {
                           ) : (
                             <span className="text-sm text-muted-foreground">—</span>
                           )}
-                        </div>
-                        <div>
-                          <span
-                            className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${
-                              isConflict
-                                ? "bg-orange-500 text-white"
-                                : "border border-border text-muted-foreground"
-                            }`}
-                          >
-                            {isConflict ? t("conflict") : t("synced")}
-                          </span>
-                        </div>
-                        <div>
                           <button
                             type="button"
                             onClick={(event) => {
@@ -527,15 +526,15 @@ export default function FilesBackups() {
           </div>
         </section>
 
-        <section className="min-h-0 rounded-xl border border-border bg-card p-5">
-          <div className="flex items-center justify-between gap-3">
+        <section className="rounded-xl border border-border bg-card p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 className="text-base font-semibold text-foreground">{t("backupHistory")}</h3>
               <p className="mt-1 text-sm text-muted-foreground">{backups.length} items</p>
             </div>
           </div>
 
-          <div className="mt-4 min-h-0 overflow-y-auto">
+          <div className="mt-4">
             {loadingBackups ? (
               <div className="rounded-lg border border-dashed border-border px-4 py-8 text-sm text-muted-foreground">
                 {t("loading")}
@@ -549,18 +548,18 @@ export default function FilesBackups() {
                 {backups.map((backup) => (
                   <div
                     key={backup.id}
-                    className="grid gap-3 rounded-xl border border-border bg-background/40 p-4 xl:grid-cols-[170px_90px_minmax(0,1.4fr)_120px_90px_110px]"
+                    className="grid min-w-0 gap-3 rounded-xl border border-border bg-background/40 p-4 lg:grid-cols-[180px_90px_minmax(0,1fr)_120px_70px_100px]"
                   >
                     <div className="text-sm text-foreground">
                       {new Date(backup.createdAt).toLocaleString()}
                     </div>
                     <div className="text-sm font-medium text-foreground">{backup.tool}</div>
-                    <div className="min-w-0 break-all text-sm text-muted-foreground">{backup.filePath}</div>
+                    <div className="min-w-0 break-words text-sm text-muted-foreground">{backup.filePath}</div>
                     <div className="text-sm text-muted-foreground">{backup.triggerType || "—"}</div>
                     <div className="text-sm text-muted-foreground">
                       {backup.slot === null ? "—" : backup.slot}
                     </div>
-                    <div className="flex justify-start xl:justify-end">
+                    <div className="flex justify-start lg:justify-end">
                       <button
                         type="button"
                         onClick={() => requestRestore(backup)}
@@ -598,6 +597,7 @@ export default function FilesBackups() {
           confirmLabel={t("save")}
         />
       ) : null}
+      </div>
     </div>
   );
 }

@@ -1,5 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import ReactECharts from "echarts-for-react";
+import * as echarts from "echarts/core";
+import { BarChart, PieChart } from "echarts/charts";
+import { GridComponent, LegendComponent, TooltipComponent } from "echarts/components";
+import { CanvasRenderer } from "echarts/renderers";
+
+echarts.use([BarChart, PieChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer]);
 
 interface ChartCardProps {
   title: string;
@@ -40,14 +45,29 @@ export default function ChartCard({ title, option, className }: ChartCardProps) 
     };
   }, [option, isDark]);
 
-  const chartRef = useRef<ReactECharts>(null);
+  const chartRef = useRef<echarts.ECharts | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+
+    chartRef.current = echarts.init(container, undefined, { renderer: "canvas" });
+    return () => {
+      chartRef.current?.dispose();
+      chartRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    chartRef.current?.setOption(themed(), true);
+  }, [themed]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
     const ro = new ResizeObserver(() => {
-      chartRef.current?.getEchartsInstance()?.resize();
+      chartRef.current?.resize();
     });
     ro.observe(container);
     return () => ro.disconnect();
@@ -56,9 +76,7 @@ export default function ChartCard({ title, option, className }: ChartCardProps) 
   return (
     <div className={`bg-card border border-border rounded-xl p-3 shadow-sm flex flex-col min-w-0 min-h-0 overflow-hidden ${className || ""}`}>
       <h3 className="text-xs font-medium text-muted-foreground mb-1.5">{title}</h3>
-      <div ref={containerRef} className="flex-1 min-h-0">
-        <ReactECharts ref={chartRef} option={themed()} style={{ height: '100%', width: '100%' }} notMerge={true} />
-      </div>
+      <div ref={containerRef} className="flex-1 min-h-0" />
     </div>
   );
 }
