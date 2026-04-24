@@ -55,7 +55,7 @@ type PromptEvent struct {
 // Open creates or opens a SQLite database at the given path, enables WAL mode,
 // and runs schema migrations.
 func Open(path string) (*DB, error) {
-	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, err
 	}
@@ -174,6 +174,82 @@ func migrate(db *sql.DB) error {
 			"004_file_state_scan_context", `
 				DELETE FROM meta WHERE key LIKE 'file_scan_context:%';
 				DELETE FROM file_state;
+			`,
+		},
+		{
+			"005_config_manager", `
+				CREATE TABLE IF NOT EXISTS provider_profiles (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					name TEXT NOT NULL UNIQUE,
+					is_active INTEGER NOT NULL DEFAULT 0,
+					config TEXT NOT NULL DEFAULT '',
+					created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+				);
+
+				CREATE TABLE IF NOT EXISTS profile_tool_targets (
+					profile_id INTEGER NOT NULL,
+					tool TEXT NOT NULL,
+					enabled INTEGER NOT NULL DEFAULT 1,
+					tool_config TEXT NOT NULL DEFAULT '',
+					PRIMARY KEY (profile_id, tool),
+					FOREIGN KEY (profile_id) REFERENCES provider_profiles(id) ON DELETE CASCADE
+				);
+
+				CREATE TABLE IF NOT EXISTS mcp_servers (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					name TEXT NOT NULL UNIQUE,
+					command TEXT NOT NULL,
+					args TEXT NOT NULL DEFAULT '',
+					env TEXT NOT NULL DEFAULT '',
+					enabled INTEGER NOT NULL DEFAULT 1,
+					created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+				);
+
+				CREATE TABLE IF NOT EXISTS mcp_server_targets (
+					server_id INTEGER NOT NULL,
+					tool TEXT NOT NULL,
+					enabled INTEGER NOT NULL DEFAULT 1,
+					PRIMARY KEY (server_id, tool),
+					FOREIGN KEY (server_id) REFERENCES mcp_servers(id) ON DELETE CASCADE
+				);
+
+				CREATE TABLE IF NOT EXISTS skills (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					name TEXT NOT NULL UNIQUE,
+					source_path TEXT NOT NULL,
+					description TEXT NOT NULL DEFAULT '',
+					enabled INTEGER NOT NULL DEFAULT 1,
+					created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+				);
+
+				CREATE TABLE IF NOT EXISTS skill_targets (
+					skill_id INTEGER NOT NULL,
+					tool TEXT NOT NULL,
+					method TEXT NOT NULL DEFAULT 'symlink',
+					enabled INTEGER NOT NULL DEFAULT 1,
+					PRIMARY KEY (skill_id, tool),
+					FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE
+				);
+
+				CREATE TABLE IF NOT EXISTS config_backups (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					tool TEXT NOT NULL,
+					file_path TEXT NOT NULL,
+					backup_path TEXT NOT NULL,
+					slot INTEGER NOT NULL DEFAULT 0,
+					created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					trigger_type TEXT NOT NULL DEFAULT ''
+				);
+
+				CREATE TABLE IF NOT EXISTS sync_state (
+					tool TEXT NOT NULL,
+					file_path TEXT NOT NULL,
+					last_hash TEXT NOT NULL DEFAULT '',
+					last_sync DATETIME,
+					last_sync_dir TEXT NOT NULL DEFAULT '',
+					PRIMARY KEY (tool, file_path)
+				);
 			`,
 		},
 	}

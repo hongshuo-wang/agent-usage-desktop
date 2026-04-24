@@ -5,6 +5,7 @@ import { Link, useLocation } from "react-router-dom";
 const navItems = [
   { path: "/", label: "title" },
   { path: "/sessions", label: "sessionLog" },
+  { path: "/config", label: "config" },
   { path: "/settings", label: "settings" },
 ];
 
@@ -34,19 +35,25 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       <header className="sticky top-0 z-50 border-b border-border bg-background/85 backdrop-blur-sm">
         <div className="px-6 py-3 flex items-center justify-between">
           <nav className="flex items-center gap-6">
-            {navItems.map((item) => (
-              <Link
-                key={item.path}
-                to={item.path}
-                className={`text-sm font-medium transition-colors ${
-                  location.pathname === item.path
-                    ? "text-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {t(item.label)}
-              </Link>
-            ))}
+            {navItems.map((item) => {
+              const isActive = item.path === "/"
+                ? location.pathname === "/"
+                : location.pathname.startsWith(item.path);
+
+              return (
+                <Link
+                  key={item.path}
+                  to={item.path}
+                  className={`text-sm font-medium transition-colors ${
+                    isActive
+                      ? "text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {t(item.label)}
+                </Link>
+              );
+            })}
           </nav>
           <div className="flex items-center gap-3">
             <button onClick={toggleTheme} className="text-sm text-muted-foreground hover:text-foreground">

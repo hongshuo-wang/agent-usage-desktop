@@ -54,3 +54,34 @@ export async function fetchRaw<T>(path: string): Promise<T> {
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
+
+export async function mutateAPI<T>(
+  method: "POST" | "PUT" | "DELETE",
+  path: string,
+  body?: unknown
+): Promise<T> {
+  const port = await getPort();
+  const res = await fetch(`http://127.0.0.1:${port}/api/${path}`, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const err = await res
+      .json()
+      .catch(() => ({ error: "UNKNOWN", message: `API error: ${res.status}` }));
+    throw new ApiError(err.error, err.message, err.details, res.status);
+  }
+  return res.json();
+}
+
+export class ApiError extends Error {
+  constructor(
+    public code: string,
+    message: string,
+    public details: unknown,
+    public status: number
+  ) {
+    super(message);
+  }
+}

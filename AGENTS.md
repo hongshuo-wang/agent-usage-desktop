@@ -108,6 +108,7 @@ Usage records are deduped via a unique index on `(session_id, model, timestamp, 
 ## Conventions
 
 - Conventional Commits (`feat:`, `fix:`, `refactor:`, etc.).
+- Subagents used for this project must not use any model lower than `gpt-5.4`.
 - Version/commit/date injected via ldflags at build time.
 - Desktop app frontend lives in `src/` (React + TypeScript).
 - Tauri config is in `src-tauri/tauri.conf.json`. CSP restricts connect-src to `127.0.0.1` and `localhost`.

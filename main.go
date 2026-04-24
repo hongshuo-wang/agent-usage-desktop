@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/hongshuo-wang/agent-usage-desktop/internal/collector"
 	"github.com/hongshuo-wang/agent-usage-desktop/internal/config"
+	"github.com/hongshuo-wang/agent-usage-desktop/internal/configmanager"
 	"github.com/hongshuo-wang/agent-usage-desktop/internal/pricing"
 	"github.com/hongshuo-wang/agent-usage-desktop/internal/server"
 	"github.com/hongshuo-wang/agent-usage-desktop/internal/storage"
@@ -56,10 +58,28 @@ func main() {
 	}
 	db.SetMeta("version", version)
 
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("home dir: %v", err)
+	}
+	backupDir, err := configmanager.BackupBaseDir()
+	if err != nil {
+		log.Fatalf("config backup dir: %v", err)
+	}
+	mgr := configmanager.NewManager(db, backupDir,
+		configmanager.WithClaudeAdapter(filepath.Join(homeDir, ".claude"), filepath.Join(homeDir, ".claude.json")),
+		configmanager.WithCodexAdapter(filepath.Join(homeDir, ".codex")),
+		configmanager.WithOpenCodeAdapter(filepath.Join(homeDir, ".config", "opencode", "opencode.json")),
+		configmanager.WithOpenClawAdapter(filepath.Join(homeDir, ".openclaw", "openclaw.json")),
+	)
+	if err := mgr.Bootstrap(); err != nil {
+		log.Printf("config bootstrap failed: %v", err)
+	}
+
 	// Start web server first so health check is immediately available.
 	// Data initialization (pricing sync, collector scan) runs in the background.
 	addr := fmt.Sprintf("%s:%d", cfg.Server.BindAddress, cfg.Server.Port)
-	srv := server.New(db, addr)
+	srv := server.New(db, mgr, addr)
 	go func() {
 		log.Fatal(srv.Start())
 	}()
@@ -67,6 +87,18 @@ func main() {
 
 	// Background: sync pricing, scan collectors, then start periodic loops
 	go func() {
+		go func() {
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				if changes, err := mgr.TriggerInboundSync(); err != nil {
+					log.Printf("config inbound sync: %v", err)
+				} else if len(changes) > 0 {
+					log.Printf("config inbound sync: %d external changes detected", len(changes))
+				}
+			}
+		}()
+
 		log.Println("syncing pricing data...")
 		if err := pricing.Sync(db); err != nil {
 			log.Printf("pricing sync failed: %v (continuing without pricing)", err)

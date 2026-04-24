@@ -7,25 +7,43 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/hongshuo-wang/agent-usage-desktop/internal/configmanager"
 	"github.com/hongshuo-wang/agent-usage-desktop/internal/storage"
 )
 
 // Server serves the REST API.
 type Server struct {
 	db   *storage.DB
+	mgr  *configmanager.Manager
 	addr string
 }
 
 // New creates a Server that will listen on the given address (host:port).
-func New(db *storage.DB, addr string) *Server {
-	return &Server{db: db, addr: addr}
+func New(db *storage.DB, mgr *configmanager.Manager, addr string) *Server {
+	return &Server{db: db, mgr: mgr, addr: addr}
+}
+
+var allowedCORSOrigins = map[string]bool{
+	"tauri://localhost":       true,
+	"http://tauri.localhost":  true,
+	"https://tauri.localhost": true,
+	"http://localhost:1420":   true,
+	"http://127.0.0.1:1420":   true,
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			if !allowedCORSOrigins[origin] {
+				http.Error(w, "origin not allowed", http.StatusForbidden)
+				return
+			}
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		}
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(204)
 			return
@@ -45,6 +63,28 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tokens-over-time", s.handleTokensOverTime)
 	mux.HandleFunc("/api/sessions", s.handleSessions)
 	mux.HandleFunc("/api/session-detail", s.handleSessionDetail)
+	mux.HandleFunc("GET /api/config/profiles", s.handleListProfiles)
+	mux.HandleFunc("POST /api/config/profiles", s.handleCreateProfile)
+	mux.HandleFunc("PUT /api/config/profiles/{id}", s.handleUpdateProfile)
+	mux.HandleFunc("DELETE /api/config/profiles/{id}", s.handleDeleteProfile)
+	mux.HandleFunc("POST /api/config/profiles/{id}/activate", s.handleActivateProfile)
+	mux.HandleFunc("GET /api/config/mcp", s.handleListMCPServers)
+	mux.HandleFunc("POST /api/config/mcp", s.handleCreateMCPServer)
+	mux.HandleFunc("PUT /api/config/mcp/{id}", s.handleUpdateMCPServer)
+	mux.HandleFunc("DELETE /api/config/mcp/{id}", s.handleDeleteMCPServer)
+	mux.HandleFunc("PUT /api/config/mcp/{id}/targets", s.handleSetMCPTargets)
+	mux.HandleFunc("GET /api/config/skills", s.handleListSkills)
+	mux.HandleFunc("POST /api/config/skills", s.handleCreateSkill)
+	mux.HandleFunc("PUT /api/config/skills/{id}", s.handleUpdateSkill)
+	mux.HandleFunc("DELETE /api/config/skills/{id}", s.handleDeleteSkill)
+	mux.HandleFunc("PUT /api/config/skills/{id}/targets", s.handleSetSkillTargets)
+	mux.HandleFunc("POST /api/config/sync", s.handleTriggerSync)
+	mux.HandleFunc("GET /api/config/sync/status", s.handleSyncStatus)
+	mux.HandleFunc("POST /api/config/sync/resolve", s.handleResolveConflict)
+	mux.HandleFunc("GET /api/config/backups", s.handleListBackups)
+	mux.HandleFunc("POST /api/config/backups", s.handleManualBackup)
+	mux.HandleFunc("POST /api/config/backups/{id}/restore", s.handleRestoreBackup)
+	mux.HandleFunc("GET /api/config/files", s.handleListConfigFiles)
 
 	return corsMiddleware(mux)
 }
