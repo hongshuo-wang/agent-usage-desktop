@@ -98,6 +98,14 @@ type setSkillTargetsReq struct {
 	Targets map[string]skillTargetReq `json:"targets"`
 }
 
+type resolveSkillConflictReq struct {
+	Name         string `json:"name"`
+	Tool         string `json:"tool"`
+	LibraryPath  string `json:"library_path"`
+	ExternalPath string `json:"external_path"`
+	Direction    string `json:"direction"`
+}
+
 type skillResp struct {
 	ID          int64                     `json:"id"`
 	Name        string                    `json:"name"`
@@ -542,6 +550,56 @@ func (s *Server) handleListSkills(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, response)
+}
+
+func (s *Server) handleSkillsInventory(w http.ResponseWriter, r *http.Request) {
+	if s.mgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "config_manager_unavailable", "config manager is unavailable", nil)
+		return
+	}
+	inventory, err := s.mgr.SkillsInventory()
+	if err != nil {
+		writeError(w, configErrorStatus(err), "skills_inventory_failed", "failed to load skills inventory", err.Error())
+		return
+	}
+	writeJSON(w, inventory)
+}
+
+func (s *Server) handleImportSkills(w http.ResponseWriter, r *http.Request) {
+	if s.mgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "config_manager_unavailable", "config manager is unavailable", nil)
+		return
+	}
+	result, err := s.mgr.ImportNonConflictingSkills()
+	if err != nil {
+		writeError(w, configErrorStatus(err), "import_skills_failed", "failed to import skills", err.Error())
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) handleResolveSkillConflict(w http.ResponseWriter, r *http.Request) {
+	if s.mgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "config_manager_unavailable", "config manager is unavailable", nil)
+		return
+	}
+	var req resolveSkillConflictReq
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "invalid JSON request body", err.Error())
+		return
+	}
+	result, err := s.mgr.ResolveSkillConflict(configmanager.SkillConflictResolveRequest{
+		Name:         strings.TrimSpace(req.Name),
+		Tool:         strings.TrimSpace(req.Tool),
+		LibraryPath:  strings.TrimSpace(req.LibraryPath),
+		ExternalPath: strings.TrimSpace(req.ExternalPath),
+		Direction:    strings.TrimSpace(req.Direction),
+	})
+	if err != nil {
+		writeError(w, configErrorStatus(err), "resolve_skill_conflict_failed", "failed to resolve skill conflict", err.Error())
+		return
+	}
+	writeJSON(w, result)
 }
 
 func (s *Server) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
