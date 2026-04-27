@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -90,6 +91,8 @@ type SkillConflictResolveRequest struct {
 type SkillConflictResolveResult struct {
 	AffectedFiles []AffectedFile `json:"affected_files"`
 }
+
+var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 func (m *Manager) SkillsInventory() (*SkillInventory, error) {
 	libraryPath, err := skillsLibraryPath()
@@ -353,11 +356,15 @@ func (m *Manager) upsertSkillRecord(name, sourcePath, description, tool string) 
 		if normalizeSkillName(skill.Name) != normalizeSkillName(name) {
 			continue
 		}
+		variantID, err := m.ensureSkillVariantLocked(skill.ID, sourcePath, tool)
+		if err != nil {
+			return err
+		}
 		targets, err := m.db.GetSkillTargets(skill.ID)
 		if err != nil {
 			return err
 		}
-		targets[tool] = storage.SkillTargetRecord{Tool: tool, Method: "symlink", Enabled: true}
+		targets[tool] = storage.SkillTargetRecord{Tool: tool, Method: "symlink", Enabled: true, VariantID: variantID}
 		return m.db.UpdateSkillWithTargets(skill.ID, name, sourcePath, description, true, skillTargetRecordsFromMap(targets))
 	}
 
@@ -365,7 +372,12 @@ func (m *Manager) upsertSkillRecord(name, sourcePath, description, tool string) 
 	if err != nil {
 		return err
 	}
-	return m.setSkillTargetsFn(id, []storage.SkillTargetRecord{{Tool: tool, Method: "symlink", Enabled: true}})
+	variantID, err := m.ensureSkillVariantLocked(id, sourcePath, tool)
+	if err != nil {
+		_ = m.db.DeleteSkill(id)
+		return err
+	}
+	return m.setSkillTargetsFn(id, []storage.SkillTargetRecord{{Tool: tool, Method: "symlink", Enabled: true, VariantID: variantID}})
 }
 
 type skillMetadata struct {
@@ -576,12 +588,16 @@ func detectSkillsCLI() SkillCLIStatus {
 
 func firstNonEmptyLine(text string) string {
 	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
+		line = stripANSI(strings.TrimSpace(line))
 		if line != "" {
 			return line
 		}
 	}
 	return "npx skills available"
+}
+
+func stripANSI(text string) string {
+	return ansiEscapePattern.ReplaceAllString(text, "")
 }
 
 func normalizeSkillName(name string) string {

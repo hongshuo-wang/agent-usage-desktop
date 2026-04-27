@@ -37,6 +37,15 @@ func TestHashSkillDirectoryChangesWhenContentsChange(t *testing.T) {
 	}
 }
 
+func TestFirstNonEmptyLineStripsANSI(t *testing.T) {
+	text := "\n\x1b[1mUsage:\x1b[0m skills <command> [options]\n"
+	got := firstNonEmptyLine(text)
+	want := "Usage: skills <command> [options]"
+	if got != want {
+		t.Fatalf("firstNonEmptyLine() = %q, want %q", got, want)
+	}
+}
+
 func TestSkillsInventoryClassifiesImportableAndConflict(t *testing.T) {
 	db := openManagerTestDB(t)
 	libraryRoot := filepath.Join(t.TempDir(), "library")

@@ -35,6 +35,14 @@ type SkillRecord struct {
 	CreatedAt   time.Time
 }
 
+type SkillVariantRecord struct {
+	ID         int64
+	SkillID    int64
+	SourcePath string
+	OriginTool string
+	CreatedAt  time.Time
+}
+
 type ToolTarget struct {
 	Tool       string
 	Enabled    bool
@@ -42,9 +50,10 @@ type ToolTarget struct {
 }
 
 type SkillTargetRecord struct {
-	Tool    string
-	Method  string
-	Enabled bool
+	Tool      string
+	Method    string
+	Enabled   bool
+	VariantID int64
 }
 
 type SyncState struct {
@@ -418,8 +427,8 @@ func (d *DB) UpdateSkillWithTargets(id int64, name, sourcePath, description stri
 	}
 
 	for _, target := range targets {
-		if _, err := tx.Exec(`INSERT INTO skill_targets(skill_id, tool, method, enabled)
-			VALUES(?, ?, ?, ?)`, id, target.Tool, target.Method, target.Enabled); err != nil {
+		if _, err := tx.Exec(`INSERT INTO skill_targets(skill_id, tool, method, enabled, variant_id)
+			VALUES(?, ?, ?, ?, ?)`, id, target.Tool, target.Method, target.Enabled, target.VariantID); err != nil {
 			return err
 		}
 	}
@@ -558,8 +567,8 @@ func (d *DB) SetSkillTargets(skillID int64, targets []SkillTargetRecord) error {
 	}
 
 	for _, target := range targets {
-		if _, err := tx.Exec(`INSERT INTO skill_targets(skill_id, tool, method, enabled)
-			VALUES(?, ?, ?, ?)`, skillID, target.Tool, target.Method, target.Enabled); err != nil {
+		if _, err := tx.Exec(`INSERT INTO skill_targets(skill_id, tool, method, enabled, variant_id)
+			VALUES(?, ?, ?, ?, ?)`, skillID, target.Tool, target.Method, target.Enabled, target.VariantID); err != nil {
 			return err
 		}
 	}
@@ -568,7 +577,7 @@ func (d *DB) SetSkillTargets(skillID int64, targets []SkillTargetRecord) error {
 }
 
 func (d *DB) GetSkillTargets(skillID int64) (map[string]SkillTargetRecord, error) {
-	rows, err := d.db.Query(`SELECT tool, method, enabled
+	rows, err := d.db.Query(`SELECT tool, method, enabled, variant_id
 		FROM skill_targets
 		WHERE skill_id = ?
 		ORDER BY tool`, skillID)
@@ -580,7 +589,7 @@ func (d *DB) GetSkillTargets(skillID int64) (map[string]SkillTargetRecord, error
 	targets := map[string]SkillTargetRecord{}
 	for rows.Next() {
 		var target SkillTargetRecord
-		if err := rows.Scan(&target.Tool, &target.Method, &target.Enabled); err != nil {
+		if err := rows.Scan(&target.Tool, &target.Method, &target.Enabled, &target.VariantID); err != nil {
 			return nil, err
 		}
 		targets[target.Tool] = target
@@ -589,6 +598,86 @@ func (d *DB) GetSkillTargets(skillID int64) (map[string]SkillTargetRecord, error
 		return nil, err
 	}
 	return targets, nil
+}
+
+func (d *DB) CreateSkillVariant(skillID int64, sourcePath, originTool string) (int64, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	result, err := d.db.Exec(`INSERT INTO skill_variants(skill_id, source_path, origin_tool)
+		VALUES(?, ?, ?)`, skillID, sourcePath, originTool)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+func (d *DB) CreateSkillVariantWithID(record SkillVariantRecord) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if record.ID <= 0 {
+		return fmt.Errorf("skill variant id is required")
+	}
+
+	_, err := d.db.Exec(`INSERT INTO skill_variants(id, skill_id, source_path, origin_tool, created_at)
+		VALUES(?, ?, ?, ?, ?)`,
+		record.ID, record.SkillID, record.SourcePath, record.OriginTool, record.CreatedAt)
+	return err
+}
+
+func (d *DB) ListSkillVariants(skillID int64) ([]SkillVariantRecord, error) {
+	rows, err := d.db.Query(`SELECT id, skill_id, source_path, origin_tool, created_at
+		FROM skill_variants
+		WHERE skill_id = ?
+		ORDER BY id`, skillID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var variants []SkillVariantRecord
+	for rows.Next() {
+		var variant SkillVariantRecord
+		if err := rows.Scan(&variant.ID, &variant.SkillID, &variant.SourcePath, &variant.OriginTool, &variant.CreatedAt); err != nil {
+			return nil, err
+		}
+		variants = append(variants, variant)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return variants, nil
+}
+
+func (d *DB) GetSkillVariant(id int64) (*SkillVariantRecord, error) {
+	var variant SkillVariantRecord
+	err := d.db.QueryRow(`SELECT id, skill_id, source_path, origin_tool, created_at
+		FROM skill_variants
+		WHERE id = ?`, id).
+		Scan(&variant.ID, &variant.SkillID, &variant.SourcePath, &variant.OriginTool, &variant.CreatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &variant, nil
+}
+
+func (d *DB) FindSkillVariantByPath(skillID int64, sourcePath string) (*SkillVariantRecord, error) {
+	var variant SkillVariantRecord
+	err := d.db.QueryRow(`SELECT id, skill_id, source_path, origin_tool, created_at
+		FROM skill_variants
+		WHERE skill_id = ? AND source_path = ?`, skillID, sourcePath).
+		Scan(&variant.ID, &variant.SkillID, &variant.SourcePath, &variant.OriginTool, &variant.CreatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &variant, nil
 }
 
 func (d *DB) GetSyncState(tool, filePath string) (*SyncState, error) {

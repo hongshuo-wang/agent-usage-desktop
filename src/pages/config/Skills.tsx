@@ -3,61 +3,133 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import ConfirmPanel, { type AffectedFile } from "../../components/ConfirmPanel";
 import SyncStatus from "../../components/SyncStatus";
-import ToolTargets, {
-  TOOL_LABELS,
-  TOOLS,
-  type ToolTarget,
-} from "../../components/ToolTargets";
-import { fetchRaw, mutateAPI } from "../../lib/api";
+import { TOOL_LABELS, TOOLS, type ToolTarget } from "../../components/ToolTargets";
+import { ApiError, fetchRaw, mutateAPI } from "../../lib/api";
 
 type SyncMethod = "symlink" | "copy";
+type SkillStatus =
+  | "using_selected"
+  | "missing_variant"
+  | "missing_install"
+  | "out_of_sync"
+  | "unmanaged"
+  | "not_installed";
 
-type SkillTarget = {
-  method: SyncMethod;
-  enabled: boolean;
+type SkillOverview = {
+  library_path: string;
+  cli: {
+    available: boolean;
+    command: string;
+    message: string;
+  };
+  summary: {
+    managed_skills: number;
+    visible_skills: number;
+    connected_tools: number;
+    issue_count: number;
+    unmanaged_skills: number;
+  };
+  skills: SkillOverviewItem[];
 };
 
-type Skill = {
+type SkillOverviewItem = {
   id: number;
   name: string;
+  description: string;
+  managed: boolean;
+  enabled: boolean;
+  primary_path: string;
+  library: {
+    present: boolean;
+    path: string;
+    hash: string;
+    variant_id: number;
+  };
+  variants: SkillVariant[];
+  tools: Partial<Record<ToolTarget, ToolState>>;
+  issues: SkillIssue[];
+  discovered: DiscoveredInstall[];
+};
+
+type SkillVariant = {
+  id: number;
   source_path: string;
-  description: string;
-  enabled: boolean;
-  targets: Partial<Record<ToolTarget, SkillTarget>>;
-  created_at: string;
+  origin_tool: string;
+  hash: string;
+  managed: boolean;
 };
 
-type FormState = {
-  name: string;
-  sourcePath: string;
-  description: string;
+type ToolState = {
   enabled: boolean;
-  targets: Partial<Record<ToolTarget, SkillTarget>>;
+  method: SyncMethod;
+  selected_variant_id: number;
+  selected_path: string;
+  selected_hash: string;
+  status: SkillStatus;
+  actual: ActualInstall[];
 };
 
-type SkillConnectionState = "connected" | "notConnected" | "unassigned";
+type ActualInstall = {
+  path: string;
+  hash: string;
+  method: SyncMethod;
+};
 
-type CLISkillGroup = {
-  key: SkillConnectionState;
-  label: string;
-  description: string;
-  items: Skill[];
+type DiscoveredInstall = {
+  path: string;
+  tool: string;
+  hash: string;
+  method: SyncMethod;
+};
+
+type SkillIssue = {
+  tool: string;
+  code: string;
 };
 
 type MutationResponse = {
   affected_files: AffectedFile[];
 };
 
-type CreateMutationResponse = MutationResponse & {
+type ImportManagedSkillResponse = MutationResponse & {
+  skill_id: number;
+  variant_id: number;
+  created_new: boolean;
+};
+
+type FilterMode = "all" | "issues" | "managed" | "unmanaged";
+type SkillsAPIFlavor = "overview" | "legacy";
+
+type SkillFormState = {
+  name: string;
+  description: string;
+  sourcePath: string;
+};
+
+type LegacySkillTarget = {
+  method: SyncMethod;
+  enabled: boolean;
+  variant_id?: number;
+};
+
+type LegacySkill = {
   id: number;
+  name: string;
+  source_path: string;
+  description: string;
+  enabled: boolean;
+  targets: Partial<Record<ToolTarget, LegacySkillTarget>>;
+  created_at: string;
 };
 
-type ConfigFileInfo = {
+type LegacyInstallRef = {
   path: string;
-  tool: ToolTarget | string;
+  installed: boolean;
+  method: string;
+  hash?: string;
 };
 
-type SkillInventoryEntry = {
+type LegacyInventoryEntry = {
   name: string;
   description: string;
   path: string;
@@ -68,24 +140,23 @@ type SkillInventoryEntry = {
   importable: boolean;
   represented: boolean;
   conflict: boolean;
+  install_status?: Partial<Record<ToolTarget, LegacyInstallRef>>;
 };
 
-type SkillConflict = {
-  name: string;
-  library: SkillInventoryEntry;
-  external: SkillInventoryEntry;
-};
-
-type SkillInventory = {
+type LegacyInventory = {
   library_path: string;
   cli: {
     available: boolean;
     command: string;
     message: string;
   };
-  library: SkillInventoryEntry[];
-  discovered: SkillInventoryEntry[];
-  conflicts: SkillConflict[];
+  library: LegacyInventoryEntry[];
+  discovered: LegacyInventoryEntry[];
+  conflicts: Array<{
+    name: string;
+    library: LegacyInventoryEntry;
+    external: LegacyInventoryEntry;
+  }>;
   summary: {
     library_count: number;
     discovered_count: number;
@@ -94,1531 +165,1290 @@ type SkillInventory = {
   };
 };
 
-type ImportSkillsResponse = MutationResponse & {
-  imported_count: number;
-  skipped_count: number;
-  conflicts: SkillConflict[];
-};
+const PRIMARY_BUTTON =
+  "inline-flex min-h-11 items-center justify-center rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-60";
+const SECONDARY_BUTTON =
+  "inline-flex min-h-11 items-center justify-center rounded-xl border border-border px-4 py-2 text-sm text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-60";
+const GHOST_BUTTON =
+  "inline-flex min-h-10 items-center justify-center rounded-lg border border-border/70 px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-60";
+const INPUT_CLASS =
+  "w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none transition-colors focus:border-accent focus:ring-4 focus:ring-accent/10";
 
-type PendingAction =
-  | {
-      type: "save";
-      title: string;
-      confirmLabel: string;
-      affectedFiles: AffectedFile[];
-      mode: "create" | "edit";
-      skillID: number | null;
-      snapshot: FormState;
-    }
-  | {
-      type: "delete";
-      title: string;
-      confirmLabel: string;
-      affectedFiles: AffectedFile[];
-      snapshot: Skill;
-    }
-  | {
-      type: "import";
-      title: string;
-      confirmLabel: string;
-      affectedFiles: AffectedFile[];
-    }
-  | {
-      type: "resolveConflict";
-      title: string;
-      confirmLabel: string;
-      affectedFiles: AffectedFile[];
-      payload: {
-        name: string;
-        tool: string;
-        library_path: string;
-        external_path: string;
-        direction: "external_over_library" | "library_over_external";
-      };
-    };
-
-function getDefaultSyncMethod(): SyncMethod {
-  if (typeof navigator === "undefined") {
-    return "symlink";
-  }
-
-  const platform =
-    (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ??
-    navigator.platform ??
-    navigator.userAgent;
-
-  return /windows/i.test(platform) ? "copy" : "symlink";
+function selectionKey(skill: SkillOverviewItem) {
+  return skill.id > 0 ? `managed:${skill.id}` : `unmanaged:${skill.name.toLowerCase()}`;
 }
 
-function createEmptyForm(): FormState {
-  const defaultMethod = getDefaultSyncMethod();
-
+function createFormState(skill: SkillOverviewItem | null): SkillFormState {
+  if (!skill) {
+    return { name: "", description: "", sourcePath: "" };
+  }
   return {
-    name: "",
-    sourcePath: "",
-    description: "",
-    enabled: true,
-    targets: Object.fromEntries(
-      TOOLS.map((tool) => [
-        tool,
-        {
-          enabled: false,
-          method: defaultMethod,
-        },
-      ])
-    ) as Partial<Record<ToolTarget, SkillTarget>>,
+    name: skill.name,
+    description: skill.description ?? "",
+    sourcePath: skill.primary_path ?? skill.library.path ?? "",
   };
 }
 
-function skillToForm(skill: Skill): FormState {
-  const defaultMethod = getDefaultSyncMethod();
-  const targets = Object.fromEntries(
-    TOOLS.map((tool) => {
-      const target = skill.targets?.[tool];
+function hashPreview(hash: string) {
+  return hash ? hash.slice(0, 10) : "unknown";
+}
 
+function pathTail(path: string) {
+  const normalized = path.replace(/[\\/]+$/, "");
+  const index = Math.max(normalized.lastIndexOf("/"), normalized.lastIndexOf("\\"));
+  return index >= 0 ? normalized.slice(index + 1) : normalized;
+}
+
+function normalizeSkillName(name: string) {
+  return name.trim().toLowerCase();
+}
+
+function issueTone(issueCount: number) {
+  if (issueCount > 0) {
+    return "border-amber-500/30 bg-amber-500/8";
+  }
+  return "border-border bg-background/80";
+}
+
+function getStatusLabel(t: (key: string) => string, status: SkillStatus) {
+  switch (status) {
+    case "using_selected":
+      return t("skillsStatusUsingSelected");
+    case "missing_variant":
+      return t("skillsStatusMissingVariant");
+    case "missing_install":
+      return t("skillsStatusMissingInstall");
+    case "out_of_sync":
+      return t("skillsStatusOutOfSync");
+    case "unmanaged":
+      return t("skillsStatusUnmanaged");
+    default:
+      return t("skillsStatusNotInstalled");
+  }
+}
+
+function buildTargetsPayload(skill: SkillOverviewItem, updates?: Partial<Record<ToolTarget, Partial<ToolState>>>) {
+  return Object.fromEntries(
+    TOOLS.map((tool) => {
+      const current = skill.tools[tool];
+      const next = updates?.[tool];
       return [
         tool,
         {
-          enabled: Boolean(target?.enabled),
-          method: target?.method ?? defaultMethod,
+          enabled: next?.enabled ?? current?.enabled ?? false,
+          method: next?.method ?? current?.method ?? "symlink",
+          variant_id: next?.selected_variant_id ?? current?.selected_variant_id ?? skill.library.variant_id,
         },
       ];
     })
-  ) as Partial<Record<ToolTarget, SkillTarget>>;
-
-  return {
-    name: skill.name,
-    sourcePath: skill.source_path,
-    description: skill.description ?? "",
-    enabled: skill.enabled,
-    targets,
-  };
-}
-
-function cloneSkill(skill: Skill): Skill {
-  return {
-    ...skill,
-    targets: Object.fromEntries(
-      Object.entries(skill.targets ?? {}).map(([tool, target]) => [
-        tool,
-        target ? { ...target } : target,
-      ])
-    ) as Partial<Record<ToolTarget, SkillTarget>>,
-  };
-}
-
-function buildTargets(
-  targets: Partial<Record<ToolTarget, SkillTarget>>
-): Record<string, SkillTarget> {
-  return Object.fromEntries(
-    TOOLS.map((tool) => [
-      tool,
-      {
-        method: targets[tool]?.method ?? getDefaultSyncMethod(),
-        enabled: Boolean(targets[tool]?.enabled),
-      },
-    ])
   );
 }
 
-function basename(path: string): string {
-  const normalized = path.replace(/[\\/]+$/, "");
-  const lastSeparator = Math.max(normalized.lastIndexOf("/"), normalized.lastIndexOf("\\"));
-  return lastSeparator >= 0 ? normalized.slice(lastSeparator + 1) : normalized;
-}
-
-function dirname(path: string): string {
-  const lastSeparator = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-  return lastSeparator >= 0 ? path.slice(0, lastSeparator) : "";
-}
-
-function joinPath(base: string, child: string): string {
-  const separator = base.includes("\\") ? "\\" : "/";
-  return base ? `${base.replace(/[\\/]+$/, "")}${separator}${child}` : child;
-}
-
-function inferSkillInstallRoot(tool: ToolTarget, files: ConfigFileInfo[]): string | null {
-  const firstPath = files.find((file) => file.tool === tool)?.path;
-  if (!firstPath) {
-    return null;
-  }
-
-  switch (tool) {
-    case "claude":
-      return joinPath(dirname(firstPath), "skills");
-    case "codex": {
-      const codexDir = dirname(firstPath);
-      return joinPath(joinPath(dirname(codexDir), ".agents"), "skills");
-    }
-    case "opencode":
-    case "openclaw":
-      return joinPath(dirname(firstPath), "skills");
-    default:
-      return null;
-  }
-}
-
-function buildSkillPreviewEntries(
-  files: ConfigFileInfo[],
-  sourcePath: string,
-  targets: Partial<Record<ToolTarget, SkillTarget>>,
-  createEntry: (path: string, tool: ToolTarget) => AffectedFile
-): AffectedFile[] {
-  const skillName = basename(sourcePath);
-  return TOOLS.filter((tool) => Boolean(targets[tool]?.enabled)).reduce<AffectedFile[]>(
-    (preview, tool) => {
-      const root = inferSkillInstallRoot(tool, files);
-      if (!root) {
-        return preview;
-      }
-      preview.push(createEntry(joinPath(root, skillName), tool));
-      return preview;
-    },
-    []
-  );
-}
-
-function buildSavePreview(
-  files: ConfigFileInfo[],
-  sourcePath: string,
-  targets: Partial<Record<ToolTarget, SkillTarget>>
-): AffectedFile[] {
-  return buildSkillPreviewEntries(files, sourcePath, targets, (path, tool) => ({
-    path,
-    tool,
-    operation: targets[tool]?.method ?? getDefaultSyncMethod(),
-  }));
-}
-
-function buildDeletePreview(
-  files: ConfigFileInfo[],
-  sourcePath: string,
-  targets: Partial<Record<ToolTarget, SkillTarget>>
-): AffectedFile[] {
-  return buildSkillPreviewEntries(files, sourcePath, targets, (path, tool) => ({
-    path,
-    tool,
-    operation: "delete",
-  }));
-}
-
-function getEnabledTools(targets: Partial<Record<ToolTarget, SkillTarget>>): ToolTarget[] {
-  return TOOLS.filter((tool) => Boolean(targets?.[tool]?.enabled));
-}
-
-function getConnectedToolCount(skills: Skill[], tool: ToolTarget): number {
-  return skills.filter((skill) => Boolean(skill.targets?.[tool]?.enabled)).length;
-}
-
-function getDiscoveredToolCount(entries: SkillInventoryEntry[], tool: ToolTarget): number {
-  return entries.filter((entry) => entry.tool === tool && !entry.represented).length;
-}
-
-function getInitialTool(skills: Skill[], inventory: SkillInventory | null): ToolTarget {
-  const connectedTool = TOOLS.find((tool) => getConnectedToolCount(skills, tool) > 0);
-  if (connectedTool) {
-    return connectedTool;
-  }
-
-  const discoveredTool = TOOLS.find((tool) =>
-    getDiscoveredToolCount(inventory?.discovered ?? [], tool) > 0
-  );
-  return discoveredTool ?? "codex";
-}
-
-function matchesSkillQuery(skill: Skill, query: string): boolean {
+function matchesQuery(skill: SkillOverviewItem, query: string) {
   if (!query.trim()) {
     return true;
   }
-
-  const haystack = [skill.name, skill.description, skill.source_path]
+  const search = query.trim().toLowerCase();
+  const haystack = [
+    skill.name,
+    skill.description,
+    skill.primary_path,
+    skill.library.path,
+    ...skill.variants.map((variant) => variant.source_path),
+  ]
     .join("\n")
     .toLowerCase();
-
-  return haystack.includes(query.trim().toLowerCase());
+  return haystack.includes(search);
 }
 
-function matchesInventoryQuery(entry: SkillInventoryEntry, query: string): boolean {
-  if (!query.trim()) {
-    return true;
+function matchesFilter(skill: SkillOverviewItem, filter: FilterMode) {
+  if (filter === "issues") {
+    return skill.issues.length > 0;
   }
-
-  const haystack = [entry.name, entry.description, entry.path].join("\n").toLowerCase();
-  return haystack.includes(query.trim().toLowerCase());
+  if (filter === "managed") {
+    return skill.managed;
+  }
+  if (filter === "unmanaged") {
+    return !skill.managed;
+  }
+  return true;
 }
 
-function getConnectionState(skill: Skill, tool: ToolTarget): SkillConnectionState {
-  if (skill.targets?.[tool]?.enabled) {
-    return "connected";
-  }
-  if (getEnabledTools(skill.targets).length === 0) {
-    return "unassigned";
-  }
-  return "notConnected";
+function MetricCard({
+  title,
+  value,
+  helper,
+}: {
+  title: string;
+  value: number | string;
+  helper: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-border bg-background/80 p-4 shadow-sm">
+      <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+        {title}
+      </div>
+      <div className="mt-3 text-3xl font-semibold text-foreground">{value}</div>
+      <div className="mt-2 text-sm leading-6 text-muted-foreground">{helper}</div>
+    </div>
+  );
 }
 
-function buildCurrentCLIGroups(
-  skills: Skill[],
+function FilterChip({
+  active,
+  count,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  count: number;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex min-h-11 items-center gap-2 rounded-full border px-4 py-2 text-sm transition-colors ${
+        active
+          ? "border-accent bg-accent text-white"
+          : "border-border bg-background text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      <span>{label}</span>
+      <span className={`rounded-full px-2 py-0.5 text-xs ${active ? "bg-white/20" : "bg-muted"}`}>
+        {count}
+      </span>
+    </button>
+  );
+}
+
+function ToolPill({ tool, state, t }: { tool: ToolTarget; state?: ToolState; t: (key: string) => string }) {
+  const status = state?.status ?? "not_installed";
+  return (
+    <div className="min-w-[112px] rounded-xl border border-border/80 bg-background px-3 py-2">
+      <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+        {TOOL_LABELS[tool]}
+      </div>
+      <div className="mt-1 text-sm font-medium text-foreground">{getStatusLabel(t, status)}</div>
+      {state?.enabled ? (
+        <div className="mt-1 text-xs text-muted-foreground">{pathTail(state.selected_path)}</div>
+      ) : null}
+    </div>
+  );
+}
+
+function SkillsCLIStatusChip({
+  available,
+  loading,
+  t,
+}: {
+  available?: boolean;
+  loading: boolean;
+  t: (key: string) => string;
+}) {
+  const installed = Boolean(available);
+  const label = loading ? t("loading") : installed ? t("skillsCliInstalled") : t("skillsCliNotInstalled");
+
+  return (
+    <div className="group relative">
+      <button
+        type="button"
+        className={`inline-flex min-h-11 items-center rounded-full border px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${
+          installed
+            ? "border-emerald-500/20 bg-emerald-500/8 text-emerald-700 dark:text-emerald-300"
+            : "border-border bg-background/70 text-muted-foreground"
+        }`}
+        aria-label={t("skillsCliTooltipTitle")}
+      >
+        {label}
+      </button>
+      <div className="pointer-events-none absolute left-0 top-full z-20 mt-2 w-80 rounded-2xl border border-border bg-card p-4 text-left opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100">
+        <div className="text-sm font-semibold text-foreground">{t("skillsCliTooltipTitle")}</div>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">{t("skillsCliTooltipBody")}</p>
+        <div className="mt-3 rounded-xl border border-border/70 bg-background px-3 py-2 font-mono text-xs text-foreground">
+          npx skills add hongshuo-wang/agent-usage-desktop -y
+        </div>
+        <p className="mt-2 text-xs leading-5 text-muted-foreground">{t("skillsCliTooltipHint")}</p>
+      </div>
+    </div>
+  );
+}
+
+function toolIssueSummary(issues: SkillIssue[]) {
+  return issues.reduce<Record<string, string[]>>((groups, issue) => {
+    if (!groups[issue.code]) {
+      groups[issue.code] = [];
+    }
+    groups[issue.code].push(issue.tool);
+    return groups;
+  }, {});
+}
+
+function buildToolStateFromLegacy(
   tool: ToolTarget,
-  query: string,
-  labels: Record<SkillConnectionState, string>,
-  descriptions: Record<SkillConnectionState, string>
-): CLISkillGroup[] {
-  const filtered = skills.filter((skill) => matchesSkillQuery(skill, query));
+  skill: LegacySkill,
+  libraryEntry: LegacyInventoryEntry | undefined
+): ToolState {
+  const target = skill.targets?.[tool];
+  const install = libraryEntry?.install_status?.[tool];
+  const actual = install?.installed
+    ? [
+        {
+          path: install.path,
+          hash: install.hash ?? "",
+          method: (install.method === "copy" ? "copy" : "symlink") as SyncMethod,
+        },
+      ]
+    : [];
+  let status: SkillStatus = "not_installed";
+  if (target?.enabled) {
+    if (actual.length === 0) {
+      status = "missing_install";
+    } else if (libraryEntry?.hash && actual[0].hash && actual[0].hash !== libraryEntry.hash) {
+      status = "out_of_sync";
+    } else {
+      status = "using_selected";
+    }
+  } else if (actual.length > 0) {
+    status = "out_of_sync";
+  }
 
-  return (["connected", "notConnected", "unassigned"] as SkillConnectionState[]).map((key) => ({
-    key,
-    label: labels[key],
-    description: descriptions[key],
-    items: filtered.filter((skill) => getConnectionState(skill, tool) === key),
-  }));
+  return {
+    enabled: Boolean(target?.enabled),
+    method: target?.method === "copy" ? "copy" : "symlink",
+    selected_variant_id: target?.variant_id ?? skill.id,
+    selected_path: skill.source_path,
+    selected_hash: libraryEntry?.hash ?? "",
+    status,
+    actual,
+  };
 }
 
-function getToolTranslationKey(tool: ToolTarget): string {
-  switch (tool) {
-    case "claude":
-      return "claudeCode";
-    case "codex":
-      return "codex";
-    case "opencode":
-      return "openCode";
-    case "openclaw":
-      return "openClaw";
-    default:
-      return tool;
+function buildLegacyOverview(skills: LegacySkill[], inventory: LegacyInventory): SkillOverview {
+  const libraryByName = new Map<string, LegacyInventoryEntry>();
+  for (const entry of inventory.library) {
+    libraryByName.set(normalizeSkillName(entry.name), entry);
   }
-}
 
-function getInventoryToolLabel(
-  tool: string,
-  labels: Record<ToolTarget, string>
-): string {
-  return TOOLS.includes(tool as ToolTarget) ? labels[tool as ToolTarget] : tool;
-}
+  const discoveredByName = new Map<string, LegacyInventoryEntry[]>();
+  for (const entry of inventory.discovered) {
+    const key = normalizeSkillName(entry.name);
+    const current = discoveredByName.get(key) ?? [];
+    current.push(entry);
+    discoveredByName.set(key, current);
+  }
 
-function validateForm(form: FormState): string | null {
-  if (!form.name.trim()) {
-    return "Name is required.";
-  }
-  if (!form.sourcePath.trim()) {
-    return "Source path is required.";
-  }
-  const invalidTarget = TOOLS.find((tool) => {
-    const method = form.targets[tool]?.method;
-    return method !== undefined && method !== "symlink" && method !== "copy";
+  const managedByName = new Map<string, LegacySkill>();
+  const items: SkillOverviewItem[] = skills.map((skill) => {
+    const key = normalizeSkillName(skill.name);
+    managedByName.set(key, skill);
+    const libraryEntry = libraryByName.get(key);
+    const variants: SkillVariant[] = [
+      {
+        id: skill.id,
+        source_path: skill.source_path,
+        origin_tool: "global",
+        hash: libraryEntry?.hash ?? "",
+        managed: true,
+      },
+    ];
+    const tools = Object.fromEntries(
+      TOOLS.map((tool) => [tool, buildToolStateFromLegacy(tool, skill, libraryEntry)])
+    ) as Partial<Record<ToolTarget, ToolState>>;
+    const issues: SkillIssue[] = TOOLS.flatMap((tool) => {
+      const state = tools[tool];
+      if (!state?.enabled) {
+        return [];
+      }
+      if (state.status === "missing_install" || state.status === "out_of_sync") {
+        return [{ tool, code: state.status }];
+      }
+      return [];
+    });
+
+    return {
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      managed: true,
+      enabled: skill.enabled,
+      primary_path: skill.source_path,
+      library: {
+        present: Boolean(libraryEntry?.path ?? skill.source_path),
+        path: libraryEntry?.path ?? skill.source_path,
+        hash: libraryEntry?.hash ?? "",
+        variant_id: skill.id,
+      },
+      variants,
+      tools,
+      issues,
+      discovered: (discoveredByName.get(key) ?? []).map((entry) => ({
+        path: entry.path,
+        tool: entry.tool,
+        hash: entry.hash,
+        method: entry.is_symlink ? "symlink" : "copy",
+      })),
+    };
   });
-  if (invalidTarget) {
-    return "Sync method must be symlink or copy.";
+
+  for (const [key, entries] of discoveredByName.entries()) {
+    if (managedByName.has(key)) {
+      continue;
+    }
+    const primary = entries[0];
+    const tools: Partial<Record<ToolTarget, ToolState>> = {};
+    for (const entry of entries) {
+      if (entry.tool === "global") {
+        continue;
+      }
+      const tool = entry.tool as ToolTarget;
+      if (!TOOLS.includes(tool)) {
+        continue;
+      }
+      tools[tool] = {
+        enabled: false,
+        method: entry.is_symlink ? "symlink" : "copy",
+        selected_variant_id: 0,
+        selected_path: entry.path,
+        selected_hash: entry.hash,
+        status: "unmanaged",
+        actual: [{ path: entry.path, hash: entry.hash, method: entry.is_symlink ? "symlink" : "copy" }],
+      };
+    }
+
+    items.push({
+      id: 0,
+      name: primary.name,
+      description: primary.description,
+      managed: false,
+      enabled: false,
+      primary_path: primary.path,
+      library: {
+        present: false,
+        path: inventory.library_path ? `${inventory.library_path}/${pathTail(primary.path)}` : "",
+        hash: "",
+        variant_id: 0,
+      },
+      variants: entries.map((entry, index) => ({
+        id: -(index + 1),
+        source_path: entry.path,
+        origin_tool: entry.tool,
+        hash: entry.hash,
+        managed: false,
+      })),
+      tools,
+      issues: [],
+      discovered: entries.map((entry) => ({
+        path: entry.path,
+        tool: entry.tool,
+        hash: entry.hash,
+        method: entry.is_symlink ? "symlink" : "copy",
+      })),
+    });
   }
-  return null;
+
+  const summary = {
+    managed_skills: items.filter((item) => item.managed).length,
+    visible_skills: items.length,
+    connected_tools: items.reduce(
+      (count, item) => count + Object.values(item.tools).filter((state) => state?.enabled).length,
+      0
+    ),
+    issue_count: items.reduce((count, item) => count + item.issues.length, 0),
+    unmanaged_skills: items.filter((item) => !item.managed).length,
+  };
+
+  items.sort((left, right) => {
+    if (left.issues.length !== right.issues.length) {
+      return right.issues.length - left.issues.length;
+    }
+    if (left.managed !== right.managed) {
+      return left.managed ? -1 : 1;
+    }
+    return left.name.localeCompare(right.name);
+  });
+
+  return {
+    library_path: inventory.library_path,
+    cli: inventory.cli,
+    summary,
+    skills: items,
+  };
 }
 
-export default function Skills() {
+export default function SkillsPage() {
   const { t } = useTranslation();
-  const [skills, setSkills] = useState<Skill[]>([]);
-  const [selectedID, setSelectedID] = useState<number | "new" | null>(null);
-  const [activeTool, setActiveTool] = useState<ToolTarget | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [form, setForm] = useState<FormState>(() => createEmptyForm());
+  const [overview, setOverview] = useState<SkillOverview | null>(null);
+  const [apiFlavor, setApiFlavor] = useState<SkillsAPIFlavor>("overview");
   const [loading, setLoading] = useState(true);
-  const [inventory, setInventory] = useState<SkillInventory | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [previewingAction, setPreviewingAction] = useState<"save" | "delete" | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [mutatingTool, setMutatingTool] = useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<FilterMode>("all");
   const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
-  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [form, setForm] = useState<SkillFormState>(createFormState(null));
+  const [pendingDelete, setPendingDelete] = useState<SkillOverviewItem | null>(null);
+  const [creating, setCreating] = useState(false);
 
-  const selectedSkill = useMemo(
-    () => skills.find((skill) => skill.id === selectedID) ?? null,
-    [selectedID, skills]
-  );
-  const isCreating = selectedID === "new";
-  const showEditor = isCreating || selectedSkill !== null;
-  const currentTool = activeTool ?? "codex";
-  const toolLabels = useMemo(
-    () =>
-      Object.fromEntries(
-        TOOLS.map((tool) => [tool, t(getToolTranslationKey(tool), TOOL_LABELS[tool])])
-      ) as Record<ToolTarget, string>,
-    [t]
-  );
-  const groupLabels = useMemo(
-    () => ({
-      connected: t("connected", "Connected"),
-      notConnected: t("notConnected", "Not Connected"),
-      unassigned: t("unassigned", "Unassigned"),
-    }),
-    [t]
-  );
-  const groupDescriptions = useMemo(
-    () => ({
-      connected: t("connectedDescription", "Already installed for the current CLI."),
-      notConnected: t(
-        "notConnectedDescription",
-        "Available to connect, but not installed for the current CLI yet."
-      ),
-      unassigned: t("unassignedDescription", "Not connected to any CLI yet."),
-    }),
-    [t]
-  );
-  const discoveredToolCounts = useMemo(
-    () =>
-      Object.fromEntries(
-        TOOLS.map((tool) => [tool, getDiscoveredToolCount(inventory?.discovered ?? [], tool)])
-      ) as Record<ToolTarget, number>,
-    [inventory]
-  );
-  const toolCounts = useMemo(
-    () =>
-      Object.fromEntries(
-        TOOLS.map((tool) => [
-          tool,
-          skills.length > 0 ? getConnectedToolCount(skills, tool) : discoveredToolCounts[tool],
-        ])
-      ) as Record<ToolTarget, number>,
-    [discoveredToolCounts, skills]
-  );
-  const currentCLIGroups = useMemo(
-    () =>
-      buildCurrentCLIGroups(skills, currentTool, searchQuery, groupLabels, groupDescriptions),
-    [skills, currentTool, searchQuery, groupLabels, groupDescriptions]
-  );
-  const importableDiscovered = inventory?.discovered.filter((entry) => entry.importable) ?? [];
-  const conflicts = inventory?.conflicts ?? [];
-  const currentToolDiscovered = useMemo(
-    () =>
-      (inventory?.discovered ?? []).filter(
-        (entry) =>
-          entry.tool === currentTool && !entry.represented && matchesInventoryQuery(entry, searchQuery)
-      ),
-    [currentTool, inventory, searchQuery]
-  );
-
-  const loadSkills = async (nextSelectedID?: number | "new" | null) => {
+  const loadOverview = async (preferredKey?: string) => {
     setLoading(true);
     setError(null);
-
     try {
-      const [data, inventoryData] = await Promise.all([
-        fetchRaw<Skill[]>("config/skills"),
-        fetchRaw<SkillInventory>("config/skills/inventory"),
-      ]);
-      setSkills(data);
-      setInventory(inventoryData);
-      if (activeTool === null) {
-        setActiveTool(getInitialTool(data, inventoryData));
-      }
-
-      if (nextSelectedID !== undefined) {
-        setSelectedID(nextSelectedID);
-        if (nextSelectedID === "new" || nextSelectedID === null) {
-          setForm(createEmptyForm());
-        } else {
-          const nextSkill = data.find((skill) => skill.id === nextSelectedID);
-          setForm(nextSkill ? skillToForm(nextSkill) : createEmptyForm());
+      let next: SkillOverview;
+      try {
+        next = await fetchRaw<SkillOverview>("config/skills/overview");
+        setApiFlavor("overview");
+      } catch (err) {
+        if (!(err instanceof ApiError) || (err.status !== 404 && err.status !== 405)) {
+          throw err;
         }
-        return;
+        const [skills, inventory] = await Promise.all([
+          fetchRaw<LegacySkill[]>("config/skills"),
+          fetchRaw<LegacyInventory>("config/skills/inventory"),
+        ]);
+        next = buildLegacyOverview(skills, inventory);
+        setApiFlavor("legacy");
       }
 
-      const currentStillExists = data.some((skill) => skill.id === selectedID);
-      const nextSkill = currentStillExists
-        ? data.find((skill) => skill.id === selectedID) ?? null
-        : data[0] ?? null;
-
-      setSelectedID(nextSkill?.id ?? null);
-      setForm(nextSkill ? skillToForm(nextSkill) : createEmptyForm());
+      setOverview(next);
+      setSelectedKey((current) => {
+        const desired = preferredKey ?? current;
+        if (desired && next.skills.some((skill) => selectionKey(skill) === desired)) {
+          return desired;
+        }
+        return next.skills[0] ? selectionKey(next.skills[0]) : null;
+      });
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("syncStatus"));
+      setError(err instanceof Error ? err.message : t("skillsLoadFailed"));
     } finally {
       setLoading(false);
     }
   };
 
-  const loadInventory = async () => {
+  useEffect(() => {
+    void loadOverview();
+  }, []);
+
+  const visibleSkills = useMemo(() => {
+    return (overview?.skills ?? []).filter(
+      (skill) => matchesQuery(skill, query) && matchesFilter(skill, filter)
+    );
+  }, [filter, overview, query]);
+
+  const selectedSkill = useMemo(() => {
+    return visibleSkills.find((skill) => selectionKey(skill) === selectedKey)
+      ?? overview?.skills.find((skill) => selectionKey(skill) === selectedKey)
+      ?? null;
+  }, [overview, selectedKey, visibleSkills]);
+
+  useEffect(() => {
+    setForm(createFormState(selectedSkill));
+    if (selectedSkill) {
+      setCreating(false);
+    }
+  }, [selectedSkill]);
+
+  const hasUnsavedChanges =
+    selectedSkill?.managed &&
+    (form.name !== selectedSkill.name ||
+      form.description !== (selectedSkill.description ?? "") ||
+      form.sourcePath !== (selectedSkill.primary_path ?? ""));
+
+  const filteredCounts = useMemo(() => {
+    const skills = overview?.skills ?? [];
+    return {
+      all: skills.length,
+      issues: skills.filter((skill) => skill.issues.length > 0).length,
+      managed: skills.filter((skill) => skill.managed).length,
+      unmanaged: skills.filter((skill) => !skill.managed).length,
+    };
+  }, [overview]);
+
+  const saveSkill = async () => {
+    if (!selectedSkill?.managed || selectedSkill.id <= 0) {
+      return;
+    }
+    setSaving(true);
     setError(null);
+    setMessage(null);
     try {
-      setInventory(await fetchRaw<SkillInventory>("config/skills/inventory"));
+      await mutateAPI<MutationResponse>("PUT", `config/skills/${selectedSkill.id}`, {
+        name: form.name.trim(),
+        source_path: form.sourcePath.trim(),
+        description: form.description.trim(),
+        enabled: selectedSkill.enabled,
+      });
+      setMessage(t("skillsSaved"));
+      await loadOverview(`managed:${selectedSkill.id}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("syncStatus"));
+      setError(err instanceof Error ? err.message : t("skillsSaveFailed"));
+    } finally {
+      setSaving(false);
     }
   };
 
-  useEffect(() => {
-    loadSkills();
-  }, []);
-
-  const updateForm = (updates: Partial<FormState>) => {
-    setForm((current) => ({ ...current, ...updates }));
-  };
-
-  const enabledTargets = useMemo(
-    () => TOOLS.filter((tool) => Boolean(form.targets[tool]?.enabled)),
-    [form.targets]
-  );
-  const hasVisibleSkills = useMemo(
-    () => currentCLIGroups.some((group) => group.items.length > 0),
-    [currentCLIGroups]
-  );
-
-  const toolSelection = useMemo(
-    () =>
-      Object.fromEntries(
-        TOOLS.map((tool) => [tool, Boolean(form.targets[tool]?.enabled)])
-      ) as Partial<Record<ToolTarget, boolean>>,
-    [form.targets]
-  );
-
-  const updateTargetSelection = (nextTargets: Partial<Record<ToolTarget, boolean>>) => {
-    const defaultMethod = getDefaultSyncMethod();
-    setForm((current) => ({
-      ...current,
-      targets: Object.fromEntries(
-        TOOLS.map((tool) => [
-          tool,
-          {
-            enabled: Boolean(nextTargets[tool]),
-            method: current.targets[tool]?.method ?? defaultMethod,
-          },
-        ])
-      ) as Partial<Record<ToolTarget, SkillTarget>>,
-    }));
-  };
-
-  const updateTargetMethod = (tool: ToolTarget, method: SyncMethod) => {
-    setForm((current) => ({
-      ...current,
-      targets: {
-        ...current.targets,
-        [tool]: {
-          enabled: Boolean(current.targets[tool]?.enabled),
-          method,
-        },
-      },
-    }));
-  };
-
-  const selectSkill = (skill: Skill) => {
-    setSelectedID(skill.id);
-    setForm(skillToForm(skill));
+  const mutateToolTarget = async (
+    tool: ToolTarget,
+    updates: Partial<ToolState>,
+    successMessage: string
+  ) => {
+    if (!selectedSkill?.managed || selectedSkill.id <= 0) {
+      return;
+    }
+    setMutatingTool(tool);
     setError(null);
-    setStatus(null);
+    setMessage(null);
+    try {
+      await mutateAPI<MutationResponse>("PUT", `config/skills/${selectedSkill.id}/targets`, {
+        targets: buildTargetsPayload(selectedSkill, { [tool]: updates }),
+      });
+      setMessage(successMessage);
+      await loadOverview(`managed:${selectedSkill.id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("skillsActionFailed"));
+    } finally {
+      setMutatingTool(null);
+    }
   };
 
-  const startCreate = () => {
-    setSelectedID("new");
-    setForm(createEmptyForm());
+  const importManaged = async (
+    skill: SkillOverviewItem,
+    sourcePath: string,
+    tool: ToolTarget | "global"
+  ) => {
+    if (apiFlavor !== "overview") {
+      setError("Current sidecar does not support importing discovered skills yet. Restart the desktop app to load the newer backend.");
+      return;
+    }
+    setMutatingTool(tool);
     setError(null);
-    setStatus(null);
+    setMessage(null);
+    try {
+      const response = await mutateAPI<ImportManagedSkillResponse>("POST", "config/skills/import-managed", {
+        skill_id: skill.id > 0 ? skill.id : 0,
+        name: skill.name,
+        tool,
+        source_path: sourcePath,
+      });
+      setMessage(response.created_new ? t("skillsImportedNew") : t("skillsImported"));
+      await loadOverview(`managed:${response.skill_id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("skillsActionFailed"));
+    } finally {
+      setMutatingTool(null);
+    }
+  };
+
+  const deleteSkill = async () => {
+    if (!pendingDelete?.managed || pendingDelete.id <= 0) {
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await mutateAPI<MutationResponse>("DELETE", `config/skills/${pendingDelete.id}`);
+      setPendingDelete(null);
+      setMessage(t("skillsDeleted"));
+      await loadOverview();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("skillsDeleteFailed"));
+      setSaving(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const createSkill = async () => {
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const response = await mutateAPI<{ id: number; affected_files: AffectedFile[] }>("POST", "config/skills", {
+        name: form.name.trim(),
+        source_path: form.sourcePath.trim(),
+        description: form.description.trim(),
+        targets: {},
+      });
+      setCreating(false);
+      setMessage(t("skillsCreated"));
+      await loadOverview(`managed:${response.id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("skillsCreateFailed"));
+    } finally {
+      setSaving(false);
+    }
   };
 
   const openFolder = async (path: string) => {
-    if (!path.trim()) {
-      setError(`${t("sourcePath")} is required.`);
+    if (!path) {
       return;
     }
-
-    setError(null);
     try {
       await open(path);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("syncStatus"));
+      setError(err instanceof Error ? err.message : t("skillsOpenFailed"));
     }
-  };
-
-  const requestSave = async () => {
-    const validationError = validateForm(form);
-    if (validationError) {
-      setError(validationError);
-      return;
-    }
-
-    const snapshot = {
-      ...form,
-      targets: Object.fromEntries(
-        TOOLS.map((tool) => [
-          tool,
-          form.targets[tool]
-            ? {
-                ...form.targets[tool],
-              }
-            : form.targets[tool],
-        ])
-      ) as Partial<Record<ToolTarget, SkillTarget>>,
-    };
-    setError(null);
-    setStatus(null);
-    setPreviewingAction("save");
-    try {
-      const files = await fetchRaw<ConfigFileInfo[]>("config/files");
-      setPendingAction({
-        type: "save",
-        title: `${isCreating ? t("create") : t("save")} ${t("skills")}`,
-        confirmLabel: isCreating ? t("create") : t("save"),
-        affectedFiles: buildSavePreview(files, snapshot.sourcePath, snapshot.targets),
-        mode: isCreating ? "create" : "edit",
-        skillID: selectedSkill?.id ?? null,
-        snapshot,
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("syncStatus"));
-    } finally {
-      setPreviewingAction(null);
-    }
-  };
-
-  const requestDelete = async () => {
-    if (!selectedSkill) {
-      return;
-    }
-
-    const snapshot = cloneSkill(selectedSkill);
-    setError(null);
-    setStatus(null);
-    setPreviewingAction("delete");
-    try {
-      const files = await fetchRaw<ConfigFileInfo[]>("config/files");
-      setPendingAction({
-        type: "delete",
-        title: `${t("delete")} ${selectedSkill.name}`,
-        confirmLabel: t("delete"),
-        affectedFiles: buildDeletePreview(files, snapshot.source_path, snapshot.targets),
-        snapshot,
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("syncStatus"));
-    } finally {
-      setPreviewingAction(null);
-    }
-  };
-
-  const confirmSave = async () => {
-    if (!pendingAction || pendingAction.type !== "save") {
-      return;
-    }
-
-    const validationError = validateForm(pendingAction.snapshot);
-    if (validationError) {
-      setError(validationError);
-      setPendingAction(null);
-      return;
-    }
-
-    setSubmitting(true);
-    setError(null);
-    setStatus(null);
-
-    try {
-      const payload = {
-        name: pendingAction.snapshot.name.trim(),
-        source_path: pendingAction.snapshot.sourcePath.trim(),
-        description: pendingAction.snapshot.description.trim(),
-        enabled: pendingAction.snapshot.enabled,
-        targets: buildTargets(pendingAction.snapshot.targets),
-      };
-
-      let affectedFiles: AffectedFile[] = [];
-
-      if (pendingAction.mode === "create") {
-        const response = await mutateAPI<CreateMutationResponse>("POST", "config/skills", payload);
-        affectedFiles = response.affected_files ?? [];
-        await loadSkills(response.id);
-      } else if (pendingAction.skillID !== null) {
-        const response = await mutateAPI<MutationResponse>(
-          "PUT",
-          `config/skills/${pendingAction.skillID}`,
-          payload
-        );
-        affectedFiles = response.affected_files ?? [];
-        await loadSkills(pendingAction.skillID);
-      }
-
-      setPendingAction(null);
-      setStatus(`${t("synced")} · ${affectedFiles.length} ${t("affectedFiles")}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("syncStatus"));
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const confirmDelete = async () => {
-    if (!pendingAction || pendingAction.type !== "delete") {
-      return;
-    }
-
-    setSubmitting(true);
-    setError(null);
-    setStatus(null);
-
-    try {
-      const response = await mutateAPI<MutationResponse>(
-        "DELETE",
-        `config/skills/${pendingAction.snapshot.id}`
-      );
-      await loadSkills();
-      setPendingAction(null);
-      setStatus(`${t("synced")} · ${(response.affected_files ?? []).length} ${t("affectedFiles")}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("syncStatus"));
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const requestImportDiscovered = () => {
-    const importable = inventory?.discovered.filter((entry) => entry.importable) ?? [];
-    setError(null);
-    setStatus(null);
-    setPendingAction({
-      type: "import",
-      title: t("importDiscoveredSkills", "Import discovered skills"),
-      confirmLabel: t("importSkills", "Import skills"),
-      affectedFiles: importable.map((entry) => ({
-        path: `${inventory?.library_path ?? ""}/${basename(entry.path)}`,
-        tool: "global",
-        operation: "import",
-      })),
-    });
-  };
-
-  const requestResolveConflict = (
-    conflict: SkillConflict,
-    direction: "external_over_library" | "library_over_external"
-  ) => {
-    const usingExternal = direction === "external_over_library";
-    setError(null);
-    setStatus(null);
-    setPendingAction({
-      type: "resolveConflict",
-      title: usingExternal
-        ? t("useToolVersion", "Use tool version")
-        : t("useGlobalVersion", "Use global version"),
-      confirmLabel: usingExternal
-        ? t("replaceGlobal", "Replace global")
-        : t("preferGlobal", "Prefer global"),
-      affectedFiles: [
-        {
-          path: usingExternal ? conflict.library.path : conflict.external.path,
-          tool: usingExternal ? "global" : conflict.external.tool,
-          operation: usingExternal ? "replace" : "prefer_global",
-        },
-      ],
-      payload: {
-        name: conflict.name,
-        tool: conflict.external.tool,
-        library_path: conflict.library.path,
-        external_path: conflict.external.path,
-        direction,
-      },
-    });
-  };
-
-  const confirmImport = async () => {
-    setSubmitting(true);
-    setError(null);
-    setStatus(null);
-    try {
-      const response = await mutateAPI<ImportSkillsResponse>("POST", "config/skills/import", {});
-      await loadSkills();
-      setPendingAction(null);
-      setStatus(
-        `${t("imported", "Imported")} ${response.imported_count} · ${response.skipped_count} ${t(
-          "conflict",
-          "Conflict"
-        )}`
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("syncStatus"));
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const confirmResolveConflict = async () => {
-    if (!pendingAction || pendingAction.type !== "resolveConflict") {
-      return;
-    }
-    setSubmitting(true);
-    setError(null);
-    setStatus(null);
-    try {
-      const response = await mutateAPI<MutationResponse>(
-        "POST",
-        "config/skills/conflicts/resolve",
-        pendingAction.payload
-      );
-      await loadSkills();
-      setPendingAction(null);
-      setStatus(`${t("synced")} · ${(response.affected_files ?? []).length} ${t("affectedFiles")}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("syncStatus"));
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const confirmPendingAction = () => {
-    if (!pendingAction) {
-      return;
-    }
-    if (pendingAction.type === "save") {
-      confirmSave();
-      return;
-    }
-    if (pendingAction.type === "delete") {
-      confirmDelete();
-      return;
-    }
-    if (pendingAction.type === "import") {
-      confirmImport();
-      return;
-    }
-    confirmResolveConflict();
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto pb-4 pr-1">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold text-foreground">{t("skills")}</h2>
-          <p className="text-sm text-muted-foreground">{t("syncTargets")}</p>
-        </div>
-        <SyncStatus />
-      </div>
-
-      {error ? (
-        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-500">
-          {error}
-        </div>
-      ) : null}
-      {status ? (
-        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-500">
-          {status}
-        </div>
-      ) : null}
-
-      <section className="rounded-xl border border-border bg-card p-3.5">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-          <div className="min-w-0 space-y-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-sm font-semibold text-foreground">
-                {t("globalSkillLibrary", "Global skill library")}
-              </h3>
-              <span
-                className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                  inventory?.cli.available
-                    ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                    : "border border-border text-muted-foreground"
-                }`}
-              >
-                npx skills · {inventory?.cli.available ? t("enabled") : t("disabled")}
-              </span>
-            </div>
-            <p className="break-all text-xs text-muted-foreground">
-              {inventory?.library_path ?? "~/.agent-usage/skills"}
-            </p>
-            <p className="text-xs text-muted-foreground">{inventory?.cli.message ?? "—"}</p>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={loadInventory}
-              className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-            >
-              {t("refresh")}
-            </button>
-            <button
-              type="button"
-              onClick={requestImportDiscovered}
-              disabled={!inventory || inventory.summary.importable_count === 0 || submitting}
-              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {t("importNonConflicting", "Import non-conflicting")}
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-3 grid grid-cols-2 gap-2 xl:grid-cols-4">
-          {[
-            [t("library", "Library"), inventory?.summary.library_count ?? 0],
-            [t("discovered", "Discovered"), inventory?.summary.discovered_count ?? 0],
-            [t("importable", "Importable"), inventory?.summary.importable_count ?? 0],
-            [t("conflict"), inventory?.summary.conflict_count ?? 0],
-          ].map(([label, value]) => (
-            <div
-              key={label}
-              className="rounded-lg border border-border/70 bg-background/60 px-3 py-2"
-            >
-              <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-                {label}
+    <div className="h-full overflow-y-auto pr-1">
+      <div className="flex flex-col gap-6 pb-6">
+        <div className="rounded-[28px] border border-border bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.12),_transparent_35%),linear-gradient(135deg,rgba(255,255,255,0.92),rgba(255,255,255,0.78))] p-6 shadow-sm dark:bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.18),_transparent_35%),linear-gradient(135deg,rgba(18,24,38,0.96),rgba(18,24,38,0.88))]">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+            <div className="max-w-3xl space-y-3">
+              <div className="inline-flex rounded-full border border-accent/20 bg-accent/8 px-3 py-1 text-xs font-medium text-accent">
+                {t("skillsPageBadge")}
               </div>
-              <div className="mt-1 text-sm font-semibold text-foreground">{value}</div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <div
-        className={`grid gap-3 ${
-          conflicts.length
-            ? "xl:grid-cols-[minmax(0,1.2fr)_minmax(300px,0.8fr)]"
-            : ""
-        }`}
-      >
-        <section className="rounded-xl border border-border bg-card p-3.5">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <h3 className="text-sm font-semibold text-foreground">
-                {t("discoveredSkills", "Discovered skills")}
-              </h3>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {t("importable", "Importable")} · {importableDiscovered.length}
-              </p>
-            </div>
-            <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
-              {inventory?.summary.discovered_count ?? 0}
-            </span>
-          </div>
-
-          <div className="mt-3 max-h-60 overflow-y-auto pr-1">
-            {importableDiscovered.length ? (
-              <div className="grid gap-2 md:grid-cols-2">
-                {importableDiscovered.map((entry) => (
-                  <div
-                    key={`${entry.tool}:${entry.path}`}
-                    className="rounded-lg border border-border/70 bg-background/40 px-3 py-2.5"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-medium text-foreground">
-                          {entry.name}
-                        </div>
-                        <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                          {entry.description || "—"}
-                        </div>
-                      </div>
-                      <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
-                        {getInventoryToolLabel(entry.tool, toolLabels)}
-                      </span>
-                    </div>
-                    <div className="mt-2 break-all text-[11px] leading-5 text-muted-foreground">
-                      {entry.path}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-lg border border-dashed border-border px-3 py-6 text-sm text-muted-foreground">
-                {t("noSkills")}
-              </div>
-            )}
-          </div>
-        </section>
-
-        {conflicts.length ? (
-          <section className="rounded-xl border border-red-500/20 bg-card p-3.5">
-            <div className="flex items-start justify-between gap-3">
               <div>
-                <h3 className="text-sm font-semibold text-foreground">
-                  {t("skillConflicts", "Skill conflicts")}
-                </h3>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {t("conflict")} · {conflicts.length}
+                <h1 className="text-2xl font-semibold tracking-tight text-foreground">{t("skills")}</h1>
+                <p className="mt-2 max-w-2xl text-sm leading-7 text-muted-foreground">
+                  {t("skillsOverviewDescription")}
                 </p>
               </div>
-              <span className="rounded-full border border-red-500/30 px-2 py-0.5 text-[11px] text-red-500">
-                {conflicts.length}
-              </span>
+              <div className="flex flex-wrap gap-3">
+                <SyncStatus />
+                <SkillsCLIStatusChip available={overview?.cli.available} loading={loading && !overview} t={t} />
+              </div>
             </div>
 
-            <div className="mt-3 max-h-60 space-y-2 overflow-y-auto pr-1">
-              {conflicts.map((conflict) => (
-                <div
-                  key={`${conflict.external.tool}:${conflict.external.path}`}
-                  className="rounded-lg border border-red-500/20 bg-red-500/5 p-3"
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <div className="text-sm font-medium text-foreground">{conflict.name}</div>
-                        <span className="rounded-full border border-red-500/30 px-2 py-0.5 text-[11px] text-red-500">
-                          {getInventoryToolLabel(conflict.external.tool, toolLabels)}
-                        </span>
-                      </div>
-                      <div className="mt-2 break-all text-[11px] leading-5 text-muted-foreground">
-                        {t("sourcePath")}: {conflict.external.path}
-                      </div>
-                      <div className="mt-1 break-all text-[11px] leading-5 text-muted-foreground">
-                        {t("globalSkillLibrary", "Global skill library")}: {conflict.library.path}
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          requestResolveConflict(conflict, "external_over_library")
-                        }
-                        className="rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-                      >
-                        {t("useToolVersion", "Use tool version")}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          requestResolveConflict(conflict, "library_over_external")
-                        }
-                        className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent/90"
-                      >
-                        {t("useGlobalVersion", "Use global version")}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        ) : null}
-      </div>
-
-      <section className="rounded-xl border border-border bg-card p-2.5">
-        <div className="px-1 pb-2">
-          <h4 className="text-sm font-semibold text-foreground">{t("skills")}</h4>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {skills.length === 0 && (inventory?.summary.discovered_count ?? 0) > 0
-              ? t(
-                  "currentCliDiscoveredFallback",
-                  "No imported skills yet — showing discovered skills for each CLI."
-                )
-              : t("currentCliListDescription", "Manage skills in the current CLI context.")}
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-border/70 bg-background/50 p-1">
-          <div className="grid gap-1 sm:grid-cols-2 xl:grid-cols-4">
-          {TOOLS.map((tool) => {
-            const active = tool === currentTool;
-
-            return (
-              <button
-                key={tool}
-                type="button"
-                onClick={() => setActiveTool(tool)}
-                className={`min-w-0 rounded-lg px-3 py-2 text-left transition-colors ${
-                  active
-                    ? "bg-card text-foreground shadow-sm ring-1 ring-accent/20"
-                    : "text-muted-foreground hover:bg-background hover:text-foreground"
-                }`}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <span className="truncate text-sm font-medium">{toolLabels[tool]}</span>
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-[11px] ${
-                      active
-                        ? "bg-accent text-white"
-                        : "border border-border text-muted-foreground"
-                    }`}
-                  >
-                    {toolCounts[tool]}
-                  </span>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-        </div>
-      </section>
-
-      <div className="grid min-h-[500px] gap-3 xl:flex-1 xl:min-h-0 xl:grid-cols-[minmax(340px,0.84fr)_minmax(0,1.16fr)] xl:grid-rows-[minmax(0,1fr)]">
-        <aside className="flex min-h-[320px] min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-card xl:min-h-0">
-          <div className="border-b border-border p-3.5">
-            <div className="flex items-center justify-between gap-3">
-              <h3 className="text-sm font-semibold text-foreground">{toolLabels[currentTool]}</h3>
+            <div className="flex flex-wrap gap-3">
               <button
                 type="button"
-                onClick={startCreate}
-                className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent/90"
+                onClick={() => {
+                  setCreating(true);
+                  setSelectedKey(null);
+                  setForm(createFormState(null));
+                }}
+                className={SECONDARY_BUTTON}
               >
-                {t("create")}
+                {t("skillsCreateNew")}
               </button>
-            </div>
-
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder={t(
-                "skillSearchPlaceholder",
-                "Search skills by name, description, or path..."
-              )}
-              className="mt-3 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition-colors focus:border-accent"
-            />
-          </div>
-
-          <div className="min-h-0 flex-1 overflow-y-auto p-2.5 pr-2">
-            {loading ? (
-              <div className="px-2 py-6 text-sm text-muted-foreground">{t("loading")}</div>
-            ) : skills.length === 0 && !isCreating ? (
-              <div className="space-y-4">
-                {currentToolDiscovered.length ? (
-                  <section className="space-y-2">
-                    <div className="px-1">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-2">
-                          <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                          <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                            {t("detectedInCurrentCli", "Discovered in current CLI")}
-                          </h4>
-                        </div>
-                        <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
-                          {currentToolDiscovered.length}
-                        </span>
-                      </div>
-                      <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
-                        {toolLabels[currentTool]} ·{" "}
-                        {t(
-                          "currentCliDiscoveredDescription",
-                          "Found on the selected CLI but not imported into your library yet."
-                        )}
-                      </p>
-                    </div>
-
-                    <div className="space-y-2">
-                      {currentToolDiscovered.map((entry) => (
-                        <article
-                          key={`${entry.tool}:${entry.path}`}
-                          className="rounded-lg border border-border/70 bg-background/50 px-3 py-2.5"
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="truncate text-sm font-medium text-foreground">
-                                {entry.name}
-                              </div>
-                              <div className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
-                                {entry.description || "—"}
-                              </div>
-                            </div>
-                            <span
-                              className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${
-                                entry.conflict
-                                  ? "border border-red-500/30 bg-red-500/10 text-red-500"
-                                  : "border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                              }`}
-                            >
-                              {entry.conflict
-                                ? t("conflict", "Conflict")
-                                : t("importable", "Importable")}
-                            </span>
-                          </div>
-
-                          <div className="mt-2 break-all text-[11px] leading-5 text-muted-foreground">
-                            {entry.path}
-                          </div>
-
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            <button
-                              type="button"
-                              onClick={() => openFolder(entry.path)}
-                              className="rounded-md border border-border px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-                            >
-                              {t("openSource", "Open Source")}
-                            </button>
-                          </div>
-                        </article>
-                      ))}
-                    </div>
-                  </section>
-                ) : null}
-
-                <div className="rounded-lg border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
-                  {currentToolDiscovered.length
-                    ? t(
-                        "importToManageHere",
-                        "Import them from the section above to manage them here."
-                      )
-                    : searchQuery.trim()
-                      ? t("noMatchingSkills", "No matching skills.")
-                      : t("noSkills")}
-                </div>
-              </div>
-            ) : !hasVisibleSkills && searchQuery.trim() ? (
-              <div className="rounded-lg border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
-                {t("noMatchingSkills", "No matching skills.")}
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {currentCLIGroups.map((group) => (
-                  <section key={group.key} className="space-y-2">
-                    <div className="px-1">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={`h-2 w-2 rounded-full ${
-                              group.key === "connected"
-                                ? "bg-accent"
-                                : group.key === "notConnected"
-                                  ? "bg-amber-500"
-                                  : "bg-slate-400"
-                            }`}
-                          />
-                          <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                            {group.label}
-                          </h4>
-                        </div>
-                        <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
-                          {group.items.length}
-                        </span>
-                      </div>
-                      <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
-                        {group.description}
-                      </p>
-                    </div>
-
-                    {group.items.length === 0 ? (
-                      <div className="rounded-lg border border-dashed border-border px-3 py-4 text-xs text-muted-foreground">
-                        {t("emptyGroupState", "No skills in this group yet.")}
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        {group.items.map((skill) => {
-                          const selected = skill.id === selectedID;
-                          const currentTarget = skill.targets[currentTool];
-                          const otherTools = getEnabledTools(skill.targets).filter(
-                            (tool) => tool !== currentTool
-                          );
-
-                          return (
-                            <article
-                              key={skill.id}
-                              role="button"
-                              tabIndex={0}
-                              onClick={() => selectSkill(skill)}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter" || event.key === " ") {
-                                  event.preventDefault();
-                                  selectSkill(skill);
-                                }
-                              }}
-                              className={`rounded-lg border px-3 py-2.5 text-left transition-colors ${
-                                selected
-                                  ? "border-accent bg-accent/10 text-foreground shadow-sm"
-                                  : "border-border/70 bg-background/50 text-muted-foreground hover:border-border hover:bg-background/80 hover:text-foreground"
-                              }`}
-                            >
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="min-w-0">
-                                  <div className="truncate text-sm font-medium text-foreground">
-                                    {skill.name}
-                                  </div>
-                                  <div className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
-                                    {skill.description || "—"}
-                                  </div>
-                                </div>
-                                {currentTarget?.enabled ? (
-                                  <span className="shrink-0 rounded-full bg-accent/10 px-2 py-0.5 text-[11px] font-medium text-accent">
-                                    {currentTarget.method}
-                                  </span>
-                                ) : null}
-                              </div>
-
-                              <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
-                                <span className="rounded-full border border-border px-2 py-0.5 text-muted-foreground">
-                                  {skill.enabled ? t("enabled") : t("disabled")}
-                                </span>
-                                {otherTools.slice(0, 2).map((tool) => (
-                                  <span
-                                    key={tool}
-                                    className="rounded-full border border-border px-2 py-0.5 text-muted-foreground"
-                                  >
-                                    {toolLabels[tool]}
-                                  </span>
-                                ))}
-                                {otherTools.length > 2 ? (
-                                  <span className="rounded-full border border-border px-2 py-0.5 text-muted-foreground">
-                                    +{otherTools.length - 2}
-                                  </span>
-                                ) : null}
-                              </div>
-
-                              <div className="mt-2 min-w-0 overflow-hidden break-all rounded-md border border-border bg-background/70 px-2 py-1.5 text-[11px] leading-5 text-muted-foreground">
-                                {skill.source_path}
-                              </div>
-
-                              <div className="mt-2 flex flex-wrap gap-2">
-                                <button
-                                  type="button"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    openFolder(skill.source_path);
-                                  }}
-                                  className="rounded-md border border-border px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-                                >
-                                  {t("openSource", "Open Source")}
-                                </button>
-                              </div>
-                            </article>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </section>
-                ))}
-              </div>
-            )}
-          </div>
-        </aside>
-
-        <main className="flex min-h-[380px] min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-card xl:min-h-0">
-          <div className="border-b border-border px-4 py-3.5">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-base font-semibold text-foreground">
-                  {isCreating ? t("create") : t("edit")}
-                </h3>
-                <p className="mt-1 text-xs text-muted-foreground">{toolLabels[currentTool]}</p>
-              </div>
-              {!isCreating ? (
-                <span
-                  className={`rounded-full px-3 py-1 text-xs font-medium ${
-                    form.enabled
-                      ? "bg-accent text-white"
-                      : "border border-border text-muted-foreground"
-                  }`}
-                >
-                  {form.enabled ? t("enabled") : t("disabled")}
-                </span>
+              <button type="button" onClick={() => void loadOverview(selectedKey ?? undefined)} className={SECONDARY_BUTTON}>
+                {t("refresh")}
+              </button>
+              {overview?.library_path ? (
+                <button type="button" onClick={() => void openFolder(overview.library_path)} className={PRIMARY_BUTTON}>
+                  {t("skillsOpenLibrary")}
+                </button>
               ) : null}
             </div>
           </div>
+        </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-            {!showEditor ? (
-              <div className="rounded-lg border border-dashed border-border px-4 py-8 text-sm text-muted-foreground">
-                {t("noSkills")}
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <MetricCard
+            title={t("skillsMetricLibrary")}
+            value={overview?.summary.managed_skills ?? 0}
+            helper={t("skillsMetricLibraryHelp")}
+          />
+          <MetricCard
+            title={t("skillsMetricConnected")}
+            value={overview?.summary.connected_tools ?? 0}
+            helper={t("skillsMetricConnectedHelp")}
+          />
+          <MetricCard
+            title={t("skillsMetricIssues")}
+            value={overview?.summary.issue_count ?? 0}
+            helper={t("skillsMetricIssuesHelp")}
+          />
+          <MetricCard
+            title={t("skillsMetricUnmanaged")}
+            value={overview?.summary.unmanaged_skills ?? 0}
+            helper={t("skillsMetricUnmanagedHelp")}
+          />
+        </div>
+
+        {error ? (
+          <div className="rounded-2xl border border-red-500/25 bg-red-500/8 px-4 py-3 text-sm text-red-600 dark:text-red-300">
+            {error}
+          </div>
+        ) : null}
+        {message ? (
+          <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/8 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-300">
+            {message}
+          </div>
+        ) : null}
+
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(360px,0.9fr)]">
+          <section className="space-y-4">
+          <div className="rounded-[24px] border border-border bg-card p-4 shadow-sm">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div className="space-y-1">
+                <h2 className="text-lg font-semibold text-foreground">{t("skillsPrimaryListTitle")}</h2>
+                <p className="text-sm text-muted-foreground">{t("skillsPrimaryListDescription")}</p>
               </div>
-            ) : (
-              <div className="max-w-3xl space-y-6">
-                <section className="space-y-4">
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <label className="block space-y-2">
-                      <span className="text-sm font-medium text-foreground">
-                        {t("skillName", "Skill Name")}
-                      </span>
-                      <input
-                        type="text"
-                        value={form.name}
-                        onChange={(event) => updateForm({ name: event.target.value })}
-                        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition-colors focus:border-accent"
-                      />
-                    </label>
-                  </div>
 
-                  <label className="block space-y-2">
-                    <span className="text-sm font-medium text-foreground">
-                      {t("sourcePath")}
-                    </span>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={form.sourcePath}
-                        onChange={(event) => updateForm({ sourcePath: event.target.value })}
-                        className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition-colors focus:border-accent"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => openFolder(form.sourcePath)}
-                        className="shrink-0 rounded-lg border border-border px-3 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
-                      >
-                        {t("openFolder")}
-                      </button>
-                    </div>
-                  </label>
-
-                  <label className="block space-y-2">
-                    <span className="text-sm font-medium text-foreground">
-                      {t("description")}
-                    </span>
-                    <textarea
-                      value={form.description}
-                      onChange={(event) => updateForm({ description: event.target.value })}
-                      rows={4}
-                      className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition-colors focus:border-accent"
-                    />
-                  </label>
-                </section>
-
-                <section className="rounded-xl border border-border bg-background/40 p-4">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <h4 className="text-sm font-semibold text-foreground">
-                        {toolLabels[currentTool]}
-                      </h4>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {t(
-                          "currentCliSettingsDescription",
-                          "Configure how this skill syncs to the selected CLI."
-                        )}
-                      </p>
-                    </div>
-                    <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(form.targets[currentTool]?.enabled)}
-                        onChange={(event) =>
-                          updateTargetSelection({
-                            ...toolSelection,
-                            [currentTool]: event.target.checked,
-                          })
-                        }
-                        className="h-4 w-4 rounded border-border accent-accent"
-                      />
-                      <span>{t("connected", "Connected")}</span>
-                    </label>
-                  </div>
-
-                  {form.targets[currentTool]?.enabled ? (
-                    <label className="mt-4 block space-y-2">
-                      <span className="text-sm font-medium text-foreground">
-                        {t("syncMethod")}
-                      </span>
-                      <select
-                        value={form.targets[currentTool]?.method ?? getDefaultSyncMethod()}
-                        onChange={(event) =>
-                          updateTargetMethod(currentTool, event.target.value as SyncMethod)
-                        }
-                        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition-colors focus:border-accent"
-                      >
-                        <option value="symlink">{t("symlink")}</option>
-                        <option value="copy">{t("copy")}</option>
-                      </select>
-                    </label>
-                  ) : (
-                    <p className="mt-4 text-sm text-muted-foreground">
-                      {t(
-                        "notConnectedDescription",
-                        "Available to connect, but not installed for the current CLI yet."
-                      )}
-                    </p>
-                  )}
-                </section>
-
-                <section className="space-y-3">
-                  <div>
-                    <h4 className="text-sm font-semibold text-foreground">
-                      {t("otherCliSummary", "Other CLI summary")}
-                    </h4>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {TOOLS.filter((tool) => tool !== currentTool).map((tool) => {
-                        const target = form.targets[tool];
-
-                        return (
-                          <span
-                            key={tool}
-                            className="rounded-full border border-border px-2 py-1 text-xs text-muted-foreground"
-                          >
-                            {toolLabels[tool]} ·{" "}
-                            {target?.enabled
-                              ? `${t("connected", "Connected")} · ${target.method}`
-                              : t("notConnected", "Not Connected")}
-                          </span>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <details className="overflow-hidden rounded-lg border border-border bg-background/40">
-                    <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-foreground">
-                      {t("advancedCliSettings", "Advanced CLI settings")}
-                    </summary>
-                    <div className="space-y-4 border-t border-border px-4 py-4">
-                      <ToolTargets targets={toolSelection} onChange={updateTargetSelection} />
-                      {enabledTargets.length > 0 ? (
-                        <div className="grid gap-4 md:grid-cols-2">
-                          {enabledTargets.map((tool) => (
-                            <label key={tool} className="block space-y-2">
-                              <span className="text-sm font-medium text-foreground">
-                                {toolLabels[tool]} · {t("syncMethod")}
-                              </span>
-                              <select
-                                value={form.targets[tool]?.method ?? getDefaultSyncMethod()}
-                                onChange={(event) =>
-                                  updateTargetMethod(tool, event.target.value as SyncMethod)
-                                }
-                                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition-colors focus:border-accent"
-                              >
-                                <option value="symlink">{t("symlink")}</option>
-                                <option value="copy">{t("copy")}</option>
-                              </select>
-                            </label>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                  </details>
-                </section>
-
-                <section className="space-y-3">
-                  <h4 className="text-sm font-semibold text-foreground">
-                    {t("globalStatus", "Global status")}
-                  </h4>
-                  <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <input
-                      type="checkbox"
-                      checked={form.enabled}
-                      onChange={(event) => updateForm({ enabled: event.target.checked })}
-                      className="h-4 w-4 rounded border-border accent-accent"
-                    />
-                    <span>{t("enabled")}</span>
-                  </label>
-                </section>
-
-                <div className="flex flex-wrap items-center gap-3 border-t border-border pt-5">
-                  <button
-                    type="button"
-                    onClick={requestSave}
-                    disabled={submitting || previewingAction !== null}
-                    className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {previewingAction === "save" || submitting
-                      ? t("loading")
-                      : isCreating
-                        ? t("create")
-                        : t("save")}
-                  </button>
-                  {!isCreating && selectedSkill ? (
-                    <button
-                      type="button"
-                      onClick={requestDelete}
-                      disabled={submitting || previewingAction !== null}
-                      className="rounded-lg border border-red-500/40 px-4 py-2 text-sm text-red-500 transition-colors hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {previewingAction === "delete" ? t("loading") : t("delete")}
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() => openFolder(form.sourcePath)}
-                    className="rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
-                  >
-                    {t("openFolder")}
-                  </button>
+              <div className="flex flex-col gap-3 lg:items-end">
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder={t("skillsSearchPlaceholderNew")}
+                  className={`${INPUT_CLASS} min-w-[260px]`}
+                />
+                <div className="flex flex-wrap gap-2">
+                  <FilterChip
+                    active={filter === "all"}
+                    count={filteredCounts.all}
+                    label={t("all")}
+                    onClick={() => setFilter("all")}
+                  />
+                  <FilterChip
+                    active={filter === "issues"}
+                    count={filteredCounts.issues}
+                    label={t("skillsFilterIssues")}
+                    onClick={() => setFilter("issues")}
+                  />
+                  <FilterChip
+                    active={filter === "managed"}
+                    count={filteredCounts.managed}
+                    label={t("skillsFilterManaged")}
+                    onClick={() => setFilter("managed")}
+                  />
+                  <FilterChip
+                    active={filter === "unmanaged"}
+                    count={filteredCounts.unmanaged}
+                    label={t("skillsFilterUnmanaged")}
+                    onClick={() => setFilter("unmanaged")}
+                  />
                 </div>
               </div>
-            )}
+            </div>
           </div>
-        </main>
-      </div>
 
-      {pendingAction ? (
-        <ConfirmPanel
-          title={pendingAction.title}
-          affectedFiles={pendingAction.affectedFiles}
-          onCancel={() => setPendingAction(null)}
-          onConfirm={confirmPendingAction}
-          confirmLabel={pendingAction.confirmLabel}
-          loading={submitting}
-        />
-      ) : null}
+          {loading ? (
+            <div className="rounded-[24px] border border-border bg-card px-6 py-10 text-sm text-muted-foreground">
+              {t("loading")}
+            </div>
+          ) : visibleSkills.length === 0 ? (
+            <div className="rounded-[24px] border border-dashed border-border bg-card px-6 py-10 text-center">
+              <h3 className="text-base font-semibold text-foreground">{t("skillsEmptyTitle")}</h3>
+              <p className="mt-2 text-sm leading-7 text-muted-foreground">{t("skillsEmptyDescription")}</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {visibleSkills.map((skill) => {
+                const active = selectionKey(skill) === selectedKey;
+                return (
+                  <button
+                    key={selectionKey(skill)}
+                    type="button"
+                    onClick={() => setSelectedKey(selectionKey(skill))}
+                    className={`w-full rounded-[24px] border p-5 text-left shadow-sm transition-all ${
+                      active
+                        ? "border-accent/40 bg-accent/6 ring-2 ring-accent/20"
+                        : `${issueTone(skill.issues.length)} hover:border-accent/20 hover:bg-muted/30`
+                    }`}
+                  >
+                    <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                      <div className="min-w-0 space-y-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-lg font-semibold text-foreground">{skill.name}</h3>
+                          <span className="rounded-full border border-border px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                            {skill.managed ? t("skillsManagedLabel") : t("skillsUnmanagedLabel")}
+                          </span>
+                          {skill.issues.length > 0 ? (
+                            <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                              {t("skillsIssuesBadge", { count: skill.issues.length })}
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="text-sm leading-7 text-muted-foreground">
+                          {skill.description || t("skillsNoDescription")}
+                        </p>
+                        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+                          <div className="rounded-2xl border border-border/70 bg-background/90 p-3">
+                            <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                              {t("skillsLibraryColumn")}
+                            </div>
+                            <div className="mt-2 text-sm font-medium text-foreground">
+                              {skill.library.present ? pathTail(skill.library.path) : t("skillsNotInLibrary")}
+                            </div>
+                            <div className="mt-1 text-xs text-muted-foreground">
+                              {skill.library.path || t("skillsLibraryMissingHint")}
+                            </div>
+                          </div>
+                          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                            {TOOLS.map((tool) => (
+                              <ToolPill key={tool} tool={tool} state={skill.tools[tool]} t={t} />
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          </section>
+
+          <aside className="xl:sticky xl:top-6 xl:self-start">
+            <div className="rounded-[28px] border border-border bg-card p-5 shadow-sm">
+            {!selectedSkill ? (
+              creating ? (
+                <div className="space-y-6">
+                  <div className="space-y-3">
+                    <h2 className="text-lg font-semibold text-foreground">{t("skillsCreateTitle")}</h2>
+                    <p className="text-sm leading-7 text-muted-foreground">
+                      {t("skillsCreateDescription")}
+                    </p>
+                  </div>
+
+                  <div className="space-y-4 rounded-2xl border border-border bg-background/70 p-4">
+                    <div className="space-y-3">
+                      <div>
+                        <label className="mb-1.5 block text-sm font-medium text-foreground">
+                          {t("skillName")}
+                        </label>
+                        <input
+                          value={form.name}
+                          onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+                          className={INPUT_CLASS}
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-sm font-medium text-foreground">
+                          {t("description")}
+                        </label>
+                        <textarea
+                          value={form.description}
+                          onChange={(event) =>
+                            setForm((current) => ({ ...current, description: event.target.value }))
+                          }
+                          rows={3}
+                          className={`${INPUT_CLASS} resize-y`}
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-sm font-medium text-foreground">
+                          {t("sourcePath")}
+                        </label>
+                        <input
+                          value={form.sourcePath}
+                          onChange={(event) =>
+                            setForm((current) => ({ ...current, sourcePath: event.target.value }))
+                          }
+                          className={INPUT_CLASS}
+                        />
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                      <button
+                        type="button"
+                        onClick={() => void createSkill()}
+                        disabled={!form.name.trim() || !form.sourcePath.trim() || saving}
+                        className={PRIMARY_BUTTON}
+                      >
+                        {saving ? t("loading") : t("skillsCreateNew")}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCreating(false);
+                          setForm(createFormState(null));
+                        }}
+                        className={SECONDARY_BUTTON}
+                      >
+                        {t("cancel")}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4 rounded-2xl border border-dashed border-border bg-background/50 px-5 py-8">
+                  <h2 className="text-lg font-semibold text-foreground">{t("skillsDetailTitle")}</h2>
+                  <p className="text-sm leading-7 text-muted-foreground">{t("skillsDetailEmpty")}</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCreating(true);
+                      setForm(createFormState(null));
+                    }}
+                    className={PRIMARY_BUTTON}
+                  >
+                    {t("skillsCreateNew")}
+                  </button>
+                </div>
+              )
+            ) : (
+              <div className="space-y-6">
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                        {t("skillsDetailTitle")}
+                      </div>
+                      <h2 className="mt-2 text-2xl font-semibold tracking-tight text-foreground">
+                        {selectedSkill.name}
+                      </h2>
+                    </div>
+                    {selectedSkill.managed ? (
+                      <button
+                        type="button"
+                        onClick={() => setPendingDelete(selectedSkill)}
+                        className="inline-flex min-h-10 items-center justify-center rounded-lg border border-red-500/30 px-3 py-2 text-sm text-red-500 transition-colors hover:bg-red-500/10"
+                      >
+                        {t("delete")}
+                      </button>
+                    ) : null}
+                  </div>
+                  <p className="text-sm leading-7 text-muted-foreground">
+                    {selectedSkill.description || t("skillsNoDescription")}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-border bg-background/70 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                        {t("skillsLibraryColumn")}
+                      </div>
+                      <div className="mt-2 text-sm font-medium text-foreground">
+                        {selectedSkill.library.path || t("skillsNotInLibrary")}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedSkill.library.path ? (
+                        <button
+                          type="button"
+                          onClick={() => void openFolder(selectedSkill.library.path)}
+                          className={GHOST_BUTTON}
+                        >
+                          {t("skillsOpenFolder")}
+                        </button>
+                      ) : null}
+                      {!selectedSkill.managed && selectedSkill.library.path && apiFlavor === "overview" ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void importManaged(selectedSkill, selectedSkill.library.path, "global")
+                          }
+                          disabled={mutatingTool === "global"}
+                          className={PRIMARY_BUTTON}
+                        >
+                          {t("skillsAdoptLibrary")}
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+
+                {selectedSkill.issues.length > 0 ? (
+                  <div className="space-y-3 rounded-2xl border border-amber-500/30 bg-amber-500/8 p-4">
+                    <div className="space-y-1">
+                      <h3 className="text-base font-semibold text-foreground">{t("skillsIssuesTitle")}</h3>
+                      <p className="text-sm leading-6 text-muted-foreground">
+                        {t("skillsIssuesDescription")}
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      {Object.entries(toolIssueSummary(selectedSkill.issues)).map(([code, tools]) => (
+                        <div
+                          key={code}
+                          className="rounded-xl border border-amber-500/20 bg-background/80 px-3 py-2"
+                        >
+                          <div className="text-sm font-medium text-foreground">
+                            {getStatusLabel(t, code as SkillStatus)}
+                          </div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            {tools.map((tool) => TOOL_LABELS[tool as ToolTarget] ?? tool).join(" / ")}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {selectedSkill.managed ? (
+                  <div className="space-y-4 rounded-2xl border border-border bg-background/70 p-4">
+                    <div className="space-y-1">
+                      <h3 className="text-base font-semibold text-foreground">{t("skillsEditSection")}</h3>
+                      <p className="text-sm leading-6 text-muted-foreground">{t("skillsEditDescription")}</p>
+                    </div>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="mb-1.5 block text-sm font-medium text-foreground">
+                          {t("skillName")}
+                        </label>
+                        <input
+                          value={form.name}
+                          onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+                          className={INPUT_CLASS}
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-sm font-medium text-foreground">
+                          {t("description")}
+                        </label>
+                        <textarea
+                          value={form.description}
+                          onChange={(event) =>
+                            setForm((current) => ({ ...current, description: event.target.value }))
+                          }
+                          rows={3}
+                          className={`${INPUT_CLASS} resize-y`}
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-sm font-medium text-foreground">
+                          {t("sourcePath")}
+                        </label>
+                        <input
+                          value={form.sourcePath}
+                          onChange={(event) =>
+                            setForm((current) => ({ ...current, sourcePath: event.target.value }))
+                          }
+                          className={INPUT_CLASS}
+                        />
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                      <button
+                        type="button"
+                        onClick={() => void saveSkill()}
+                        disabled={!hasUnsavedChanges || saving}
+                        className={PRIMARY_BUTTON}
+                      >
+                        {saving ? t("loading") : t("save")}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setForm(createFormState(selectedSkill))}
+                        disabled={!hasUnsavedChanges || saving}
+                        className={SECONDARY_BUTTON}
+                      >
+                        {t("resetChanges")}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
+                {selectedSkill.variants.length > 0 ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="text-base font-semibold text-foreground">{t("skillsVariantSection")}</h3>
+                      <span className="text-sm text-muted-foreground">{selectedSkill.variants.length}</span>
+                    </div>
+                    <div className="space-y-3">
+                      {selectedSkill.variants.map((variant) => (
+                        <div key={`${variant.id}-${variant.source_path}`} className="rounded-2xl border border-border bg-background/70 p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="rounded-full border border-border px-2 py-0.5 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+                                  {variant.managed ? t("skillsManagedVariant") : t("skillsDiscoveredVariant")}
+                                </span>
+                                <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
+                                  {variant.origin_tool || "global"}
+                                </span>
+                              </div>
+                              <div className="mt-2 break-all text-sm font-medium text-foreground">
+                                {variant.source_path}
+                              </div>
+                              <div className="mt-1 text-xs text-muted-foreground">
+                                hash {hashPreview(variant.hash)}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void openFolder(variant.source_path)}
+                              className={GHOST_BUTTON}
+                            >
+                              {t("skillsOpenFolder")}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="space-y-4">
+                  <div className="space-y-1">
+                    <h3 className="text-base font-semibold text-foreground">{t("skillsToolSection")}</h3>
+                    <p className="text-sm leading-6 text-muted-foreground">{t("skillsToolDescription")}</p>
+                  </div>
+                  <div className="space-y-4">
+                    {TOOLS.map((tool) => {
+                      const state = selectedSkill.tools[tool];
+                      const canSelectVariants = selectedSkill.managed && selectedSkill.variants.length > 0;
+                      return (
+                        <div key={tool} className="rounded-2xl border border-border bg-background/70 p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-semibold text-foreground">{TOOL_LABELS[tool]}</div>
+                              <div className="mt-1 text-sm text-muted-foreground">
+                                {getStatusLabel(t, state?.status ?? "not_installed")}
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void mutateToolTarget(
+                                    tool,
+                                    {
+                                      enabled: !(state?.enabled ?? false),
+                                      selected_variant_id:
+                                        state?.selected_variant_id ||
+                                        selectedSkill.library.variant_id ||
+                                        selectedSkill.variants[0]?.id ||
+                                        0,
+                                    },
+                                    state?.enabled ? t("skillsDisconnected") : t("skillsConnected")
+                                  )
+                                }
+                                disabled={!selectedSkill.managed || mutatingTool === tool || !canSelectVariants}
+                                className={SECONDARY_BUTTON}
+                              >
+                                {state?.enabled ? t("disconnect") : t("connect")}
+                              </button>
+                              {state?.actual[0]?.path ? (
+                                <button
+                                  type="button"
+                                  onClick={() => void openFolder(state.actual[0].path)}
+                                  className={GHOST_BUTTON}
+                                >
+                                  {t("skillsOpenInstalled")}
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+
+                          {selectedSkill.managed ? (
+                            <div className="mt-4 space-y-3">
+                              <div className="flex flex-wrap gap-2">
+                                {(["symlink", "copy"] as SyncMethod[]).map((method) => (
+                                  <button
+                                    key={method}
+                                    type="button"
+                                    onClick={() =>
+                                      void mutateToolTarget(tool, { method }, t("skillsMethodUpdated"))
+                                    }
+                                    disabled={mutatingTool === tool}
+                                    className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                                      (state?.method ?? "symlink") === method
+                                        ? "bg-accent text-white"
+                                        : "border border-border text-muted-foreground hover:text-foreground"
+                                    }`}
+                                  >
+                                    {method}
+                                  </button>
+                                ))}
+                              </div>
+                              <div className="grid gap-2">
+                                {selectedSkill.variants.map((variant) => {
+                                  const active = state?.selected_variant_id === variant.id && state?.enabled;
+                                  return (
+                                    <button
+                                      key={`${tool}-${variant.id}`}
+                                      type="button"
+                                      onClick={() =>
+                                        void mutateToolTarget(
+                                          tool,
+                                          { enabled: true, selected_variant_id: variant.id },
+                                          t("skillsVariantApplied")
+                                        )
+                                      }
+                                      disabled={mutatingTool === tool}
+                                      className={`flex min-h-11 items-center justify-between rounded-xl border px-3 py-2 text-left text-sm transition-colors ${
+                                        active
+                                          ? "border-accent bg-accent/8 text-foreground"
+                                          : "border-border bg-background hover:bg-muted"
+                                      }`}
+                                    >
+                                      <span className="min-w-0">
+                                        <span className="block truncate font-medium">
+                                          {pathTail(variant.source_path)}
+                                        </span>
+                                        <span className="block text-xs text-muted-foreground">
+                                          hash {hashPreview(variant.hash)}
+                                        </span>
+                                      </span>
+                                      {active ? (
+                                        <span className="rounded-full border border-accent/20 bg-accent/10 px-2 py-0.5 text-[11px] font-medium text-accent">
+                                          {t("skillsCurrentSelection")}
+                                        </span>
+                                      ) : null}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {!selectedSkill.managed && state?.actual[0]?.path && apiFlavor === "overview" ? (
+                            <div className="mt-4">
+                              <button
+                                type="button"
+                                onClick={() => void importManaged(selectedSkill, state.actual[0].path, tool)}
+                                disabled={mutatingTool === tool}
+                                className={PRIMARY_BUTTON}
+                              >
+                                {t("skillsAdoptFromTool", { tool: TOOL_LABELS[tool] })}
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {!selectedSkill.managed && selectedSkill.discovered.length > 0 ? (
+                  <div className="space-y-3 rounded-2xl border border-border bg-background/70 p-4">
+                    <h3 className="text-base font-semibold text-foreground">{t("skillsDiscoveredSection")}</h3>
+                    <div className="space-y-2">
+                      {selectedSkill.discovered.map((entry) => (
+                        <div
+                          key={`${entry.tool}-${entry.path}`}
+                          className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 bg-background px-3 py-2"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm font-medium text-foreground">
+                              {entry.tool === "global" ? t("skillsLibraryColumn") : entry.tool}
+                            </div>
+                            <div className="mt-1 break-all text-xs text-muted-foreground">{entry.path}</div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void openFolder(entry.path)}
+                            className={GHOST_BUTTON}
+                          >
+                            {t("skillsOpenFolder")}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            )}
+            </div>
+          </aside>
+        </div>
+
+        {pendingDelete ? (
+          <ConfirmPanel
+            title={t("skillsDeleteConfirmTitle")}
+            affectedFiles={[
+              {
+                path: pendingDelete.primary_path || pendingDelete.library.path || pendingDelete.name,
+                tool: "global",
+                operation: "delete",
+              },
+            ]}
+            confirmLabel={t("delete")}
+            loading={saving}
+            onCancel={() => setPendingDelete(null)}
+            onConfirm={() => void deleteSkill()}
+          />
+        ) : null}
+      </div>
     </div>
   );
 }

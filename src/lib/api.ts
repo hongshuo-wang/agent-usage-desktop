@@ -2,6 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 
 let cachedPort: number | null = null;
 
+function clearPortCache() {
+  cachedPort = null;
+}
+
 async function getPort(): Promise<number> {
   if (cachedPort) return cachedPort;
   // Retry up to 100 times (10s total) waiting for sidecar to be ready
@@ -20,6 +24,12 @@ async function getPort(): Promise<number> {
   throw new Error("Sidecar not ready");
 }
 
+type ApiErrorPayload = {
+  error?: string;
+  message?: string;
+  details?: unknown;
+};
+
 function buildQuery(params: {
   from: string;
   to: string;
@@ -35,24 +45,83 @@ function buildQuery(params: {
   return q.toString();
 }
 
+async function parseApiError(res: Response): Promise<ApiError> {
+  let payload: ApiErrorPayload | null = null;
+  let fallbackMessage = `API error: ${res.status}`;
+
+  try {
+    const contentType = res.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      payload = (await res.json()) as ApiErrorPayload;
+    } else {
+      const text = (await res.text()).trim();
+      if (text) {
+        fallbackMessage = text;
+      }
+    }
+  } catch {
+    // Ignore body parsing failures and fall back to the HTTP status.
+  }
+
+  return new ApiError(
+    payload?.error ?? "UNKNOWN",
+    payload?.message ?? fallbackMessage,
+    payload?.details,
+    res.status
+  );
+}
+
+async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
+  let retriedAfterRefresh = false;
+
+  while (true) {
+    const usedCachedPort = cachedPort !== null;
+    const port = await getPort();
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/${path}`, init);
+      if (!res.ok) {
+        const err = await parseApiError(res);
+        if (!retriedAfterRefresh && usedCachedPort) {
+          clearPortCache();
+          retriedAfterRefresh = true;
+          continue;
+        }
+        throw err;
+      }
+
+      try {
+        return (await res.json()) as T;
+      } catch (err) {
+        if (!retriedAfterRefresh && usedCachedPort) {
+          clearPortCache();
+          retriedAfterRefresh = true;
+          continue;
+        }
+        throw err;
+      }
+    } catch (err) {
+      if (!retriedAfterRefresh && usedCachedPort) {
+        clearPortCache();
+        retriedAfterRefresh = true;
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 export async function fetchAPI<T>(path: string, params: {
   from: string;
   to: string;
   granularity?: string;
   source?: string;
 }): Promise<T> {
-  const port = await getPort();
-  const url = `http://127.0.0.1:${port}/api/${path}?${buildQuery(params)}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
-  return res.json();
+  return requestJSON<T>(`${path}?${buildQuery(params)}`);
 }
 
 export async function fetchRaw<T>(path: string): Promise<T> {
-  const port = await getPort();
-  const res = await fetch(`http://127.0.0.1:${port}/api/${path}`);
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
-  return res.json();
+  return requestJSON<T>(path);
 }
 
 export async function mutateAPI<T>(
@@ -60,19 +129,11 @@ export async function mutateAPI<T>(
   path: string,
   body?: unknown
 ): Promise<T> {
-  const port = await getPort();
-  const res = await fetch(`http://127.0.0.1:${port}/api/${path}`, {
+  return requestJSON<T>(path, {
     method,
     headers: { "Content-Type": "application/json" },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) {
-    const err = await res
-      .json()
-      .catch(() => ({ error: "UNKNOWN", message: `API error: ${res.status}` }));
-    throw new ApiError(err.error, err.message, err.details, res.status);
-  }
-  return res.json();
 }
 
 export class ApiError extends Error {
@@ -83,5 +144,6 @@ export class ApiError extends Error {
     public status: number
   ) {
     super(message);
+    this.name = "ApiError";
   }
 }

@@ -245,7 +245,7 @@ func TestCodexAdapterMetadata(t *testing.T) {
 	}
 
 	skillPaths := adapter.GetSkillPaths()
-	wantSkills := []string{filepath.Join(homeDir, ".agents", "skills")}
+	wantSkills := []string{filepath.Join(codexDir, "skills")}
 	if !reflect.DeepEqual(skillPaths, wantSkills) {
 		t.Fatalf("GetSkillPaths() = %v, want %v", skillPaths, wantSkills)
 	}

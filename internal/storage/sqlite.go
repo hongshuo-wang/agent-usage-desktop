@@ -228,6 +228,7 @@ func migrate(db *sql.DB) error {
 					tool TEXT NOT NULL,
 					method TEXT NOT NULL DEFAULT 'symlink',
 					enabled INTEGER NOT NULL DEFAULT 1,
+					variant_id INTEGER NOT NULL DEFAULT 0,
 					PRIMARY KEY (skill_id, tool),
 					FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE
 				);
@@ -252,6 +253,19 @@ func migrate(db *sql.DB) error {
 				);
 			`,
 		},
+		{
+			"006_skill_variants", `
+				CREATE TABLE IF NOT EXISTS skill_variants (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					skill_id INTEGER NOT NULL,
+					source_path TEXT NOT NULL,
+					origin_tool TEXT NOT NULL DEFAULT 'global',
+					created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					UNIQUE (skill_id, source_path),
+					FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE
+				);
+			`,
+		},
 	}
 	for _, m := range migrations {
 		var done string
@@ -264,6 +278,53 @@ func migrate(db *sql.DB) error {
 		}
 		db.Exec(`INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
 			"migration_"+m.id, "done")
+	}
+	db.Exec("ALTER TABLE skill_targets ADD COLUMN variant_id INTEGER NOT NULL DEFAULT 0")
+	return backfillSkillVariants(db)
+}
+
+func backfillSkillVariants(db *sql.DB) error {
+	rows, err := db.Query(`SELECT id, source_path FROM skills ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	type skillSeed struct {
+		id         int64
+		sourcePath string
+	}
+	var seeds []skillSeed
+	for rows.Next() {
+		var seed skillSeed
+		if err := rows.Scan(&seed.id, &seed.sourcePath); err != nil {
+			return err
+		}
+		seeds = append(seeds, seed)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, seed := range seeds {
+		var variantID int64
+		err := db.QueryRow(`SELECT id FROM skill_variants WHERE skill_id = ? AND source_path = ?`, seed.id, seed.sourcePath).Scan(&variantID)
+		if err == sql.ErrNoRows {
+			result, execErr := db.Exec(`INSERT INTO skill_variants(skill_id, source_path, origin_tool) VALUES(?, ?, 'global')`, seed.id, seed.sourcePath)
+			if execErr != nil {
+				return execErr
+			}
+			variantID, execErr = result.LastInsertId()
+			if execErr != nil {
+				return execErr
+			}
+		} else if err != nil {
+			return err
+		}
+
+		if _, err := db.Exec(`UPDATE skill_targets SET variant_id = ? WHERE skill_id = ? AND variant_id = 0`, variantID, seed.id); err != nil {
+			return err
+		}
 	}
 	return nil
 }

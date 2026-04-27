@@ -244,16 +244,11 @@ func (a *CodexAdapter) SetMCPServers(servers []MCPServerConfig) ([]AffectedFile,
 }
 
 func (a *CodexAdapter) GetSkillPaths() []string {
-	homeDir, err := os.UserHomeDir()
-	if err == nil && homeDir != "" {
-		return []string{filepath.Join(homeDir, ".agents", "skills")}
-	}
-
 	if a.codexDir == "" {
 		return nil
 	}
 
-	return []string{filepath.Join(filepath.Dir(a.codexDir), ".agents", "skills")}
+	return []string{filepath.Join(a.codexDir, "skills")}
 }
 
 func (a *CodexAdapter) ConfigFiles() []ConfigFileInfo {
