@@ -1,6 +1,7 @@
 package configmanager
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,8 @@ type Manager struct {
 	setSkillTargetsFn func(int64, []storage.SkillTargetRecord) error
 	encryptionKey     []byte
 	keyProvider       func() ([]byte, error)
+	detectSkillsCLIFn func() SkillCLIStatus
+	runSkillsCLIFn    func(context.Context, ...string) (string, error)
 	mu                sync.Mutex
 }
 
@@ -61,6 +64,8 @@ func NewManager(db *storage.DB, backupDir string, opts ...ManagerOption) *Manage
 		skillSymlinkFn:    os.Symlink,
 		setSkillTargetsFn: db.SetSkillTargets,
 		keyProvider:       GetOrCreateEncryptionKey,
+		detectSkillsCLIFn: detectSkillsCLI,
+		runSkillsCLIFn:    runSkillsCLI,
 	}
 	m.syncEngine = NewSyncEngine(db, m.backup)
 
@@ -109,6 +114,14 @@ func WithEncryptionKeyProvider(provider func() ([]byte, error)) ManagerOption {
 	return func(m *Manager) {
 		if provider != nil {
 			m.keyProvider = provider
+		}
+	}
+}
+
+func WithSkillsCLIRunner(runner func(context.Context, ...string) (string, error)) ManagerOption {
+	return func(m *Manager) {
+		if runner != nil {
+			m.runSkillsCLIFn = runner
 		}
 	}
 }

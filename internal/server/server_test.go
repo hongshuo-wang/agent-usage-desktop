@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -110,6 +111,20 @@ func tempManager(t *testing.T, db *storage.DB) *configmanager.Manager {
 	)
 }
 
+func tempManagerWithSkillsRunner(
+	t *testing.T,
+	db *storage.DB,
+	runner func(context.Context, ...string) (string, error),
+) *configmanager.Manager {
+	t.Helper()
+	return configmanager.NewManager(
+		db,
+		t.TempDir(),
+		configmanager.WithEncryptionKey([]byte("12345678901234567890123456789012")),
+		configmanager.WithSkillsCLIRunner(runner),
+	)
+}
+
 func TestCreateAndListProfiles(t *testing.T) {
 	db := tempDB(t)
 	srv := New(db, tempManager(t, db), "127.0.0.1:0")
@@ -212,6 +227,98 @@ func TestProfileMutationsReturnAffectedFilesField(t *testing.T) {
 	}
 	if deleted.AffectedFiles == nil {
 		t.Fatalf("delete affected_files = nil, want empty array")
+	}
+}
+
+func TestInstallAgentUsageSkillPassesRequestedAgents(t *testing.T) {
+	db := tempDB(t)
+	var called []string
+	srv := New(
+		db,
+		tempManagerWithSkillsRunner(t, db, func(_ context.Context, args ...string) (string, error) {
+			called = append([]string(nil), args...)
+			return "installed\n", nil
+		}),
+		"127.0.0.1:0",
+	)
+	handler := srv.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/config/skills/agent-usage/install", bytes.NewBufferString(`{"agents":["openclaw","codex"]}`))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	want := []string{
+		"add",
+		"hongshuo-wang/agent-usage-desktop",
+		"--global",
+		"--skill", "agent-usage-desktop",
+		"--agent", "codex",
+		"--agent", "openclaw",
+		"--yes",
+	}
+	if strings.Join(called, " ") != strings.Join(want, " ") {
+		t.Fatalf("args = %v, want %v", called, want)
+	}
+}
+
+func TestInstallAgentUsageSkillDefaultsToAllAgentsForEmptyBody(t *testing.T) {
+	db := tempDB(t)
+	var called []string
+	srv := New(
+		db,
+		tempManagerWithSkillsRunner(t, db, func(_ context.Context, args ...string) (string, error) {
+			called = append([]string(nil), args...)
+			return "installed\n", nil
+		}),
+		"127.0.0.1:0",
+	)
+	handler := srv.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/config/skills/agent-usage/install", http.NoBody)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	want := []string{
+		"add",
+		"hongshuo-wang/agent-usage-desktop",
+		"--global",
+		"--skill", "agent-usage-desktop",
+		"--agent", "claude-code",
+		"--agent", "codex",
+		"--agent", "opencode",
+		"--agent", "openclaw",
+		"--yes",
+	}
+	if strings.Join(called, " ") != strings.Join(want, " ") {
+		t.Fatalf("args = %v, want %v", called, want)
+	}
+}
+
+func TestInstallAgentUsageSkillRejectsInvalidAgentsBody(t *testing.T) {
+	db := tempDB(t)
+	srv := New(
+		db,
+		tempManagerWithSkillsRunner(t, db, func(_ context.Context, args ...string) (string, error) {
+			return "installed\n", nil
+		}),
+		"127.0.0.1:0",
+	)
+	handler := srv.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/config/skills/agent-usage/install", bytes.NewBufferString(`{"agents":[]}`))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", w.Code, w.Body.String())
 	}
 }
 

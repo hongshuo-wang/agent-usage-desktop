@@ -76,6 +76,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/config/skills", s.handleListSkills)
 	mux.HandleFunc("GET /api/config/skills/overview", s.handleSkillsOverview)
 	mux.HandleFunc("GET /api/config/skills/inventory", s.handleSkillsInventory)
+	mux.HandleFunc("POST /api/config/skills/agent-usage/install", s.handleInstallAgentUsageSkill)
+	mux.HandleFunc("POST /api/config/skills/agent-usage/uninstall", s.handleUninstallAgentUsageSkill)
 	mux.HandleFunc("POST /api/config/skills/import", s.handleImportSkills)
 	mux.HandleFunc("POST /api/config/skills/import-managed", s.handleImportManagedSkill)
 	mux.HandleFunc("POST /api/config/skills/conflicts/resolve", s.handleResolveSkillConflict)

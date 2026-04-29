@@ -1,5 +1,5 @@
-import { openPath as open } from "@tauri-apps/plugin-opener";
-import { useEffect, useMemo, useState } from "react";
+import { openPath as open, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import ConfirmPanel, { type AffectedFile } from "../../components/ConfirmPanel";
 import SyncStatus from "../../components/SyncStatus";
@@ -22,6 +22,7 @@ type SkillOverview = {
     command: string;
     message: string;
   };
+  tool_availability?: Partial<Record<ToolTarget, boolean>>;
   summary: {
     managed_skills: number;
     visible_skills: number;
@@ -91,6 +92,16 @@ type MutationResponse = {
   affected_files: AffectedFile[];
 };
 
+type SkillsCLIToolStatus = "connected" | "available" | "missing_cli";
+
+type SkillsCLIToolCard = {
+  tool: ToolTarget;
+  label: string;
+  cliAvailable: boolean;
+  skillConnected: boolean;
+  status: SkillsCLIToolStatus;
+};
+
 type ImportManagedSkillResponse = MutationResponse & {
   skill_id: number;
   variant_id: number;
@@ -99,6 +110,7 @@ type ImportManagedSkillResponse = MutationResponse & {
 
 type FilterMode = "all" | "issues" | "managed" | "unmanaged";
 type SkillsAPIFlavor = "overview" | "legacy";
+type ScopeMode = ToolTarget;
 
 type SkillFormState = {
   name: string;
@@ -150,6 +162,7 @@ type LegacyInventory = {
     command: string;
     message: string;
   };
+  tool_availability?: Partial<Record<ToolTarget, boolean>>;
   library: LegacyInventoryEntry[];
   discovered: LegacyInventoryEntry[];
   conflicts: Array<{
@@ -165,12 +178,14 @@ type LegacyInventory = {
   };
 };
 
+type Translate = (key: string, options?: Record<string, unknown>) => string;
+
 const PRIMARY_BUTTON =
-  "inline-flex min-h-11 items-center justify-center rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-60";
+  "inline-flex min-h-11 cursor-pointer items-center justify-center rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent/90 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-60";
 const SECONDARY_BUTTON =
-  "inline-flex min-h-11 items-center justify-center rounded-xl border border-border px-4 py-2 text-sm text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-60";
+  "inline-flex min-h-11 cursor-pointer items-center justify-center rounded-xl border border-border bg-background px-4 py-2 text-sm text-foreground transition-colors hover:bg-muted motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-60";
 const GHOST_BUTTON =
-  "inline-flex min-h-10 items-center justify-center rounded-lg border border-border/70 px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-60";
+  "inline-flex min-h-10 cursor-pointer items-center justify-center rounded-lg border border-border/70 px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-60";
 const INPUT_CLASS =
   "w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none transition-colors focus:border-accent focus:ring-4 focus:ring-accent/10";
 
@@ -199,18 +214,65 @@ function pathTail(path: string) {
   return index >= 0 ? normalized.slice(index + 1) : normalized;
 }
 
+function getFolderPath(path: string) {
+  const normalized = path.trim().replace(/[\\/]+$/, "");
+  if (!normalized) {
+    return "";
+  }
+
+  if (normalized === "/") {
+    return "/";
+  }
+
+  if (/^[A-Za-z]:\\?$/.test(normalized)) {
+    return normalized.endsWith("\\") ? normalized : `${normalized}\\`;
+  }
+
+  const lastSeparator = Math.max(normalized.lastIndexOf("/"), normalized.lastIndexOf("\\"));
+  if (lastSeparator === -1) {
+    return "";
+  }
+  if (lastSeparator === 0) {
+    return normalized[0] === "/" ? "/" : "";
+  }
+
+  const driveRootMatch = normalized.slice(0, lastSeparator + 1).match(/^[A-Za-z]:\\$/);
+  if (driveRootMatch) {
+    return driveRootMatch[0];
+  }
+
+  return normalized.slice(0, lastSeparator);
+}
+
+function getOpenCandidates(path: string) {
+  const candidates = [path.trim(), getFolderPath(path)];
+  return candidates.filter((candidate, index, all) => candidate && all.indexOf(candidate) === index);
+}
+
 function normalizeSkillName(name: string) {
   return name.trim().toLowerCase();
 }
 
-function issueTone(issueCount: number) {
-  if (issueCount > 0) {
-    return "border-amber-500/30 bg-amber-500/8";
+function getAgentUsageInstalledAgents(overview: SkillOverview | null | undefined) {
+  const skill = (overview?.skills ?? []).find((item) => normalizeSkillName(item.name) === "agent-usage-desktop");
+  if (!skill) {
+    return [] as ToolTarget[];
   }
-  return "border-border bg-background/80";
+
+  return TOOLS.filter((tool) => {
+    const state = skill.tools[tool];
+    if (state?.enabled || (state?.actual.length ?? 0) > 0) {
+      return true;
+    }
+    return skill.discovered.some((entry) => entry.tool === tool);
+  });
 }
 
-function getStatusLabel(t: (key: string) => string, status: SkillStatus) {
+function skillsCliManualAgent(tool: ToolTarget) {
+  return tool === "claude" ? "claude-code" : tool;
+}
+
+function getStatusLabel(t: Translate, status: SkillStatus) {
   switch (status) {
     case "using_selected":
       return t("skillsStatusUsingSelected");
@@ -224,6 +286,20 @@ function getStatusLabel(t: (key: string) => string, status: SkillStatus) {
       return t("skillsStatusUnmanaged");
     default:
       return t("skillsStatusNotInstalled");
+  }
+}
+
+function getStatusTone(status: SkillStatus) {
+  switch (status) {
+    case "using_selected":
+      return "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
+    case "missing_variant":
+    case "missing_install":
+    case "out_of_sync":
+    case "unmanaged":
+      return "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300";
+    default:
+      return "border-border bg-background text-muted-foreground";
   }
 }
 
@@ -261,9 +337,13 @@ function matchesQuery(skill: SkillOverviewItem, query: string) {
   return haystack.includes(search);
 }
 
-function matchesFilter(skill: SkillOverviewItem, filter: FilterMode) {
+function issuesForTool(skill: SkillOverviewItem, tool: ToolTarget) {
+  return skill.issues.filter((issue) => issue.tool === tool);
+}
+
+function matchesFilter(skill: SkillOverviewItem, filter: FilterMode, scope: ToolTarget) {
   if (filter === "issues") {
-    return skill.issues.length > 0;
+    return issuesForTool(skill, scope).length > 0;
   }
   if (filter === "managed") {
     return skill.managed;
@@ -274,105 +354,15 @@ function matchesFilter(skill: SkillOverviewItem, filter: FilterMode) {
   return true;
 }
 
-function MetricCard({
-  title,
-  value,
-  helper,
-}: {
-  title: string;
-  value: number | string;
-  helper: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-border bg-background/80 p-4 shadow-sm">
-      <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
-        {title}
-      </div>
-      <div className="mt-3 text-3xl font-semibold text-foreground">{value}</div>
-      <div className="mt-2 text-sm leading-6 text-muted-foreground">{helper}</div>
-    </div>
-  );
-}
-
-function FilterChip({
-  active,
-  count,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  count: number;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`inline-flex min-h-11 items-center gap-2 rounded-full border px-4 py-2 text-sm transition-colors ${
-        active
-          ? "border-accent bg-accent text-white"
-          : "border-border bg-background text-muted-foreground hover:text-foreground"
-      }`}
-    >
-      <span>{label}</span>
-      <span className={`rounded-full px-2 py-0.5 text-xs ${active ? "bg-white/20" : "bg-muted"}`}>
-        {count}
-      </span>
-    </button>
-  );
-}
-
-function ToolPill({ tool, state, t }: { tool: ToolTarget; state?: ToolState; t: (key: string) => string }) {
-  const status = state?.status ?? "not_installed";
-  return (
-    <div className="min-w-[112px] rounded-xl border border-border/80 bg-background px-3 py-2">
-      <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-        {TOOL_LABELS[tool]}
-      </div>
-      <div className="mt-1 text-sm font-medium text-foreground">{getStatusLabel(t, status)}</div>
-      {state?.enabled ? (
-        <div className="mt-1 text-xs text-muted-foreground">{pathTail(state.selected_path)}</div>
-      ) : null}
-    </div>
-  );
-}
-
-function SkillsCLIStatusChip({
-  available,
-  loading,
-  t,
-}: {
-  available?: boolean;
-  loading: boolean;
-  t: (key: string) => string;
-}) {
-  const installed = Boolean(available);
-  const label = loading ? t("loading") : installed ? t("skillsCliInstalled") : t("skillsCliNotInstalled");
-
-  return (
-    <div className="group relative">
-      <button
-        type="button"
-        className={`inline-flex min-h-11 items-center rounded-full border px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${
-          installed
-            ? "border-emerald-500/20 bg-emerald-500/8 text-emerald-700 dark:text-emerald-300"
-            : "border-border bg-background/70 text-muted-foreground"
-        }`}
-        aria-label={t("skillsCliTooltipTitle")}
-      >
-        {label}
-      </button>
-      <div className="pointer-events-none absolute left-0 top-full z-20 mt-2 w-80 rounded-2xl border border-border bg-card p-4 text-left opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100">
-        <div className="text-sm font-semibold text-foreground">{t("skillsCliTooltipTitle")}</div>
-        <p className="mt-2 text-sm leading-6 text-muted-foreground">{t("skillsCliTooltipBody")}</p>
-        <div className="mt-3 rounded-xl border border-border/70 bg-background px-3 py-2 font-mono text-xs text-foreground">
-          npx skills add hongshuo-wang/agent-usage-desktop -y
-        </div>
-        <p className="mt-2 text-xs leading-5 text-muted-foreground">{t("skillsCliTooltipHint")}</p>
-      </div>
-    </div>
-  );
+function matchesScope(skill: SkillOverviewItem, scope: ScopeMode) {
+  const state = skill.tools[scope];
+  if (state?.enabled || (state?.actual.length ?? 0) > 0) {
+    return true;
+  }
+  if (skill.discovered.some((entry) => entry.tool === scope)) {
+    return true;
+  }
+  return skill.issues.some((issue) => issue.tool === scope);
 }
 
 function toolIssueSummary(issues: SkillIssue[]) {
@@ -572,19 +562,533 @@ function buildLegacyOverview(skills: LegacySkill[], inventory: LegacyInventory):
   return {
     library_path: inventory.library_path,
     cli: inventory.cli,
+    tool_availability: inventory.tool_availability,
     summary,
     skills: items,
   };
 }
 
+function FilterChip({
+  active,
+  count,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  count: number;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-full border px-4 py-2 text-sm transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${
+        active
+          ? "border-accent bg-accent text-white"
+          : "border-border bg-background text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      <span>{label}</span>
+      <span className={`rounded-full px-2 py-0.5 text-xs ${active ? "bg-white/20" : "bg-muted"}`}>{count}</span>
+    </button>
+  );
+}
+
+function ScopeTab({
+  scope,
+  active,
+  count,
+  issues,
+  onClick,
+}: {
+  scope: ScopeMode;
+  active: boolean;
+  count: number;
+  issues: number;
+  onClick: () => void;
+}) {
+  const label = TOOL_LABELS[scope];
+  const tabId = `skills-tab-${scope}`;
+  const panelId = `skills-panel-${scope}`;
+
+  return (
+    <button
+      id={tabId}
+      role="tab"
+      aria-selected={active}
+      aria-controls={panelId}
+      tabIndex={active ? 0 : -1}
+      type="button"
+      onClick={onClick}
+      className={`inline-flex min-h-11 cursor-pointer items-center gap-3 rounded-t-2xl border border-b-0 px-4 py-3 text-left transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${
+        active
+          ? "border-border bg-card text-foreground shadow-[0_-1px_0_0_var(--border)]"
+          : "border-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+      }`}
+    >
+      <span className="text-sm font-semibold">{label}</span>
+      <span
+        className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+          active ? "bg-accent text-white" : "bg-muted text-muted-foreground"
+        }`}
+      >
+        {count}
+      </span>
+      {issues > 0 ? (
+        <span className="rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+          {issues}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+function SkillsCLIStatusChip({
+  available,
+  toolCards,
+  loading,
+  t,
+}: {
+  available?: boolean;
+  toolCards: SkillsCLIToolCard[];
+  loading: boolean;
+  t: Translate;
+}) {
+  const panelId = useId();
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const cliAvailable = Boolean(available);
+  const hasConnectedTools = toolCards.some((card) => card.status === "connected");
+  const defaultTool =
+    toolCards.find((card) => card.skillConnected)?.tool ??
+    toolCards.find((card) => card.cliAvailable)?.tool ??
+    toolCards[0]?.tool ??
+    "codex";
+  const [selectedTool, setSelectedTool] = useState<ToolTarget>(defaultTool);
+  const statusLabel = loading
+    ? t("loading")
+    : cliAvailable
+      ? t("skillsCliAvailableState")
+      : t("skillsCliUnavailableState");
+  const selectedCard = toolCards.find((card) => card.tool === selectedTool) ?? toolCards[0];
+  const selectedAgent = skillsCliManualAgent(selectedCard?.tool ?? "codex");
+  const installCommand = `npx --yes skills add hongshuo-wang/agent-usage-desktop --global --skill agent-usage-desktop --agent ${selectedAgent} --yes`;
+  const uninstallCommand = `npx --yes skills remove agent-usage-desktop --global --agent ${selectedAgent} --yes`;
+
+  useEffect(() => {
+    if (toolCards.some((card) => card.tool === selectedTool)) {
+      return;
+    }
+    setSelectedTool(defaultTool);
+  }, [defaultTool, selectedTool, toolCards]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        aria-expanded={open}
+        aria-controls={panelId}
+        aria-label={t("skillsCliPanelToggle")}
+        className={`inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${
+          hasConnectedTools
+            ? "border-emerald-500/20 bg-emerald-500/8 text-emerald-700 dark:text-emerald-300"
+            : cliAvailable
+              ? "border-accent/20 bg-accent/8 text-accent"
+              : "border-border bg-background/70 text-muted-foreground"
+        }`}
+      >
+        <span className="font-medium">{t("skillsCliSupportTitle")}</span>
+        <span
+          className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ${
+            cliAvailable
+              ? "bg-white/15 text-current"
+              : "border border-border bg-muted text-muted-foreground"
+          }`}
+        >
+          {statusLabel}
+        </span>
+      </button>
+      {open ? (
+        <div
+          id={panelId}
+          className="absolute left-0 top-full z-20 mt-2 w-[min(32rem,calc(100vw-2rem))] rounded-3xl border border-border bg-card p-4 text-left shadow-lg"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-foreground">{t("skillsCliSupportTitle")}</div>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                {cliAvailable ? t("skillsCliPanelBody") : t("skillsCliPanelUnavailableBody")}
+              </p>
+            </div>
+            <span
+              className={`shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-[11px] font-medium ${
+                cliAvailable
+                  ? "border border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                  : "border border-border bg-muted text-muted-foreground"
+              }`}
+            >
+              {statusLabel}
+            </span>
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            {toolCards.map((card) => {
+              const statusTone =
+                card.status === "connected"
+                  ? "border-emerald-500/20 bg-emerald-500/8"
+                  : card.status === "available"
+                    ? "border-amber-500/20 bg-amber-500/8"
+                    : "border-border/70 bg-background";
+              const statusText =
+                card.status === "connected"
+                  ? t("skillsCliPerToolConnected")
+                  : card.status === "available"
+                    ? t("skillsCliPerToolAvailable")
+                    : t("skillsCliPerToolMissing");
+              const selected = selectedCard?.tool === card.tool;
+
+              return (
+                <button
+                  key={card.tool}
+                  type="button"
+                  onClick={() => setSelectedTool(card.tool)}
+                  className={`rounded-2xl border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${
+                    selected ? "border-accent bg-accent/6 shadow-sm" : statusTone
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-foreground">{card.label}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">{statusText}</div>
+                    </div>
+                    <span
+                      className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                        card.status === "connected"
+                          ? "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300"
+                          : card.status === "available"
+                            ? "bg-amber-500/12 text-amber-700 dark:text-amber-300"
+                            : "bg-muted text-muted-foreground"
+                      }`}
+                    >
+                      {selected ? t("skillsCliSelected") : statusText}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-border/70 bg-background px-3 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-medium text-foreground">{t("skillsCliManualCommandLabel")}</div>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                  {t("skillsCliManualCommandDescription", { tool: selectedCard?.label ?? TOOL_LABELS.codex })}
+                </p>
+              </div>
+              <span className="rounded-full border border-border bg-card px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+                {selectedCard?.label ?? TOOL_LABELS.codex}
+              </span>
+            </div>
+            <div className="mt-3 space-y-2">
+              <div>
+                <div className="mb-1 text-xs font-medium text-muted-foreground">{t("skillsCliInstallCommandLabel")}</div>
+                <div className="rounded-xl border border-border/70 bg-card px-3 py-2 font-mono text-xs text-foreground">
+                  {installCommand}
+                </div>
+              </div>
+              <div>
+                <div className="mb-1 text-xs font-medium text-muted-foreground">{t("skillsCliUninstallCommandLabel")}</div>
+                <div className="rounded-xl border border-border/70 bg-card px-3 py-2 font-mono text-xs text-foreground">
+                  {uninstallCommand}
+                </div>
+              </div>
+              {!selectedCard?.cliAvailable ? (
+                <p className="text-xs leading-5 text-muted-foreground">
+                  {t("skillsCliManualCommandMissingHint", { tool: selectedCard?.label ?? TOOL_LABELS.codex })}
+                </p>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ModalShell({
+  title,
+  subtitle,
+  onClose,
+  children,
+  widthClass = "max-w-5xl",
+}: {
+  title: string;
+  subtitle?: string;
+  onClose: () => void;
+  children: ReactNode;
+  widthClass?: string;
+}) {
+  const { t } = useTranslation();
+  const titleId = useId();
+  const panelRef = useRef<HTMLDivElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    panelRef.current?.focus();
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      previousFocusRef.current?.focus();
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className={`max-h-[90vh] w-full ${widthClass} overflow-hidden rounded-[28px] border border-border bg-card shadow-2xl focus:outline-none`}
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-border px-6 py-5">
+          <div className="min-w-0">
+            <h2 id={titleId} className="text-2xl font-semibold tracking-tight text-foreground">
+              {title}
+            </h2>
+            {subtitle ? <p className="mt-2 text-sm leading-6 text-muted-foreground">{subtitle}</p> : null}
+          </div>
+          <button type="button" onClick={onClose} className={GHOST_BUTTON}>
+            {t("cancel")}
+          </button>
+        </div>
+        <div className="max-h-[calc(90vh-92px)] overflow-y-auto px-6 py-6">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function ToolConfigCard({
+  skill,
+  tool,
+  state,
+  emphasized = false,
+  mutatingTool,
+  apiFlavor,
+  t,
+  onOpenFolder,
+  onMutateToolTarget,
+  onImportManaged,
+}: {
+  skill: SkillOverviewItem;
+  tool: ToolTarget;
+  state?: ToolState;
+  emphasized?: boolean;
+  mutatingTool: string | null;
+  apiFlavor: SkillsAPIFlavor;
+  t: Translate;
+  onOpenFolder: (path: string) => Promise<void>;
+  onMutateToolTarget: (tool: ToolTarget, updates: Partial<ToolState>, successMessage: string) => Promise<void>;
+  onImportManaged: (skill: SkillOverviewItem, sourcePath: string, tool: ToolTarget | "global") => Promise<void>;
+}) {
+  const canSelectVariants = skill.managed && skill.variants.length > 0;
+  const status = state?.status ?? "not_installed";
+
+  return (
+    <div
+      className={`rounded-[24px] border p-4 ${
+        emphasized ? "border-accent/35 bg-accent/6" : "border-border bg-background/70"
+      }`}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-2">
+          <div className="text-base font-semibold text-foreground">{TOOL_LABELS[tool]}</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium ${getStatusTone(status)}`}>
+              {getStatusLabel(t, status)}
+            </span>
+            {state?.enabled ? (
+              <span className="rounded-full border border-border px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+                {state.method}
+              </span>
+            ) : null}
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() =>
+              void onMutateToolTarget(
+                tool,
+                {
+                  enabled: !(state?.enabled ?? false),
+                  selected_variant_id:
+                    state?.selected_variant_id || skill.library.variant_id || skill.variants[0]?.id || 0,
+                },
+                state?.enabled ? t("skillsDisconnected") : t("skillsConnected")
+              )
+            }
+            disabled={!skill.managed || mutatingTool === tool || !canSelectVariants}
+            className={SECONDARY_BUTTON}
+          >
+            {state?.enabled ? t("disconnect") : t("connect")}
+          </button>
+          {state?.actual[0]?.path ? (
+            <button
+              type="button"
+              onClick={() => void onOpenFolder(state.actual[0].path)}
+              className={GHOST_BUTTON}
+            >
+              {t("skillsOpenInstalled")}
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        <div className="rounded-2xl border border-border/70 bg-card px-3 py-3">
+          <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+            {t("skillsExpectedPath")}
+          </div>
+          <div className="mt-2 break-all text-sm text-foreground">
+            {state?.selected_path || skill.library.path || skill.primary_path || "-"}
+          </div>
+        </div>
+        <div className="rounded-2xl border border-border/70 bg-card px-3 py-3">
+          <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+            {t("skillsInstalledPath")}
+          </div>
+          <div className="mt-2 break-all text-sm text-foreground">{state?.actual[0]?.path || "-"}</div>
+        </div>
+      </div>
+
+      {skill.managed ? (
+        <div className="mt-4 space-y-3">
+          <div className="flex flex-wrap gap-2">
+            {(["symlink", "copy"] as SyncMethod[]).map((method) => (
+              <button
+                key={method}
+                type="button"
+                onClick={() => void onMutateToolTarget(tool, { method }, t("skillsMethodUpdated"))}
+                disabled={mutatingTool === tool}
+                className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                  (state?.method ?? "symlink") === method
+                    ? "bg-accent text-white"
+                    : "border border-border text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {method}
+              </button>
+            ))}
+          </div>
+          <div className="grid gap-2">
+            {skill.variants.map((variant) => {
+              const active = state?.selected_variant_id === variant.id && state?.enabled;
+              return (
+                <button
+                  key={`${tool}-${variant.id}`}
+                  type="button"
+                  onClick={() =>
+                    void onMutateToolTarget(
+                      tool,
+                      { enabled: true, selected_variant_id: variant.id },
+                      t("skillsVariantApplied")
+                    )
+                  }
+                  disabled={mutatingTool === tool}
+                  className={`flex min-h-11 cursor-pointer items-center justify-between rounded-xl border px-3 py-2 text-left text-sm transition-colors ${
+                    active
+                      ? "border-accent bg-accent/8 text-foreground"
+                      : "border-border bg-background hover:bg-muted"
+                  }`}
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium">{pathTail(variant.source_path)}</span>
+                    <span className="block text-xs text-muted-foreground">hash {hashPreview(variant.hash)}</span>
+                  </span>
+                  {active ? (
+                    <span className="rounded-full border border-accent/20 bg-accent/10 px-2 py-0.5 text-[11px] font-medium text-accent">
+                      {t("skillsCurrentSelection")}
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
+      {!skill.managed && state?.actual[0]?.path && apiFlavor === "overview" ? (
+        <div className="mt-4">
+          <button
+            type="button"
+            onClick={() => void onImportManaged(skill, state.actual[0].path, tool)}
+            disabled={mutatingTool === tool}
+            className={PRIMARY_BUTTON}
+          >
+            {t("skillsAdoptFromTool", { tool: TOOL_LABELS[tool] })}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function SkillsPage() {
   const { t } = useTranslation();
+  const scopeOrder: ScopeMode[] = [...TOOLS];
   const [overview, setOverview] = useState<SkillOverview | null>(null);
   const [apiFlavor, setApiFlavor] = useState<SkillsAPIFlavor>("overview");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [mutatingTool, setMutatingTool] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [scope, setScope] = useState<ScopeMode>("claude");
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<FilterMode>("all");
   const [error, setError] = useState<string | null>(null);
@@ -592,7 +1096,6 @@ export default function SkillsPage() {
   const [form, setForm] = useState<SkillFormState>(createFormState(null));
   const [pendingDelete, setPendingDelete] = useState<SkillOverviewItem | null>(null);
   const [creating, setCreating] = useState(false);
-
   const loadOverview = async (preferredKey?: string) => {
     setLoading(true);
     setError(null);
@@ -619,10 +1122,12 @@ export default function SkillsPage() {
         if (desired && next.skills.some((skill) => selectionKey(skill) === desired)) {
           return desired;
         }
-        return next.skills[0] ? selectionKey(next.skills[0]) : null;
+        return current ?? null;
       });
+      return next;
     } catch (err) {
       setError(err instanceof Error ? err.message : t("skillsLoadFailed"));
+      return null;
     } finally {
       setLoading(false);
     }
@@ -634,15 +1139,13 @@ export default function SkillsPage() {
 
   const visibleSkills = useMemo(() => {
     return (overview?.skills ?? []).filter(
-      (skill) => matchesQuery(skill, query) && matchesFilter(skill, filter)
+      (skill) => matchesQuery(skill, query) && matchesFilter(skill, filter, scope) && matchesScope(skill, scope)
     );
-  }, [filter, overview, query]);
+  }, [filter, overview, query, scope]);
 
   const selectedSkill = useMemo(() => {
-    return visibleSkills.find((skill) => selectionKey(skill) === selectedKey)
-      ?? overview?.skills.find((skill) => selectionKey(skill) === selectedKey)
-      ?? null;
-  }, [overview, selectedKey, visibleSkills]);
+    return overview?.skills.find((skill) => selectionKey(skill) === selectedKey) ?? null;
+  }, [overview, selectedKey]);
 
   useEffect(() => {
     setForm(createFormState(selectedSkill));
@@ -657,15 +1160,56 @@ export default function SkillsPage() {
       form.description !== (selectedSkill.description ?? "") ||
       form.sourcePath !== (selectedSkill.primary_path ?? ""));
 
+  const scopedSkills = useMemo(() => {
+    return (overview?.skills ?? []).filter((skill) => matchesScope(skill, scope));
+  }, [overview, scope]);
+
   const filteredCounts = useMemo(() => {
-    const skills = overview?.skills ?? [];
+    const skills = scopedSkills.filter((skill) => matchesQuery(skill, query));
     return {
       all: skills.length,
-      issues: skills.filter((skill) => skill.issues.length > 0).length,
+      issues: skills.filter((skill) => issuesForTool(skill, scope).length > 0).length,
       managed: skills.filter((skill) => skill.managed).length,
       unmanaged: skills.filter((skill) => !skill.managed).length,
     };
+  }, [query, scopedSkills, scope]);
+
+  const scopeCounts = useMemo(() => {
+    const skills = overview?.skills ?? [];
+    return {
+      claude: skills.filter((skill) => matchesScope(skill, "claude")).length,
+      codex: skills.filter((skill) => matchesScope(skill, "codex")).length,
+      opencode: skills.filter((skill) => matchesScope(skill, "opencode")).length,
+      openclaw: skills.filter((skill) => matchesScope(skill, "openclaw")).length,
+    } satisfies Record<ToolTarget, number>;
   }, [overview]);
+
+  const scopeIssueCounts = useMemo(() => {
+    const skills = overview?.skills ?? [];
+    return {
+      claude: skills.filter((skill) => skill.issues.some((issue) => issue.tool === "claude")).length,
+      codex: skills.filter((skill) => skill.issues.some((issue) => issue.tool === "codex")).length,
+      opencode: skills.filter((skill) => skill.issues.some((issue) => issue.tool === "opencode")).length,
+      openclaw: skills.filter((skill) => skill.issues.some((issue) => issue.tool === "openclaw")).length,
+    } satisfies Record<ToolTarget, number>;
+  }, [overview]);
+
+  const agentUsageInstalledAgents = useMemo(() => getAgentUsageInstalledAgents(overview), [overview]);
+
+  const cliToolCards = useMemo(() => {
+    return TOOLS.map((tool) => {
+      const cliAvailable = overview?.tool_availability?.[tool] ?? false;
+      const skillConnected = agentUsageInstalledAgents.includes(tool);
+      const status: SkillsCLIToolStatus = !cliAvailable ? "missing_cli" : skillConnected ? "connected" : "available";
+      return {
+        tool,
+        label: TOOL_LABELS[tool],
+        cliAvailable,
+        skillConnected,
+        status,
+      };
+    });
+  }, [agentUsageInstalledAgents, overview]);
 
   const saveSkill = async () => {
     if (!selectedSkill?.managed || selectedSkill.id <= 0) {
@@ -752,6 +1296,7 @@ export default function SkillsPage() {
     try {
       await mutateAPI<MutationResponse>("DELETE", `config/skills/${pendingDelete.id}`);
       setPendingDelete(null);
+      setSelectedKey(null);
       setMessage(t("skillsDeleted"));
       await loadOverview();
     } catch (err) {
@@ -776,6 +1321,7 @@ export default function SkillsPage() {
       setCreating(false);
       setMessage(t("skillsCreated"));
       await loadOverview(`managed:${response.id}`);
+      setSelectedKey(`managed:${response.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : t("skillsCreateFailed"));
     } finally {
@@ -784,35 +1330,55 @@ export default function SkillsPage() {
   };
 
   const openFolder = async (path: string) => {
-    if (!path) {
+    const candidates = getOpenCandidates(path);
+    if (candidates.length === 0) {
       return;
     }
+
+    setError(null);
+
+    for (const candidate of candidates) {
+      try {
+        await open(candidate);
+        return;
+      } catch {
+        // Fall through to reveal fallback below.
+      }
+    }
+
     try {
-      await open(path);
+      await revealItemInDir(candidates[0]);
     } catch (err) {
       setError(err instanceof Error ? err.message : t("skillsOpenFailed"));
     }
   };
 
+  const activeScopeTitle = TOOL_LABELS[scope];
+  const activeScopeDescription = t("skillsScopeToolDescription", { tool: TOOL_LABELS[scope] });
+  const activePanelId = `skills-panel-${scope}`;
+  const activeTabId = `skills-tab-${scope}`;
+  const selectedScopeIssues = selectedSkill ? issuesForTool(selectedSkill, scope) : [];
+
   return (
     <div className="h-full overflow-y-auto pr-1">
-      <div className="flex flex-col gap-6 pb-6">
-        <div className="rounded-[28px] border border-border bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.12),_transparent_35%),linear-gradient(135deg,rgba(255,255,255,0.92),rgba(255,255,255,0.78))] p-6 shadow-sm dark:bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.18),_transparent_35%),linear-gradient(135deg,rgba(18,24,38,0.96),rgba(18,24,38,0.88))]">
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-            <div className="max-w-3xl space-y-3">
-              <div className="inline-flex rounded-full border border-accent/20 bg-accent/8 px-3 py-1 text-xs font-medium text-accent">
-                {t("skillsPageBadge")}
-              </div>
-              <div>
+      <div className="flex flex-col gap-4 pb-6">
+        <section className="rounded-[24px] border border-border bg-card px-5 py-4">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+            <div className="min-w-0 space-y-2">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="rounded-full border border-border bg-background px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                  {t("skillsPageBadge")}
+                </span>
                 <h1 className="text-2xl font-semibold tracking-tight text-foreground">{t("skills")}</h1>
-                <p className="mt-2 max-w-2xl text-sm leading-7 text-muted-foreground">
-                  {t("skillsOverviewDescription")}
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-3">
                 <SyncStatus />
-                <SkillsCLIStatusChip available={overview?.cli.available} loading={loading && !overview} t={t} />
+                <SkillsCLIStatusChip
+                  available={overview?.cli.available}
+                  toolCards={cliToolCards}
+                  loading={loading && !overview}
+                  t={t}
+                />
               </div>
+              <p className="max-w-3xl text-sm leading-6 text-muted-foreground">{t("skillsOverviewDescription")}</p>
             </div>
 
             <div className="flex flex-wrap gap-3">
@@ -831,36 +1397,13 @@ export default function SkillsPage() {
                 {t("refresh")}
               </button>
               {overview?.library_path ? (
-                <button type="button" onClick={() => void openFolder(overview.library_path)} className={PRIMARY_BUTTON}>
+                <button type="button" onClick={() => void openFolder(overview.library_path)} className={GHOST_BUTTON}>
                   {t("skillsOpenLibrary")}
                 </button>
               ) : null}
             </div>
           </div>
-        </div>
-
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <MetricCard
-            title={t("skillsMetricLibrary")}
-            value={overview?.summary.managed_skills ?? 0}
-            helper={t("skillsMetricLibraryHelp")}
-          />
-          <MetricCard
-            title={t("skillsMetricConnected")}
-            value={overview?.summary.connected_tools ?? 0}
-            helper={t("skillsMetricConnectedHelp")}
-          />
-          <MetricCard
-            title={t("skillsMetricIssues")}
-            value={overview?.summary.issue_count ?? 0}
-            helper={t("skillsMetricIssuesHelp")}
-          />
-          <MetricCard
-            title={t("skillsMetricUnmanaged")}
-            value={overview?.summary.unmanaged_skills ?? 0}
-            helper={t("skillsMetricUnmanagedHelp")}
-          />
-        </div>
+        </section>
 
         {error ? (
           <div className="rounded-2xl border border-red-500/25 bg-red-500/8 px-4 py-3 text-sm text-red-600 dark:text-red-300">
@@ -873,23 +1416,70 @@ export default function SkillsPage() {
           </div>
         ) : null}
 
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(360px,0.9fr)]">
-          <section className="space-y-4">
-          <div className="rounded-[24px] border border-border bg-card p-4 shadow-sm">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <section className="rounded-[24px] border border-border bg-card p-5">
+          <div
+            role="tablist"
+            aria-label={t("skillsCurrentCli")}
+            className="overflow-x-auto"
+            onKeyDown={(event) => {
+              const currentIndex = scopeOrder.indexOf(scope);
+              if (currentIndex < 0) {
+                return;
+              }
+              const focusTab = (nextScope: ScopeMode) => {
+                setScope(nextScope);
+                requestAnimationFrame(() => {
+                  document.getElementById(`skills-tab-${nextScope}`)?.focus();
+                });
+              };
+
+              if (event.key === "ArrowRight") {
+                event.preventDefault();
+                focusTab(scopeOrder[(currentIndex + 1) % scopeOrder.length]);
+              } else if (event.key === "ArrowLeft") {
+                event.preventDefault();
+                focusTab(scopeOrder[(currentIndex - 1 + scopeOrder.length) % scopeOrder.length]);
+              } else if (event.key === "Home") {
+                event.preventDefault();
+                focusTab(scopeOrder[0]);
+              } else if (event.key === "End") {
+                event.preventDefault();
+                focusTab(scopeOrder[scopeOrder.length - 1]);
+              }
+            }}
+          >
+            <div className="flex min-w-max items-end gap-2 border-b border-border">
+              {scopeOrder.map((item) => (
+                <ScopeTab
+                  key={item}
+                  scope={item}
+                  active={scope === item}
+                  count={scopeCounts[item]}
+                  issues={scopeIssueCounts[item]}
+                  onClick={() => setScope(item)}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div id={activePanelId} role="tabpanel" aria-labelledby={activeTabId} className="pt-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
               <div className="space-y-1">
-                <h2 className="text-lg font-semibold text-foreground">{t("skillsPrimaryListTitle")}</h2>
-                <p className="text-sm text-muted-foreground">{t("skillsPrimaryListDescription")}</p>
+                <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                  {t("skillsCurrentCli")}
+                </div>
+                <h2 className="text-xl font-semibold text-foreground">{activeScopeTitle}</h2>
+                <p className="max-w-2xl text-sm leading-6 text-muted-foreground">{activeScopeDescription}</p>
               </div>
 
-              <div className="flex flex-col gap-3 lg:items-end">
+              <div className="flex w-full flex-col gap-3 lg:max-w-2xl">
                 <input
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   placeholder={t("skillsSearchPlaceholderNew")}
-                  className={`${INPUT_CLASS} min-w-[260px]`}
+                  className={INPUT_CLASS}
                 />
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <FilterChip
                     active={filter === "all"}
                     count={filteredCounts.all}
@@ -914,204 +1504,248 @@ export default function SkillsPage() {
                     label={t("skillsFilterUnmanaged")}
                     onClick={() => setFilter("unmanaged")}
                   />
+                  <span className="ml-auto text-sm text-muted-foreground">
+                    {t("skillsVisibleCount", { count: visibleSkills.length })}
+                  </span>
                 </div>
               </div>
             </div>
-          </div>
 
-          {loading ? (
-            <div className="rounded-[24px] border border-border bg-card px-6 py-10 text-sm text-muted-foreground">
-              {t("loading")}
-            </div>
-          ) : visibleSkills.length === 0 ? (
-            <div className="rounded-[24px] border border-dashed border-border bg-card px-6 py-10 text-center">
-              <h3 className="text-base font-semibold text-foreground">{t("skillsEmptyTitle")}</h3>
-              <p className="mt-2 text-sm leading-7 text-muted-foreground">{t("skillsEmptyDescription")}</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {visibleSkills.map((skill) => {
-                const active = selectionKey(skill) === selectedKey;
-                return (
-                  <button
-                    key={selectionKey(skill)}
-                    type="button"
-                    onClick={() => setSelectedKey(selectionKey(skill))}
-                    className={`w-full rounded-[24px] border p-5 text-left shadow-sm transition-all ${
-                      active
-                        ? "border-accent/40 bg-accent/6 ring-2 ring-accent/20"
-                        : `${issueTone(skill.issues.length)} hover:border-accent/20 hover:bg-muted/30`
-                    }`}
-                  >
-                    <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                      <div className="min-w-0 space-y-3">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="text-lg font-semibold text-foreground">{skill.name}</h3>
-                          <span className="rounded-full border border-border px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                            {skill.managed ? t("skillsManagedLabel") : t("skillsUnmanagedLabel")}
-                          </span>
-                          {skill.issues.length > 0 ? (
-                            <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-700 dark:text-amber-300">
-                              {t("skillsIssuesBadge", { count: skill.issues.length })}
-                            </span>
-                          ) : null}
-                        </div>
-                        <p className="text-sm leading-7 text-muted-foreground">
-                          {skill.description || t("skillsNoDescription")}
-                        </p>
-                        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
-                          <div className="rounded-2xl border border-border/70 bg-background/90 p-3">
-                            <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                              {t("skillsLibraryColumn")}
-                            </div>
-                            <div className="mt-2 text-sm font-medium text-foreground">
-                              {skill.library.present ? pathTail(skill.library.path) : t("skillsNotInLibrary")}
-                            </div>
-                            <div className="mt-1 text-xs text-muted-foreground">
-                              {skill.library.path || t("skillsLibraryMissingHint")}
-                            </div>
-                          </div>
-                          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                            {TOOLS.map((tool) => (
-                              <ToolPill key={tool} tool={tool} state={skill.tools[tool]} t={t} />
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-          </section>
-
-          <aside className="xl:sticky xl:top-6 xl:self-start">
-            <div className="rounded-[28px] border border-border bg-card p-5 shadow-sm">
-            {!selectedSkill ? (
-              creating ? (
-                <div className="space-y-6">
-                  <div className="space-y-3">
-                    <h2 className="text-lg font-semibold text-foreground">{t("skillsCreateTitle")}</h2>
-                    <p className="text-sm leading-7 text-muted-foreground">
-                      {t("skillsCreateDescription")}
-                    </p>
-                  </div>
-
-                  <div className="space-y-4 rounded-2xl border border-border bg-background/70 p-4">
-                    <div className="space-y-3">
-                      <div>
-                        <label className="mb-1.5 block text-sm font-medium text-foreground">
-                          {t("skillName")}
-                        </label>
-                        <input
-                          value={form.name}
-                          onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
-                          className={INPUT_CLASS}
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-1.5 block text-sm font-medium text-foreground">
-                          {t("description")}
-                        </label>
-                        <textarea
-                          value={form.description}
-                          onChange={(event) =>
-                            setForm((current) => ({ ...current, description: event.target.value }))
-                          }
-                          rows={3}
-                          className={`${INPUT_CLASS} resize-y`}
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-1.5 block text-sm font-medium text-foreground">
-                          {t("sourcePath")}
-                        </label>
-                        <input
-                          value={form.sourcePath}
-                          onChange={(event) =>
-                            setForm((current) => ({ ...current, sourcePath: event.target.value }))
-                          }
-                          className={INPUT_CLASS}
-                        />
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap gap-3">
-                      <button
-                        type="button"
-                        onClick={() => void createSkill()}
-                        disabled={!form.name.trim() || !form.sourcePath.trim() || saving}
-                        className={PRIMARY_BUTTON}
-                      >
-                        {saving ? t("loading") : t("skillsCreateNew")}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCreating(false);
-                          setForm(createFormState(null));
-                        }}
-                        className={SECONDARY_BUTTON}
-                      >
-                        {t("cancel")}
-                      </button>
-                    </div>
-                  </div>
+            <div className="mt-5">
+              {loading ? (
+                <div className="rounded-[24px] border border-border bg-background px-6 py-10 text-sm text-muted-foreground">
+                  {t("loading")}
+                </div>
+              ) : visibleSkills.length === 0 ? (
+                <div className="rounded-[24px] border border-dashed border-border bg-background px-6 py-10 text-center">
+                  <h3 className="text-base font-semibold text-foreground">{t("skillsEmptyTitle")}</h3>
+                  <p className="mt-2 text-sm leading-7 text-muted-foreground">{t("skillsEmptyDescription")}</p>
                 </div>
               ) : (
-                <div className="space-y-4 rounded-2xl border border-dashed border-border bg-background/50 px-5 py-8">
-                  <h2 className="text-lg font-semibold text-foreground">{t("skillsDetailTitle")}</h2>
-                  <p className="text-sm leading-7 text-muted-foreground">{t("skillsDetailEmpty")}</p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setCreating(true);
-                      setForm(createFormState(null));
-                    }}
-                    className={PRIMARY_BUTTON}
-                  >
-                    {t("skillsCreateNew")}
-                  </button>
-                </div>
-              )
-            ) : (
-              <div className="space-y-6">
                 <div className="space-y-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                        {t("skillsDetailTitle")}
-                      </div>
-                      <h2 className="mt-2 text-2xl font-semibold tracking-tight text-foreground">
-                        {selectedSkill.name}
-                      </h2>
-                    </div>
-                    {selectedSkill.managed ? (
-                      <button
-                        type="button"
-                        onClick={() => setPendingDelete(selectedSkill)}
-                        className="inline-flex min-h-10 items-center justify-center rounded-lg border border-red-500/30 px-3 py-2 text-sm text-red-500 transition-colors hover:bg-red-500/10"
+                  {visibleSkills.map((skill) => {
+                    const activeState = skill.tools[scope];
+                    const scopeIssues = issuesForTool(skill, scope);
+                    const activeVariant =
+                      skill.variants.find((variant) => variant.id === activeState?.selected_variant_id) ?? null;
+                    const currentPath =
+                      activeState?.actual[0]?.path ||
+                      activeState?.selected_path ||
+                      skill.library.path ||
+                      skill.primary_path;
+
+                    return (
+                      <article
+                        key={selectionKey(skill)}
+                        className="rounded-[22px] border border-border bg-background p-4 transition-colors hover:border-accent/20 hover:bg-muted/20"
                       >
-                        {t("delete")}
-                      </button>
-                    ) : null}
+                        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                          <div className="min-w-0 flex-1 space-y-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h3 className="text-base font-semibold text-foreground">{skill.name}</h3>
+                              <span className="rounded-full border border-border px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                                {skill.managed ? t("skillsManagedLabel") : t("skillsUnmanagedLabel")}
+                              </span>
+                              <span
+                                className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium ${getStatusTone(
+                                  activeState?.status ?? "not_installed"
+                                )}`}
+                              >
+                                {getStatusLabel(t, activeState?.status ?? "not_installed")}
+                              </span>
+                              {scopeIssues.length > 0 ? (
+                                <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                                  {t("skillsIssuesBadge", { count: scopeIssues.length })}
+                                </span>
+                              ) : null}
+                            </div>
+                            <p className="text-sm leading-7 text-muted-foreground">
+                              {skill.description || t("skillsNoDescription")}
+                            </p>
+
+                            <div className="flex flex-wrap gap-2">
+                              {activeState?.enabled ? (
+                                <span className="inline-flex rounded-xl bg-muted px-3 py-1 text-[11px] font-medium text-muted-foreground">
+                                  {activeState.method}
+                                </span>
+                              ) : null}
+                              {activeVariant ? (
+                                <span className="inline-flex rounded-xl bg-muted px-3 py-1 text-[11px] font-medium text-muted-foreground">
+                                  {pathTail(activeVariant.source_path)}
+                                </span>
+                              ) : null}
+                              <span className="inline-flex rounded-xl bg-muted px-3 py-1 text-[11px] font-medium text-muted-foreground">
+                                {skill.library.present ? t("skillsInLibrary") : t("skillsNotInLibrary")}
+                              </span>
+                            </div>
+
+                            <div className="rounded-2xl border border-border/70 bg-card px-3 py-3">
+                              <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                                {activeState?.actual[0]?.path ? t("skillsInstalledPath") : t("skillsExpectedPath")}
+                              </div>
+                              <div className="mt-1 break-all text-sm text-foreground">{currentPath || "-"}</div>
+                            </div>
+                          </div>
+
+                          <div className="flex shrink-0 flex-wrap items-center gap-2 xl:justify-end">
+                            {currentPath ? (
+                              <button type="button" onClick={() => void openFolder(currentPath)} className={GHOST_BUTTON}>
+                                {t("skillsOpenFolder")}
+                              </button>
+                            ) : null}
+                            <button
+                              type="button"
+                              onClick={() => setSelectedKey(selectionKey(skill))}
+                              className={PRIMARY_BUTTON}
+                            >
+                              {t("skillsViewConfig")}
+                            </button>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {creating ? (
+          <ModalShell
+            title={t("skillsCreateTitle")}
+            subtitle={t("skillsCreateDescription")}
+            onClose={() => {
+              setCreating(false);
+              setForm(createFormState(null));
+            }}
+            widthClass="max-w-2xl"
+          >
+            <div className="space-y-5">
+              <div className="space-y-4 rounded-[24px] border border-border bg-background/70 p-4">
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-foreground">{t("skillName")}</label>
+                  <input
+                    value={form.name}
+                    onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+                    className={INPUT_CLASS}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-foreground">{t("description")}</label>
+                  <textarea
+                    value={form.description}
+                    onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
+                    rows={4}
+                    className={`${INPUT_CLASS} resize-y`}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-foreground">{t("sourcePath")}</label>
+                  <input
+                    value={form.sourcePath}
+                    onChange={(event) => setForm((current) => ({ ...current, sourcePath: event.target.value }))}
+                    className={INPUT_CLASS}
+                  />
+                </div>
+              </div>
+              <div className="flex flex-wrap justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCreating(false);
+                    setForm(createFormState(null));
+                  }}
+                  className={SECONDARY_BUTTON}
+                >
+                  {t("cancel")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void createSkill()}
+                  disabled={!form.name.trim() || !form.sourcePath.trim() || saving}
+                  className={PRIMARY_BUTTON}
+                >
+                  {saving ? t("loading") : t("skillsCreateNew")}
+                </button>
+              </div>
+            </div>
+          </ModalShell>
+        ) : null}
+
+        {selectedSkill ? (
+          <ModalShell
+            title={selectedSkill.name}
+            subtitle={selectedSkill.description || t("skillsNoDescription")}
+            onClose={() => setSelectedKey(null)}
+          >
+            <div className="space-y-6">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-full border border-border px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                  {selectedSkill.managed ? t("skillsManagedLabel") : t("skillsUnmanagedLabel")}
+                </span>
+                <span className="rounded-full border border-accent/20 bg-accent/8 px-2.5 py-1 text-[11px] font-medium text-accent">
+                  {t("skillsCurrentCli")}: {TOOL_LABELS[scope]}
+                </span>
+                {selectedScopeIssues.length > 0 ? (
+                  <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                    {t("skillsIssuesBadge", { count: selectedScopeIssues.length })}
+                  </span>
+                ) : null}
+              </div>
+
+              <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+                <div className="space-y-4">
+                  <div className="space-y-1">
+                    <h3 className="text-base font-semibold text-foreground">
+                      {t("skillsCurrentToolSection", { tool: TOOL_LABELS[scope] })}
+                    </h3>
+                    <p className="text-sm leading-6 text-muted-foreground">
+                      {t("skillsCurrentToolDescription", { tool: TOOL_LABELS[scope] })}
+                    </p>
                   </div>
-                  <p className="text-sm leading-7 text-muted-foreground">
-                    {selectedSkill.description || t("skillsNoDescription")}
-                  </p>
+                  <ToolConfigCard
+                    skill={selectedSkill}
+                    tool={scope}
+                    state={selectedSkill.tools[scope]}
+                    emphasized
+                    mutatingTool={mutatingTool}
+                    apiFlavor={apiFlavor}
+                    t={t}
+                    onOpenFolder={openFolder}
+                    onMutateToolTarget={mutateToolTarget}
+                    onImportManaged={importManaged}
+                  />
+
+                  {selectedScopeIssues.length > 0 ? (
+                    <div className="space-y-3 rounded-[24px] border border-amber-500/30 bg-amber-500/8 p-4">
+                      <h3 className="text-base font-semibold text-foreground">{t("skillsIssuesTitle")}</h3>
+                      <div className="space-y-2">
+                        {Object.entries(toolIssueSummary(selectedScopeIssues)).map(([code, tools]) => (
+                          <div key={code} className="rounded-xl border border-amber-500/20 bg-background/80 px-3 py-2">
+                            <div className="text-sm font-medium text-foreground">{getStatusLabel(t, code as SkillStatus)}</div>
+                            <div className="mt-1 text-xs text-muted-foreground">
+                              {tools.map((tool) => TOOL_LABELS[tool as ToolTarget] ?? tool).join(" / ")}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
 
-                <div className="rounded-2xl border border-border bg-background/70 p-4">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                        {t("skillsLibraryColumn")}
-                      </div>
-                      <div className="mt-2 text-sm font-medium text-foreground">
-                        {selectedSkill.library.path || t("skillsNotInLibrary")}
-                      </div>
+                <div className="space-y-4">
+                  <div className="rounded-[24px] border border-border bg-background/70 p-4">
+                    <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                      {t("skillsLibraryColumn")}
                     </div>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="mt-3 break-all text-sm font-medium text-foreground">
+                      {selectedSkill.library.path || t("skillsNotInLibrary")}
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                      {t("skillsModalFocusedDescription", { tool: TOOL_LABELS[scope] })}
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
                       {selectedSkill.library.path ? (
                         <button
                           type="button"
@@ -1124,9 +1758,7 @@ export default function SkillsPage() {
                       {!selectedSkill.managed && selectedSkill.library.path && apiFlavor === "overview" ? (
                         <button
                           type="button"
-                          onClick={() =>
-                            void importManaged(selectedSkill, selectedSkill.library.path, "global")
-                          }
+                          onClick={() => void importManaged(selectedSkill, selectedSkill.library.path, "global")}
                           disabled={mutatingTool === "global"}
                           className={PRIMARY_BUTTON}
                         >
@@ -1135,302 +1767,138 @@ export default function SkillsPage() {
                       ) : null}
                     </div>
                   </div>
-                </div>
 
-                {selectedSkill.issues.length > 0 ? (
-                  <div className="space-y-3 rounded-2xl border border-amber-500/30 bg-amber-500/8 p-4">
-                    <div className="space-y-1">
-                      <h3 className="text-base font-semibold text-foreground">{t("skillsIssuesTitle")}</h3>
-                      <p className="text-sm leading-6 text-muted-foreground">
-                        {t("skillsIssuesDescription")}
-                      </p>
-                    </div>
-                    <div className="space-y-2">
-                      {Object.entries(toolIssueSummary(selectedSkill.issues)).map(([code, tools]) => (
-                        <div
-                          key={code}
-                          className="rounded-xl border border-amber-500/20 bg-background/80 px-3 py-2"
+                  {selectedSkill.managed ? (
+                    <div className="space-y-4 rounded-[24px] border border-border bg-background/70 p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="space-y-1">
+                          <h3 className="text-base font-semibold text-foreground">{t("skillsEditSection")}</h3>
+                          <p className="text-sm leading-6 text-muted-foreground">{t("skillsEditDescription")}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setPendingDelete(selectedSkill)}
+                          className="inline-flex min-h-10 cursor-pointer items-center justify-center rounded-lg border border-red-500/30 px-3 py-2 text-sm text-red-500 transition-colors hover:bg-red-500/10"
                         >
-                          <div className="text-sm font-medium text-foreground">
-                            {getStatusLabel(t, code as SkillStatus)}
-                          </div>
-                          <div className="mt-1 text-xs text-muted-foreground">
-                            {tools.map((tool) => TOOL_LABELS[tool as ToolTarget] ?? tool).join(" / ")}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-
-                {selectedSkill.managed ? (
-                  <div className="space-y-4 rounded-2xl border border-border bg-background/70 p-4">
-                    <div className="space-y-1">
-                      <h3 className="text-base font-semibold text-foreground">{t("skillsEditSection")}</h3>
-                      <p className="text-sm leading-6 text-muted-foreground">{t("skillsEditDescription")}</p>
-                    </div>
-                    <div className="space-y-3">
-                      <div>
-                        <label className="mb-1.5 block text-sm font-medium text-foreground">
-                          {t("skillName")}
-                        </label>
-                        <input
-                          value={form.name}
-                          onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
-                          className={INPUT_CLASS}
-                        />
+                          {t("delete")}
+                        </button>
                       </div>
-                      <div>
-                        <label className="mb-1.5 block text-sm font-medium text-foreground">
-                          {t("description")}
-                        </label>
-                        <textarea
-                          value={form.description}
-                          onChange={(event) =>
-                            setForm((current) => ({ ...current, description: event.target.value }))
-                          }
-                          rows={3}
-                          className={`${INPUT_CLASS} resize-y`}
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-1.5 block text-sm font-medium text-foreground">
-                          {t("sourcePath")}
-                        </label>
-                        <input
-                          value={form.sourcePath}
-                          onChange={(event) =>
-                            setForm((current) => ({ ...current, sourcePath: event.target.value }))
-                          }
-                          className={INPUT_CLASS}
-                        />
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap gap-3">
-                      <button
-                        type="button"
-                        onClick={() => void saveSkill()}
-                        disabled={!hasUnsavedChanges || saving}
-                        className={PRIMARY_BUTTON}
-                      >
-                        {saving ? t("loading") : t("save")}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setForm(createFormState(selectedSkill))}
-                        disabled={!hasUnsavedChanges || saving}
-                        className={SECONDARY_BUTTON}
-                      >
-                        {t("resetChanges")}
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-
-                {selectedSkill.variants.length > 0 ? (
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <h3 className="text-base font-semibold text-foreground">{t("skillsVariantSection")}</h3>
-                      <span className="text-sm text-muted-foreground">{selectedSkill.variants.length}</span>
-                    </div>
-                    <div className="space-y-3">
-                      {selectedSkill.variants.map((variant) => (
-                        <div key={`${variant.id}-${variant.source_path}`} className="rounded-2xl border border-border bg-background/70 p-4">
-                          <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="rounded-full border border-border px-2 py-0.5 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-                                  {variant.managed ? t("skillsManagedVariant") : t("skillsDiscoveredVariant")}
-                                </span>
-                                <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
-                                  {variant.origin_tool || "global"}
-                                </span>
-                              </div>
-                              <div className="mt-2 break-all text-sm font-medium text-foreground">
-                                {variant.source_path}
-                              </div>
-                              <div className="mt-1 text-xs text-muted-foreground">
-                                hash {hashPreview(variant.hash)}
-                              </div>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => void openFolder(variant.source_path)}
-                              className={GHOST_BUTTON}
-                            >
-                              {t("skillsOpenFolder")}
-                            </button>
-                          </div>
+                      <div className="grid gap-4">
+                        <div>
+                          <label className="mb-1.5 block text-sm font-medium text-foreground">{t("skillName")}</label>
+                          <input
+                            value={form.name}
+                            onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+                            className={INPUT_CLASS}
+                          />
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-
-                <div className="space-y-4">
-                  <div className="space-y-1">
-                    <h3 className="text-base font-semibold text-foreground">{t("skillsToolSection")}</h3>
-                    <p className="text-sm leading-6 text-muted-foreground">{t("skillsToolDescription")}</p>
-                  </div>
-                  <div className="space-y-4">
-                    {TOOLS.map((tool) => {
-                      const state = selectedSkill.tools[tool];
-                      const canSelectVariants = selectedSkill.managed && selectedSkill.variants.length > 0;
-                      return (
-                        <div key={tool} className="rounded-2xl border border-border bg-background/70 p-4">
-                          <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div>
-                              <div className="text-sm font-semibold text-foreground">{TOOL_LABELS[tool]}</div>
-                              <div className="mt-1 text-sm text-muted-foreground">
-                                {getStatusLabel(t, state?.status ?? "not_installed")}
-                              </div>
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  void mutateToolTarget(
-                                    tool,
-                                    {
-                                      enabled: !(state?.enabled ?? false),
-                                      selected_variant_id:
-                                        state?.selected_variant_id ||
-                                        selectedSkill.library.variant_id ||
-                                        selectedSkill.variants[0]?.id ||
-                                        0,
-                                    },
-                                    state?.enabled ? t("skillsDisconnected") : t("skillsConnected")
-                                  )
-                                }
-                                disabled={!selectedSkill.managed || mutatingTool === tool || !canSelectVariants}
-                                className={SECONDARY_BUTTON}
-                              >
-                                {state?.enabled ? t("disconnect") : t("connect")}
-                              </button>
-                              {state?.actual[0]?.path ? (
-                                <button
-                                  type="button"
-                                  onClick={() => void openFolder(state.actual[0].path)}
-                                  className={GHOST_BUTTON}
-                                >
-                                  {t("skillsOpenInstalled")}
-                                </button>
-                              ) : null}
-                            </div>
-                          </div>
-
-                          {selectedSkill.managed ? (
-                            <div className="mt-4 space-y-3">
-                              <div className="flex flex-wrap gap-2">
-                                {(["symlink", "copy"] as SyncMethod[]).map((method) => (
-                                  <button
-                                    key={method}
-                                    type="button"
-                                    onClick={() =>
-                                      void mutateToolTarget(tool, { method }, t("skillsMethodUpdated"))
-                                    }
-                                    disabled={mutatingTool === tool}
-                                    className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
-                                      (state?.method ?? "symlink") === method
-                                        ? "bg-accent text-white"
-                                        : "border border-border text-muted-foreground hover:text-foreground"
-                                    }`}
-                                  >
-                                    {method}
-                                  </button>
-                                ))}
-                              </div>
-                              <div className="grid gap-2">
-                                {selectedSkill.variants.map((variant) => {
-                                  const active = state?.selected_variant_id === variant.id && state?.enabled;
-                                  return (
-                                    <button
-                                      key={`${tool}-${variant.id}`}
-                                      type="button"
-                                      onClick={() =>
-                                        void mutateToolTarget(
-                                          tool,
-                                          { enabled: true, selected_variant_id: variant.id },
-                                          t("skillsVariantApplied")
-                                        )
-                                      }
-                                      disabled={mutatingTool === tool}
-                                      className={`flex min-h-11 items-center justify-between rounded-xl border px-3 py-2 text-left text-sm transition-colors ${
-                                        active
-                                          ? "border-accent bg-accent/8 text-foreground"
-                                          : "border-border bg-background hover:bg-muted"
-                                      }`}
-                                    >
-                                      <span className="min-w-0">
-                                        <span className="block truncate font-medium">
-                                          {pathTail(variant.source_path)}
-                                        </span>
-                                        <span className="block text-xs text-muted-foreground">
-                                          hash {hashPreview(variant.hash)}
-                                        </span>
-                                      </span>
-                                      {active ? (
-                                        <span className="rounded-full border border-accent/20 bg-accent/10 px-2 py-0.5 text-[11px] font-medium text-accent">
-                                          {t("skillsCurrentSelection")}
-                                        </span>
-                                      ) : null}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          ) : null}
-
-                          {!selectedSkill.managed && state?.actual[0]?.path && apiFlavor === "overview" ? (
-                            <div className="mt-4">
-                              <button
-                                type="button"
-                                onClick={() => void importManaged(selectedSkill, state.actual[0].path, tool)}
-                                disabled={mutatingTool === tool}
-                                className={PRIMARY_BUTTON}
-                              >
-                                {t("skillsAdoptFromTool", { tool: TOOL_LABELS[tool] })}
-                              </button>
-                            </div>
-                          ) : null}
+                        <div>
+                          <label className="mb-1.5 block text-sm font-medium text-foreground">{t("sourcePath")}</label>
+                          <input
+                            value={form.sourcePath}
+                            onChange={(event) => setForm((current) => ({ ...current, sourcePath: event.target.value }))}
+                            className={INPUT_CLASS}
+                          />
                         </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {!selectedSkill.managed && selectedSkill.discovered.length > 0 ? (
-                  <div className="space-y-3 rounded-2xl border border-border bg-background/70 p-4">
-                    <h3 className="text-base font-semibold text-foreground">{t("skillsDiscoveredSection")}</h3>
-                    <div className="space-y-2">
-                      {selectedSkill.discovered.map((entry) => (
-                        <div
-                          key={`${entry.tool}-${entry.path}`}
-                          className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 bg-background px-3 py-2"
+                        <div>
+                          <label className="mb-1.5 block text-sm font-medium text-foreground">{t("description")}</label>
+                          <textarea
+                            value={form.description}
+                            onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
+                            rows={4}
+                            className={`${INPUT_CLASS} resize-y`}
+                          />
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap justify-end gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setForm(createFormState(selectedSkill))}
+                          disabled={!hasUnsavedChanges || saving}
+                          className={SECONDARY_BUTTON}
                         >
+                          {t("resetChanges")}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void saveSkill()}
+                          disabled={!hasUnsavedChanges || saving}
+                          className={PRIMARY_BUTTON}
+                        >
+                          {saving ? t("loading") : t("save")}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+
+              {selectedSkill.variants.length > 0 ? (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="text-base font-semibold text-foreground">{t("skillsVariantSection")}</h3>
+                    <span className="text-sm text-muted-foreground">{selectedSkill.variants.length}</span>
+                  </div>
+                  <div className="grid gap-3">
+                    {selectedSkill.variants.map((variant) => (
+                      <div key={`${variant.id}-${variant.source_path}`} className="rounded-[22px] border border-border bg-background/70 p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
                           <div className="min-w-0 flex-1">
-                            <div className="text-sm font-medium text-foreground">
-                              {entry.tool === "global" ? t("skillsLibraryColumn") : entry.tool}
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="rounded-full border border-border px-2 py-0.5 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+                                {variant.managed ? t("skillsManagedVariant") : t("skillsDiscoveredVariant")}
+                              </span>
+                              <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
+                                {variant.origin_tool || "global"}
+                              </span>
                             </div>
-                            <div className="mt-1 break-all text-xs text-muted-foreground">{entry.path}</div>
+                            <div className="mt-2 break-all text-sm font-medium text-foreground">{variant.source_path}</div>
+                            <div className="mt-1 text-xs text-muted-foreground">hash {hashPreview(variant.hash)}</div>
                           </div>
                           <button
                             type="button"
-                            onClick={() => void openFolder(entry.path)}
+                            onClick={() => void openFolder(variant.source_path)}
                             className={GHOST_BUTTON}
                           >
                             {t("skillsOpenFolder")}
                           </button>
                         </div>
-                      ))}
-                    </div>
+                      </div>
+                    ))}
                   </div>
-                ) : null}
-              </div>
-            )}
+                </div>
+              ) : null}
+
+              {!selectedSkill.managed && selectedSkill.discovered.length > 0 ? (
+                <div className="space-y-3 rounded-[24px] border border-border bg-background/70 p-4">
+                  <h3 className="text-base font-semibold text-foreground">{t("skillsDiscoveredSection")}</h3>
+                  <div className="space-y-2">
+                    {selectedSkill.discovered.map((entry) => (
+                      <div
+                        key={`${entry.tool}-${entry.path}`}
+                        className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 bg-background px-3 py-2"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-medium text-foreground">
+                            {entry.tool === "global" ? t("skillsLibraryColumn") : TOOL_LABELS[entry.tool as ToolTarget] ?? entry.tool}
+                          </div>
+                          <div className="mt-1 break-all text-xs text-muted-foreground">{entry.path}</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void openFolder(entry.path)}
+                          className={GHOST_BUTTON}
+                        >
+                          {t("skillsOpenFolder")}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
-          </aside>
-        </div>
+          </ModalShell>
+        ) : null}
 
         {pendingDelete ? (
           <ConfirmPanel

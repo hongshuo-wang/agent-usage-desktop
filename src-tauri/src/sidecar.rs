@@ -1,8 +1,8 @@
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
-use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
+use tauri_plugin_shell::ShellExt;
 
 pub struct SidecarState {
     pub port: AtomicU16,
@@ -56,7 +56,12 @@ pub async fn start_sidecar(app: &tauri::AppHandle) -> Result<u16, String> {
         .shell()
         .sidecar("agent-usage")
         .map_err(|e| e.to_string())?
-        .args(["--config", config_path.to_str().unwrap(), "--port", &port.to_string()]);
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--port",
+            &port.to_string(),
+        ]);
 
     let (mut rx, child) = sidecar_command.spawn().map_err(|e| e.to_string())?;
 

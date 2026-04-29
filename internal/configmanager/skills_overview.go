@@ -12,10 +12,11 @@ import (
 )
 
 type SkillOverview struct {
-	LibraryPath string               `json:"library_path"`
-	CLI         SkillCLIStatus       `json:"cli"`
-	Summary     SkillOverviewSummary `json:"summary"`
-	Skills      []SkillOverviewItem  `json:"skills"`
+	LibraryPath      string               `json:"library_path"`
+	CLI              SkillCLIStatus       `json:"cli"`
+	ToolAvailability map[string]bool      `json:"tool_availability"`
+	Summary          SkillOverviewSummary `json:"summary"`
+	Skills           []SkillOverviewItem  `json:"skills"`
 }
 
 type SkillOverviewSummary struct {
@@ -116,9 +117,16 @@ func (m *Manager) SkillsOverview() (*SkillOverview, error) {
 	entryIndex := groupSkillEntries(entries)
 	itemsByName := map[string]*SkillOverviewItem{}
 	overview := &SkillOverview{
-		LibraryPath: libraryPath,
-		CLI:         detectSkillsCLI(),
-		Skills:      []SkillOverviewItem{},
+		LibraryPath:      libraryPath,
+		CLI:              m.detectSkillsCLIFn(),
+		ToolAvailability: map[string]bool{},
+		Skills:           []SkillOverviewItem{},
+	}
+
+	for _, tool := range m.sortedAdapterTools() {
+		if adapter, ok := m.adapters[tool]; ok && adapter != nil {
+			overview.ToolAvailability[tool] = toolCLIAvailable(tool)
+		}
 	}
 
 	for _, skill := range skills {

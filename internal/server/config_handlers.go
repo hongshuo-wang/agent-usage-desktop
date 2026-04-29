@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -114,6 +115,10 @@ type importManagedSkillReq struct {
 	SourcePath string `json:"source_path"`
 }
 
+type agentUsageSkillActionReq struct {
+	Agents []string `json:"agents"`
+}
+
 type importManagedSkillResp struct {
 	SkillID       int64                        `json:"skill_id"`
 	VariantID     int64                        `json:"variant_id"`
@@ -161,6 +166,32 @@ func readJSON(r *http.Request, v interface{}) error {
 		return err
 	}
 	return nil
+}
+
+func readOptionalJSON(r *http.Request, v interface{}) (bool, error) {
+	defer r.Body.Close()
+
+	payload, err := io.ReadAll(r.Body)
+	if err != nil {
+		return false, err
+	}
+	if len(bytes.TrimSpace(payload)) == 0 {
+		return false, nil
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	if err := decoder.Decode(v); err != nil {
+		return true, err
+	}
+
+	var extra interface{}
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return true, fmt.Errorf("request body must contain a single JSON value")
+		}
+		return true, err
+	}
+	return true, nil
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string, details interface{}) {
@@ -593,6 +624,58 @@ func (s *Server) handleSkillsOverview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, overview)
 }
 
+func (s *Server) handleInstallAgentUsageSkill(w http.ResponseWriter, r *http.Request) {
+	if s.mgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "config_manager_unavailable", "config manager is unavailable", nil)
+		return
+	}
+
+	var req agentUsageSkillActionReq
+	hasBody, err := readOptionalJSON(r, &req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "invalid JSON request body", err.Error())
+		return
+	}
+
+	agents := req.Agents
+	if !hasBody {
+		agents = nil
+	}
+
+	result, err := s.mgr.InstallAgentUsageSkill(agents)
+	if err != nil {
+		writeError(w, agentUsageSkillErrorStatus(err), "install_agent_usage_skill_failed", "failed to install agent-usage skill", err.Error())
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) handleUninstallAgentUsageSkill(w http.ResponseWriter, r *http.Request) {
+	if s.mgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "config_manager_unavailable", "config manager is unavailable", nil)
+		return
+	}
+
+	var req agentUsageSkillActionReq
+	hasBody, err := readOptionalJSON(r, &req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "invalid JSON request body", err.Error())
+		return
+	}
+
+	agents := req.Agents
+	if !hasBody {
+		agents = nil
+	}
+
+	result, err := s.mgr.UninstallAgentUsageSkill(agents)
+	if err != nil {
+		writeError(w, agentUsageSkillErrorStatus(err), "uninstall_agent_usage_skill_failed", "failed to uninstall agent-usage skill", err.Error())
+		return
+	}
+	writeJSON(w, result)
+}
+
 func (s *Server) handleImportSkills(w http.ResponseWriter, r *http.Request) {
 	if s.mgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "config_manager_unavailable", "config manager is unavailable", nil)
@@ -962,6 +1045,17 @@ func validateProfileInput(name, config string) error {
 }
 
 func profileErrorStatus(err error) int {
+	return configErrorStatus(err)
+}
+
+func agentUsageSkillErrorStatus(err error) int {
+	if err == nil {
+		return http.StatusInternalServerError
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "agents are required") || strings.Contains(message, "invalid agent") {
+		return http.StatusBadRequest
+	}
 	return configErrorStatus(err)
 }
 

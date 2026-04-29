@@ -2,19 +2,16 @@ package configmanager
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/hongshuo-wang/agent-usage-desktop/internal/storage"
 )
@@ -25,12 +22,13 @@ const (
 )
 
 type SkillInventory struct {
-	LibraryPath string                `json:"library_path"`
-	CLI         SkillCLIStatus        `json:"cli"`
-	Library     []SkillInventoryEntry `json:"library"`
-	Discovered  []SkillInventoryEntry `json:"discovered"`
-	Conflicts   []SkillConflict       `json:"conflicts"`
-	Summary     SkillInventorySummary `json:"summary"`
+	LibraryPath      string                `json:"library_path"`
+	CLI              SkillCLIStatus        `json:"cli"`
+	ToolAvailability map[string]bool       `json:"tool_availability"`
+	Library          []SkillInventoryEntry `json:"library"`
+	Discovered       []SkillInventoryEntry `json:"discovered"`
+	Conflicts        []SkillConflict       `json:"conflicts"`
+	Summary          SkillInventorySummary `json:"summary"`
 }
 
 type SkillCLIStatus struct {
@@ -256,11 +254,17 @@ func (m *Manager) classifySkillInventory(libraryPath string, entries []SkillInve
 	}
 
 	inventory := &SkillInventory{
-		LibraryPath: libraryPath,
-		CLI:         detectSkillsCLI(),
-		Library:     []SkillInventoryEntry{},
-		Discovered:  []SkillInventoryEntry{},
-		Conflicts:   []SkillConflict{},
+		LibraryPath:      libraryPath,
+		CLI:              detectSkillsCLI(),
+		ToolAvailability: map[string]bool{},
+		Library:          []SkillInventoryEntry{},
+		Discovered:       []SkillInventoryEntry{},
+		Conflicts:        []SkillConflict{},
+	}
+	for _, tool := range m.sortedAdapterTools() {
+		if adapter, ok := m.adapters[tool]; ok && adapter != nil {
+			inventory.ToolAvailability[tool] = toolCLIAvailable(tool)
+		}
 	}
 
 	for _, group := range byName {
@@ -565,25 +569,6 @@ func skillsLibraryPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, ".agent-usage", "skills"), nil
-}
-
-func detectSkillsCLI() SkillCLIStatus {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "npx", "skills", "--help")
-	output, err := cmd.CombinedOutput()
-	status := SkillCLIStatus{Command: "npx skills --help"}
-	if ctx.Err() == context.DeadlineExceeded {
-		status.Message = "npx skills timed out"
-		return status
-	}
-	if err != nil {
-		status.Message = "npx skills unavailable"
-		return status
-	}
-	status.Available = true
-	status.Message = firstNonEmptyLine(string(output))
-	return status
 }
 
 func firstNonEmptyLine(text string) string {

@@ -15,7 +15,10 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(tauri_plugin_notification::init())
         .manage(SidecarState {
             port: AtomicU16::new(0),
@@ -124,6 +127,8 @@ fn main() {
             commands::set_cost_threshold,
             commands::get_notifications_enabled,
             commands::set_notifications_enabled,
+            commands::install_agent_usage_skill,
+            commands::uninstall_agent_usage_skill,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
