@@ -52,6 +52,8 @@ type SkillInventoryEntry struct {
 	Hash          string                     `json:"hash"`
 	IsLibrary     bool                       `json:"is_library"`
 	IsSymlink     bool                       `json:"is_symlink"`
+	Valid         bool                       `json:"valid"`
+	ProblemReason string                     `json:"problem_reason"`
 	Importable    bool                       `json:"importable"`
 	Represented   bool                       `json:"represented"`
 	Conflict      bool                       `json:"conflict"`
@@ -91,6 +93,21 @@ type SkillConflictResolveResult struct {
 }
 
 var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+
+const (
+	skillProblemInvalidDefinition = "invalid_definition"
+	skillProblemMissingLocalPath  = "local_source_missing"
+	skillProblemMissingGlobalPath = "global_source_missing"
+	skillProblemMissingInstall    = "install_missing"
+	skillProblemInstallMismatch   = "install_mismatch"
+
+	skillDefinitionStatusValid           = "valid"
+	skillDefinitionStatusMissingPath     = "missing_path"
+	skillDefinitionStatusNotDirectory    = "not_directory"
+	skillDefinitionStatusMissingSkillMD  = "missing_skill_md"
+	skillDefinitionStatusInvalidSkillMD  = "invalid_skill_md"
+	skillDefinitionStatusLegacyContainer = "legacy_invalid_container_record"
+)
 
 func (m *Manager) SkillsInventory() (*SkillInventory, error) {
 	libraryPath, err := skillsLibraryPath()
@@ -241,6 +258,7 @@ func (m *Manager) scanSkillInventoryEntries(libraryPath string) ([]SkillInventor
 			if err != nil {
 				return nil, err
 			}
+			toolEntries = filterVisibleSkillInventoryEntries(root, toolEntries)
 			entries = append(entries, toolEntries...)
 		}
 	}
@@ -398,46 +416,142 @@ func scanSkillRoot(root, tool string, library bool) ([]SkillInventoryEntry, erro
 		return nil, err
 	}
 	entries := make([]SkillInventoryEntry, 0, len(children))
+	visited := map[string]struct{}{}
 	for _, child := range children {
-		if strings.HasPrefix(child.Name(), ".") {
+		if shouldSkipSkillDirEntry(child) {
 			continue
 		}
 		path := filepath.Join(root, child.Name())
-		info, err := os.Stat(path)
-		if err != nil || !info.IsDir() {
-			continue
-		}
-		metadata, err := parseSkillMetadata(path)
+		childEntries, err := scanSkillCandidate(path, tool, library, visited)
 		if err != nil {
 			return nil, err
 		}
-		name := metadata.Name
-		if name == "" {
-			name = child.Name()
-		}
-		hash, err := hashSkillDirectory(path)
-		if err != nil {
-			return nil, err
-		}
-		lstat, err := os.Lstat(path)
-		if err != nil {
-			return nil, err
-		}
-		entries = append(entries, SkillInventoryEntry{
-			Name:        name,
-			Description: metadata.Description,
-			Path:        path,
-			Tool:        tool,
-			Hash:        hash,
-			IsLibrary:   library,
-			IsSymlink:   lstat.Mode()&os.ModeSymlink != 0,
-		})
+		entries = append(entries, childEntries...)
 	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
 	return entries, nil
 }
 
+func scanSkillCandidate(path, tool string, library bool, visited map[string]struct{}) ([]SkillInventoryEntry, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, nil
+	}
+
+	resolvedPath, err := resolveSkillDirectoryPath(path)
+	if err != nil {
+		return nil, err
+	}
+	if resolvedPath != "" {
+		if _, ok := visited[resolvedPath]; ok {
+			return nil, nil
+		}
+		visited[resolvedPath] = struct{}{}
+		defer delete(visited, resolvedPath)
+	}
+
+	definitionStatus, err := inspectSkillDefinitionStatus(path)
+	if err != nil {
+		return nil, err
+	}
+	if definitionStatus == skillDefinitionStatusValid {
+		entry, err := buildSkillInventoryEntry(path, tool, library, "")
+		if err != nil {
+			return nil, err
+		}
+		return []SkillInventoryEntry{entry}, nil
+	}
+
+	children, err := os.ReadDir(path)
+	if err != nil {
+		return nil, err
+	}
+	nested := make([]SkillInventoryEntry, 0, len(children))
+	for _, child := range children {
+		if shouldSkipSkillDirEntry(child) {
+			continue
+		}
+		childPath := filepath.Join(path, child.Name())
+		childEntries, err := scanSkillCandidate(childPath, tool, library, visited)
+		if err != nil {
+			return nil, err
+		}
+		nested = append(nested, childEntries...)
+	}
+	if len(nested) > 0 {
+		return nested, nil
+	}
+
+	if definitionStatus == skillDefinitionStatusLegacyContainer || definitionStatus == skillDefinitionStatusMissingSkillMD {
+		return nil, nil
+	}
+
+	problemReason := legacyProblemReasonForDefinitionStatus(definitionStatus, "")
+	entry, err := buildSkillInventoryEntry(path, tool, library, problemReason)
+	if err != nil {
+		return nil, err
+	}
+	return []SkillInventoryEntry{entry}, nil
+}
+
+func buildSkillInventoryEntry(path, tool string, library bool, problemReason string) (SkillInventoryEntry, error) {
+	metadata, err := parseSkillMetadata(path)
+	if err != nil {
+		return SkillInventoryEntry{}, err
+	}
+	name := metadata.Name
+	if name == "" {
+		name = filepath.Base(path)
+	}
+	hash, err := hashSkillDirectory(path)
+	if err != nil {
+		return SkillInventoryEntry{}, err
+	}
+	lstat, err := os.Lstat(path)
+	if err != nil {
+		return SkillInventoryEntry{}, err
+	}
+	return SkillInventoryEntry{
+		Name:          name,
+		Description:   metadata.Description,
+		Path:          path,
+		Tool:          tool,
+		Hash:          hash,
+		IsLibrary:     library,
+		IsSymlink:     lstat.Mode()&os.ModeSymlink != 0,
+		Valid:         problemReason == "",
+		ProblemReason: problemReason,
+	}, nil
+}
+
+func resolveSkillDirectoryPath(skillPath string) (string, error) {
+	resolvedPath, err := filepath.EvalSymlinks(skillPath)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(resolvedPath), nil
+}
+
+func validateSkillDefinitionFile(skillPath string) (bool, error) {
+	status, err := inspectSkillDefinitionStatus(skillPath)
+	if err != nil {
+		return false, err
+	}
+	return status == skillDefinitionStatusValid, nil
+}
+
 func parseSkillMetadata(skillPath string) (skillMetadata, error) {
-	content, err := os.ReadFile(filepath.Join(skillPath, "SKILL.md"))
+	docPath := filepath.Join(skillPath, "SKILL.md")
+	if info, err := os.Stat(docPath); err == nil && !info.Mode().IsRegular() {
+		return skillMetadata{}, nil
+	}
+	content, err := os.ReadFile(docPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return skillMetadata{}, nil
@@ -473,21 +587,160 @@ func parseSkillMetadata(skillPath string) (skillMetadata, error) {
 	return metadata, nil
 }
 
+func validateSkillDirectory(skillPath string) (bool, string, error) {
+	status, err := inspectSkillDefinitionStatus(skillPath)
+	if err != nil {
+		return false, "", err
+	}
+	if status != skillDefinitionStatusValid {
+		return false, legacyProblemReasonForDefinitionStatus(status, ""), nil
+	}
+	return true, "", nil
+}
+
+func inspectSkillDefinitionStatus(skillPath string) (string, error) {
+	return inspectSkillDefinitionStatusVisited(skillPath, map[string]struct{}{})
+}
+
+func inspectSkillDefinitionStatusVisited(skillPath string, visited map[string]struct{}) (string, error) {
+	if strings.TrimSpace(skillPath) == "" {
+		return skillDefinitionStatusMissingPath, nil
+	}
+
+	info, err := os.Stat(skillPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return skillDefinitionStatusMissingPath, nil
+		}
+		return "", err
+	}
+	if !info.IsDir() {
+		return skillDefinitionStatusNotDirectory, nil
+	}
+
+	docPath := filepath.Join(skillPath, "SKILL.md")
+	docInfo, err := os.Stat(docPath)
+	if err == nil {
+		if docInfo.Mode().IsRegular() {
+			return skillDefinitionStatusValid, nil
+		}
+		return skillDefinitionStatusInvalidSkillMD, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+
+	nested, err := directoryContainsNestedSkills(skillPath, visited)
+	if err != nil {
+		return "", err
+	}
+	if nested {
+		return skillDefinitionStatusLegacyContainer, nil
+	}
+	return skillDefinitionStatusMissingSkillMD, nil
+}
+
+func directoryContainsNestedSkills(path string, visited map[string]struct{}) (bool, error) {
+	resolvedPath, err := resolveSkillDirectoryPath(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	if _, ok := visited[resolvedPath]; ok {
+		return false, nil
+	}
+	visited[resolvedPath] = struct{}{}
+	defer delete(visited, resolvedPath)
+
+	children, err := os.ReadDir(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	for _, child := range children {
+		if shouldSkipSkillDirEntry(child) {
+			continue
+		}
+		childPath := filepath.Join(path, child.Name())
+		status, err := inspectSkillDefinitionStatusVisited(childPath, visited)
+		if err != nil {
+			return false, err
+		}
+		if status == skillDefinitionStatusValid || status == skillDefinitionStatusLegacyContainer {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func shouldSkipSkillDirEntry(entry os.DirEntry) bool {
+	return strings.HasPrefix(entry.Name(), ".") && !entry.IsDir()
+}
+
+func filterVisibleSkillInventoryEntries(root string, entries []SkillInventoryEntry) []SkillInventoryEntry {
+	filtered := make([]SkillInventoryEntry, 0, len(entries))
+	for _, entry := range entries {
+		if isHiddenSystemSkillPath(root, entry.Path) {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
+}
+
+func isHiddenSystemSkillPath(root, path string) bool {
+	if strings.TrimSpace(root) == "" || strings.TrimSpace(path) == "" {
+		return false
+	}
+	relative, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	relative = filepath.ToSlash(relative)
+	first, _, _ := strings.Cut(relative, "/")
+	return first == ".system"
+}
+
+func legacyProblemReasonForDefinitionStatus(status, scope string) string {
+	switch status {
+	case skillDefinitionStatusMissingPath:
+		switch scope {
+		case "local_definition":
+			return skillProblemMissingLocalPath
+		case "global_definition":
+			return skillProblemMissingGlobalPath
+		}
+		return skillProblemInvalidDefinition
+	case skillDefinitionStatusValid:
+		return ""
+	default:
+		return skillProblemInvalidDefinition
+	}
+}
+
 func hashSkillDirectory(root string) (string, error) {
+	resolvedRoot, err := resolveSkillDirectoryPath(root)
+	if err != nil {
+		return "", err
+	}
 	type fileHashInput struct {
 		path string
 		mode string
 		data []byte
 	}
 	var files []fileHashInput
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(resolvedRoot, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if path == root {
+		if path == resolvedRoot {
 			return nil
 		}
-		relative, err := filepath.Rel(root, path)
+		relative, err := filepath.Rel(resolvedRoot, path)
 		if err != nil {
 			return err
 		}

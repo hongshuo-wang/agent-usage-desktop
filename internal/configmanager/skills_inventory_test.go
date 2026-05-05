@@ -3,6 +3,7 @@ package configmanager
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -37,6 +38,36 @@ func TestHashSkillDirectoryChangesWhenContentsChange(t *testing.T) {
 	}
 }
 
+func TestHashSkillDirectoryFollowsSkillSymlink(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "planner-target")
+	writeSkillFile(t, target, "planner", "Planner skill", "body")
+
+	linkPath := filepath.Join(t.TempDir(), "planner-link")
+	if err := os.Symlink(target, linkPath); err != nil {
+		t.Skipf("Symlink() unsupported: %v", err)
+	}
+
+	valid, reason, err := validateSkillDirectory(linkPath)
+	if err != nil {
+		t.Fatalf("validateSkillDirectory() error = %v", err)
+	}
+	if !valid || reason != "" {
+		t.Fatalf("validateSkillDirectory() = (%v, %q), want (true, empty)", valid, reason)
+	}
+
+	targetHash, err := hashSkillDirectory(target)
+	if err != nil {
+		t.Fatalf("hashSkillDirectory(target) error = %v", err)
+	}
+	linkHash, err := hashSkillDirectory(linkPath)
+	if err != nil {
+		t.Fatalf("hashSkillDirectory(link) error = %v", err)
+	}
+	if targetHash != linkHash {
+		t.Fatalf("hash mismatch through symlink: target=%q link=%q", targetHash, linkHash)
+	}
+}
+
 func TestFirstNonEmptyLineStripsANSI(t *testing.T) {
 	text := "\n\x1b[1mUsage:\x1b[0m skills <command> [options]\n"
 	got := firstNonEmptyLine(text)
@@ -66,6 +97,71 @@ func TestSkillsInventoryClassifiesImportableAndConflict(t *testing.T) {
 	}
 	if inventory.Summary.ConflictCount != 1 {
 		t.Fatalf("ConflictCount = %d, want 1", inventory.Summary.ConflictCount)
+	}
+}
+
+func TestScanSkillInventoryEntriesTreatsContainerDirsAsNamespaces(t *testing.T) {
+	db := openManagerTestDB(t)
+	libraryRoot := filepath.Join(t.TempDir(), "library")
+	toolRoot := filepath.Join(t.TempDir(), "tool-skills")
+	writeSkillFile(t, filepath.Join(toolRoot, "superpowers", "planner"), "planner", "Planner", "planner")
+	writeSkillFile(t, filepath.Join(toolRoot, "superpowers", "reviewer"), "reviewer", "Reviewer", "reviewer")
+
+	mgr := NewManager(db, filepath.Join(t.TempDir(), "backups"), WithAdapter(&fakeManagerAdapter{tool: "codex", installed: true, skillPaths: []string{toolRoot}}), WithEncryptionKey(make([]byte, 32)))
+	entries, err := mgr.scanSkillInventoryEntries(libraryRoot)
+	if err != nil {
+		t.Fatalf("scanSkillInventoryEntries() error = %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("len(entries) = %d, want 2", len(entries))
+	}
+
+	names := []string{entries[0].Name, entries[1].Name}
+	if strings.Join(names, ",") != "planner,reviewer" {
+		t.Fatalf("entry names = %v, want [planner reviewer]", names)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Path, string(filepath.Separator)+"superpowers"+string(filepath.Separator)) && filepath.Base(entry.Path) == "superpowers" {
+			t.Fatalf("container directory surfaced as skill entry: %+v", entry)
+		}
+		if !entry.Valid {
+			t.Fatalf("nested skill marked invalid: %+v", entry)
+		}
+	}
+}
+
+func TestScanSkillInventoryEntriesIgnoresEmptyContainerDirectory(t *testing.T) {
+	db := openManagerTestDB(t)
+	libraryRoot := filepath.Join(t.TempDir(), "library")
+	toolRoot := filepath.Join(t.TempDir(), "tool-skills")
+	emptyContainer := filepath.Join(toolRoot, "superpowers")
+	if err := os.MkdirAll(emptyContainer, 0o755); err != nil {
+		t.Fatalf("MkdirAll emptyContainer: %v", err)
+	}
+
+	mgr := NewManager(db, filepath.Join(t.TempDir(), "backups"), WithAdapter(&fakeManagerAdapter{tool: "codex", installed: true, skillPaths: []string{toolRoot}}), WithEncryptionKey(make([]byte, 32)))
+	entries, err := mgr.scanSkillInventoryEntries(libraryRoot)
+	if err != nil {
+		t.Fatalf("scanSkillInventoryEntries() error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("len(entries) = %d, want 0", len(entries))
+	}
+}
+
+func TestScanSkillInventoryEntriesHidesSystemSkillNamespace(t *testing.T) {
+	db := openManagerTestDB(t)
+	libraryRoot := filepath.Join(t.TempDir(), "library")
+	toolRoot := filepath.Join(t.TempDir(), "tool-skills")
+	writeSkillFile(t, filepath.Join(toolRoot, ".system", "planner"), "planner", "Planner", "planner")
+
+	mgr := NewManager(db, filepath.Join(t.TempDir(), "backups"), WithAdapter(&fakeManagerAdapter{tool: "codex", installed: true, skillPaths: []string{toolRoot}}), WithEncryptionKey(make([]byte, 32)))
+	entries, err := mgr.scanSkillInventoryEntries(libraryRoot)
+	if err != nil {
+		t.Fatalf("scanSkillInventoryEntries() error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("len(entries) = %d, want 0", len(entries))
 	}
 }
 

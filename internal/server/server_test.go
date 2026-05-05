@@ -962,6 +962,7 @@ func TestCreateListAndSetSkillTargets(t *testing.T) {
 	srv := New(db, tempManager(t, db), "127.0.0.1:0")
 	handler := srv.Handler()
 	skillDir := t.TempDir()
+	writeServerTestSkill(t, skillDir, "planner", "Plan helper")
 
 	body := bytes.NewBufferString(fmt.Sprintf(`{"name":"planner","source_path":%q,"description":"Plan helper","targets":{"codex":{"enabled":true}}}`, skillDir))
 	req := httptest.NewRequest(http.MethodPost, "/api/config/skills", body)
@@ -1019,6 +1020,8 @@ func TestUpdateSkillCanPersistTargets(t *testing.T) {
 	handler := srv.Handler()
 	originalDir := t.TempDir()
 	updatedDir := t.TempDir()
+	writeServerTestSkill(t, originalDir, "planner", "Plan helper")
+	writeServerTestSkill(t, updatedDir, "planner-updated", "Updated helper")
 
 	createBody := bytes.NewBufferString(fmt.Sprintf(`{"name":"planner","source_path":%q,"description":"Plan helper","targets":{"codex":{"method":"symlink","enabled":true}}}`, originalDir))
 	req := httptest.NewRequest(http.MethodPost, "/api/config/skills", createBody)
@@ -1072,6 +1075,14 @@ func TestUpdateSkillCanPersistTargets(t *testing.T) {
 	}
 	if skills[0].Targets["codex"].Method != "symlink" || skills[0].Targets["codex"].Enabled {
 		t.Fatalf("targets = %+v, want codex symlink disabled", skills[0].Targets)
+	}
+}
+
+func writeServerTestSkill(t *testing.T, dir, name, description string) {
+	t.Helper()
+	content := fmt.Sprintf("---\nname: %s\ndescription: %s\n---\nbody\n", name, description)
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile SKILL.md: %v", err)
 	}
 }
 
@@ -1320,6 +1331,185 @@ func TestDeleteSkillRollbackPreservesOriginalID(t *testing.T) {
 	}
 	if !targets["codex"].Enabled || targets["codex"].Method != "symlink" {
 		t.Fatalf("targets = %+v, want codex symlink enabled", targets)
+	}
+}
+
+func TestSkillsCLIOverviewAndBindingEndpoint(t *testing.T) {
+	db := tempDB(t)
+	t.Setenv("HOME", t.TempDir())
+
+	installRoot := filepath.Join(t.TempDir(), "codex-skills")
+	localPath := filepath.Join(installRoot, "planner")
+	if err := os.MkdirAll(localPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll localPath: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(localPath, "SKILL.md"), []byte("local-v1"), 0o644); err != nil {
+		t.Fatalf("WriteFile local skill: %v", err)
+	}
+	globalPath := filepath.Join(t.TempDir(), "planner-global")
+	if err := os.MkdirAll(globalPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll globalPath: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(globalPath, "SKILL.md"), []byte("global-v2"), 0o644); err != nil {
+		t.Fatalf("WriteFile global skill: %v", err)
+	}
+
+	mgr := configmanager.NewManager(
+		db,
+		t.TempDir(),
+		configmanager.WithEncryptionKey([]byte("12345678901234567890123456789012")),
+		configmanager.WithAdapter(&failingServerTestAdapter{
+			tool:       "codex",
+			installed:  true,
+			skillPaths: []string{installRoot},
+		}),
+	)
+	srv := New(db, mgr, "127.0.0.1:0")
+	handler := srv.Handler()
+
+	importResp, err := mgr.ImportManagedSkill(configmanager.ImportManagedSkillRequest{
+		Name:       "planner",
+		Tool:       "codex",
+		SourcePath: localPath,
+	})
+	if err != nil {
+		t.Fatalf("ImportManagedSkill: %v", err)
+	}
+	if err := mgr.UpdateSkill(importResp.SkillID, "planner", globalPath, "Plan helper", true); err != nil {
+		t.Fatalf("UpdateSkill: %v", err)
+	}
+	if _, err := mgr.SyncSkills(); err != nil {
+		t.Fatalf("SyncSkills: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config/skills/cli/codex", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var overview struct {
+		Summary struct {
+			IssueCount int `json:"issue_count"`
+		} `json:"summary"`
+		Skills []struct {
+			Name          string `json:"name"`
+			Status        string `json:"status"`
+			SourceKind    string `json:"source_kind"`
+			SyncState     string `json:"sync_state"`
+			PrimaryAction string `json:"primary_action"`
+			Binding       struct {
+				SourceKind string `json:"source_kind"`
+			} `json:"binding"`
+		} `json:"skills"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&overview); err != nil {
+		t.Fatalf("decode overview: %v", err)
+	}
+	if len(overview.Skills) != 1 {
+		t.Fatalf("len(overview.Skills) = %d, want 1", len(overview.Skills))
+	}
+	if overview.Summary.IssueCount != 0 {
+		t.Fatalf("summary.issue_count = %d, want 0", overview.Summary.IssueCount)
+	}
+	if overview.Skills[0].Binding.SourceKind != "local" {
+		t.Fatalf("binding source_kind = %q, want local", overview.Skills[0].Binding.SourceKind)
+	}
+	if overview.Skills[0].SourceKind != "local" {
+		t.Fatalf("source_kind = %q, want local", overview.Skills[0].SourceKind)
+	}
+	if overview.Skills[0].Status != "ok" {
+		t.Fatalf("status = %q, want ok", overview.Skills[0].Status)
+	}
+	if overview.Skills[0].SyncState != "managed_using_local" {
+		t.Fatalf("sync_state = %q, want managed_using_local", overview.Skills[0].SyncState)
+	}
+	if overview.Skills[0].PrimaryAction != "override_global" {
+		t.Fatalf("primary_action = %q, want override_global", overview.Skills[0].PrimaryAction)
+	}
+
+	req = httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/config/skills/%d/bindings/codex", importResp.SkillID), bytes.NewBufferString(`{"enabled":true,"method":"copy","source_kind":"global"}`))
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("binding update status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/config/skills/cli/codex", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status after update = %d, body = %s", w.Code, w.Body.String())
+	}
+	overview = struct {
+		Summary struct {
+			IssueCount int `json:"issue_count"`
+		} `json:"summary"`
+		Skills []struct {
+			Name          string `json:"name"`
+			Status        string `json:"status"`
+			SourceKind    string `json:"source_kind"`
+			SyncState     string `json:"sync_state"`
+			PrimaryAction string `json:"primary_action"`
+			Binding       struct {
+				SourceKind string `json:"source_kind"`
+			} `json:"binding"`
+		} `json:"skills"`
+	}{}
+	if err := json.NewDecoder(w.Body).Decode(&overview); err != nil {
+		t.Fatalf("decode updated overview: %v", err)
+	}
+	if overview.Skills[0].Binding.SourceKind != "global" {
+		t.Fatalf("updated binding source_kind = %q, want global", overview.Skills[0].Binding.SourceKind)
+	}
+	if overview.Summary.IssueCount != 0 {
+		t.Fatalf("updated summary.issue_count = %d, want 0", overview.Summary.IssueCount)
+	}
+	if overview.Skills[0].SourceKind != "global" {
+		t.Fatalf("updated source_kind = %q, want global", overview.Skills[0].SourceKind)
+	}
+	if overview.Skills[0].Status != "ok" {
+		t.Fatalf("updated status = %q, want ok", overview.Skills[0].Status)
+	}
+	if overview.Skills[0].SyncState != "in_sync" {
+		t.Fatalf("updated sync_state = %q, want in_sync", overview.Skills[0].SyncState)
+	}
+	if overview.Skills[0].PrimaryAction != "none" {
+		t.Fatalf("updated primary_action = %q, want none", overview.Skills[0].PrimaryAction)
+	}
+}
+
+func TestDeleteSkillPathEndpoint(t *testing.T) {
+	db := tempDB(t)
+	t.Setenv("HOME", t.TempDir())
+
+	installRoot := filepath.Join(t.TempDir(), "codex-skills")
+	brokenPath := filepath.Join(installRoot, "broken")
+	if err := os.MkdirAll(brokenPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll brokenPath: %v", err)
+	}
+
+	mgr := configmanager.NewManager(
+		db,
+		t.TempDir(),
+		configmanager.WithEncryptionKey([]byte("12345678901234567890123456789012")),
+		configmanager.WithAdapter(&failingServerTestAdapter{
+			tool:       "codex",
+			installed:  true,
+			skillPaths: []string{installRoot},
+		}),
+	)
+	srv := New(db, mgr, "127.0.0.1:0")
+	handler := srv.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/config/skills/delete-path", bytes.NewBufferString(fmt.Sprintf(`{"path":%q}`, brokenPath)))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(brokenPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("os.Stat brokenPath err = %v, want not exists", err)
 	}
 }
 

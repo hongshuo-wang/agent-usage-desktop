@@ -67,9 +67,11 @@ type SkillOverviewToolState struct {
 }
 
 type SkillOverviewActualInstall struct {
-	Path   string `json:"path"`
-	Hash   string `json:"hash"`
-	Method string `json:"method"`
+	Path          string `json:"path"`
+	Hash          string `json:"hash"`
+	Method        string `json:"method"`
+	Valid         bool   `json:"valid"`
+	ProblemReason string `json:"problem_reason"`
 }
 
 type SkillOverviewDiscoveredInstall struct {
@@ -260,13 +262,20 @@ func (m *Manager) ImportManagedSkill(req ImportManagedSkillRequest) (*ImportMana
 			_ = m.db.DeleteSkill(skillID)
 			return nil, err
 		}
+		if err := m.db.SetSkillCurrentVariant(skillID, variantID); err != nil {
+			_ = m.db.DeleteSkill(skillID)
+			return nil, err
+		}
 		if req.Tool != "global" {
 			targets := map[string]storage.SkillTargetRecord{
 				req.Tool: {
-					Tool:      req.Tool,
-					Method:    defaultSkillSyncMethodForOS(runtime.GOOS),
-					Enabled:   true,
-					VariantID: variantID,
+					Tool:            req.Tool,
+					Method:          defaultSkillSyncMethodForOS(runtime.GOOS),
+					Enabled:         true,
+					SourceKind:      "local",
+					LocalSourcePath: req.SourcePath,
+					LocalSourceHash: sourceHash,
+					LocalOriginTool: req.Tool,
 				},
 			}
 			if err := m.db.SetSkillTargets(skillID, skillTargetRecordsFromMap(targets)); err != nil {
@@ -312,7 +321,11 @@ func (m *Manager) ImportManagedSkill(req ImportManagedSkillRequest) (*ImportMana
 	}
 	current.Tool = req.Tool
 	current.Enabled = true
-	current.VariantID = variantID
+	current.SourceKind = "local"
+	current.VariantID = 0
+	current.LocalSourcePath = req.SourcePath
+	current.LocalSourceHash = sourceHash
+	current.LocalOriginTool = req.Tool
 	targets[req.Tool] = current
 	if err := m.db.SetSkillTargets(skill.ID, skillTargetRecordsFromMap(targets)); err != nil {
 		return nil, err
@@ -532,9 +545,11 @@ func toActualInstalls(entries []SkillInventoryEntry) []SkillOverviewActualInstal
 	actual := make([]SkillOverviewActualInstall, 0, len(entries))
 	for _, entry := range entries {
 		actual = append(actual, SkillOverviewActualInstall{
-			Path:   entry.Path,
-			Hash:   entry.Hash,
-			Method: skillInstallMethod(entry),
+			Path:          entry.Path,
+			Hash:          entry.Hash,
+			Method:        skillInstallMethod(entry),
+			Valid:         entry.Valid,
+			ProblemReason: entry.ProblemReason,
 		})
 	}
 	sort.Slice(actual, func(i, j int) bool { return actual[i].Path < actual[j].Path })

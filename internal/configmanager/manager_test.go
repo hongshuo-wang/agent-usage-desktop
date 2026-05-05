@@ -488,7 +488,7 @@ func TestManagerSyncSkillsCopy(t *testing.T) {
 		t.Fatalf("len(affected) = 0, want > 0")
 	}
 
-	dstFile := filepath.Join(adapter.skillPaths[0], filepath.Base(srcRoot), "SKILL.md")
+	dstFile := filepath.Join(adapter.skillPaths[0], skillInstallDirName("demo", srcRoot), "SKILL.md")
 	data, err := os.ReadFile(dstFile)
 	if err != nil {
 		t.Fatalf("ReadFile dstFile: %v", err)
@@ -551,9 +551,7 @@ func TestManagerCreateSkillCleansUpRowWhenSetSkillTargetsFails(t *testing.T) {
 
 	db := openManagerTestDB(t)
 	sourceRoot := filepath.Join(t.TempDir(), "skill-src")
-	if err := os.MkdirAll(sourceRoot, 0o755); err != nil {
-		t.Fatalf("MkdirAll sourceRoot: %v", err)
-	}
+	writeSkillFile(t, sourceRoot, "demo", "desc", "body")
 
 	mgr := NewManager(
 		db,
@@ -584,9 +582,7 @@ func TestManagerUpdateSkillRejectsMissingSourceDirectory(t *testing.T) {
 
 	db := openManagerTestDB(t)
 	sourceRoot := filepath.Join(t.TempDir(), "skill-src")
-	if err := os.MkdirAll(sourceRoot, 0o755); err != nil {
-		t.Fatalf("MkdirAll sourceRoot: %v", err)
-	}
+	writeSkillFile(t, sourceRoot, "demo", "desc", "body")
 
 	mgr := NewManager(
 		db,
@@ -623,9 +619,7 @@ func TestManagerUpdateSkillWithTargetsRejectsNonDirectorySourcePath(t *testing.T
 
 	db := openManagerTestDB(t)
 	sourceRoot := filepath.Join(t.TempDir(), "skill-src")
-	if err := os.MkdirAll(sourceRoot, 0o755); err != nil {
-		t.Fatalf("MkdirAll sourceRoot: %v", err)
-	}
+	writeSkillFile(t, sourceRoot, "demo", "desc", "body")
 
 	mgr := NewManager(
 		db,
@@ -726,7 +720,7 @@ func TestManagerSyncSkillsPersistsDefaultMethodUsed(t *testing.T) {
 		t.Fatalf("targets[\"fake\"].Method = %q, want %q", targets["fake"].Method, wantMethod)
 	}
 
-	dstPath := filepath.Join(adapter.skillPaths[0], filepath.Base(sourceRoot))
+	dstPath := filepath.Join(adapter.skillPaths[0], skillInstallDirName("demo", sourceRoot))
 	info, err := os.Lstat(dstPath)
 	if err != nil {
 		t.Fatalf("Lstat dstPath: %v", err)
@@ -777,7 +771,7 @@ func TestManagerSyncSkillsFallsBackToCopyAndPersistsActualMethod(t *testing.T) {
 		t.Fatalf("SyncSkills: %v", err)
 	}
 
-	dstPath := filepath.Join(adapter.skillPaths[0], filepath.Base(sourceRoot))
+	dstPath := filepath.Join(adapter.skillPaths[0], skillInstallDirName("demo", sourceRoot))
 	info, err := os.Lstat(dstPath)
 	if err != nil {
 		t.Fatalf("Lstat dstPath: %v", err)
@@ -860,9 +854,7 @@ func TestManagerSyncSkillsRejectsMissingSourceDirectory(t *testing.T) {
 	}
 
 	sourceRoot := filepath.Join(t.TempDir(), "skill-src")
-	if err := os.MkdirAll(sourceRoot, 0o755); err != nil {
-		t.Fatalf("MkdirAll sourceRoot: %v", err)
-	}
+	writeSkillFile(t, sourceRoot, "demo", "desc", "body")
 	sourceFile := filepath.Join(sourceRoot, "SKILL.md")
 	if err := os.WriteFile(sourceFile, []byte("hello-skill"), 0o644); err != nil {
 		t.Fatalf("WriteFile sourceFile: %v", err)
@@ -891,7 +883,7 @@ func TestManagerSyncSkillsRejectsMissingSourceDirectory(t *testing.T) {
 		t.Fatalf("SyncSkills error = %q, want source_path validation error", err)
 	}
 
-	dstPath := filepath.Join(adapter.skillPaths[0], filepath.Base(sourceRoot))
+	dstPath := filepath.Join(adapter.skillPaths[0], skillInstallDirName("demo", sourceRoot))
 	if fileExists(dstPath) {
 		t.Fatalf("destination %s should not exist after failed sync", dstPath)
 	}
@@ -908,9 +900,7 @@ func TestManagerSyncSkillsRejectsNonDirectorySourcePath(t *testing.T) {
 	}
 
 	sourceRoot := filepath.Join(t.TempDir(), "skill-src")
-	if err := os.MkdirAll(sourceRoot, 0o755); err != nil {
-		t.Fatalf("MkdirAll sourceRoot: %v", err)
-	}
+	writeSkillFile(t, sourceRoot, "demo", "desc", "body")
 
 	mgr := NewManager(
 		db,
@@ -990,7 +980,7 @@ func TestManagerSyncSkillsRejectsDanglingSourceSymlink(t *testing.T) {
 		t.Fatalf("SyncSkills error = %q, want source_path validation error", err)
 	}
 
-	dstPath := filepath.Join(adapter.skillPaths[0], filepath.Base(danglingPath))
+	dstPath := filepath.Join(adapter.skillPaths[0], skillInstallDirName("demo", danglingPath))
 	if fileExists(dstPath) {
 		t.Fatalf("destination %s should not exist for dangling source symlink", dstPath)
 	}
@@ -1041,7 +1031,7 @@ func TestManagerSyncSkillsRollsBackEarlierChangesWhenLaterSkillFails(t *testing.
 		t.Fatalf("SyncSkills initial: %v", err)
 	}
 
-	dstOne := filepath.Join(installRoot, filepath.Base(sourceOne), "SKILL.md")
+	dstOne := filepath.Join(installRoot, skillInstallDirName("one", sourceOne), "SKILL.md")
 	data, err := os.ReadFile(dstOne)
 	if err != nil {
 		t.Fatalf("ReadFile dstOne initial: %v", err)
@@ -1074,7 +1064,7 @@ func TestManagerSyncSkillsRollsBackEarlierChangesWhenLaterSkillFails(t *testing.
 		t.Fatalf("dstOne after rollback = %q, want %q", string(data), "v1")
 	}
 
-	dstTwo := filepath.Join(installRoot, filepath.Base(sourceTwo))
+	dstTwo := filepath.Join(installRoot, skillInstallDirName("two", sourceTwo))
 	if fileExists(dstTwo) {
 		t.Fatalf("destination %s should not exist after rollback", dstTwo)
 	}
@@ -1163,10 +1153,10 @@ func TestManagerSyncSkillsRollsBackAppliedTargetMethodUpdatesWhenLaterUpdateFail
 		t.Fatalf("targetsTwo[\"fake\"].Method = %q, want %q", targetsTwo["fake"].Method, "symlink")
 	}
 
-	if fileExists(filepath.Join(installRoot, filepath.Base(sourceOne))) {
+	if fileExists(filepath.Join(installRoot, skillInstallDirName("one", sourceOne))) {
 		t.Fatalf("expected sourceOne install to be rolled back")
 	}
-	if fileExists(filepath.Join(installRoot, filepath.Base(sourceTwo))) {
+	if fileExists(filepath.Join(installRoot, skillInstallDirName("two", sourceTwo))) {
 		t.Fatalf("expected sourceTwo install to be rolled back")
 	}
 }
@@ -1214,7 +1204,7 @@ func TestManagerSyncSkillsRemovesDeletedInstallations(t *testing.T) {
 		t.Fatalf("SyncSkills initial: %v", err)
 	}
 
-	installedPath := filepath.Join(installRoot, filepath.Base(sourceRoot))
+	installedPath := filepath.Join(installRoot, skillInstallDirName("planner", sourceRoot))
 	if !fileExists(installedPath) {
 		t.Fatalf("expected installed skill at %s", installedPath)
 	}

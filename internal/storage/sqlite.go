@@ -280,24 +280,30 @@ func migrate(db *sql.DB) error {
 			"migration_"+m.id, "done")
 	}
 	db.Exec("ALTER TABLE skill_targets ADD COLUMN variant_id INTEGER NOT NULL DEFAULT 0")
+	db.Exec("ALTER TABLE skills ADD COLUMN current_variant_id INTEGER NOT NULL DEFAULT 0")
+	db.Exec("ALTER TABLE skill_targets ADD COLUMN source_kind TEXT NOT NULL DEFAULT 'global'")
+	db.Exec("ALTER TABLE skill_targets ADD COLUMN local_source_path TEXT NOT NULL DEFAULT ''")
+	db.Exec("ALTER TABLE skill_targets ADD COLUMN local_source_hash TEXT NOT NULL DEFAULT ''")
+	db.Exec("ALTER TABLE skill_targets ADD COLUMN local_origin_tool TEXT NOT NULL DEFAULT ''")
 	return backfillSkillVariants(db)
 }
 
 func backfillSkillVariants(db *sql.DB) error {
-	rows, err := db.Query(`SELECT id, source_path FROM skills ORDER BY id`)
+	rows, err := db.Query(`SELECT id, source_path, current_variant_id FROM skills ORDER BY id`)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 
 	type skillSeed struct {
-		id         int64
-		sourcePath string
+		id               int64
+		sourcePath       string
+		currentVariantID int64
 	}
 	var seeds []skillSeed
 	for rows.Next() {
 		var seed skillSeed
-		if err := rows.Scan(&seed.id, &seed.sourcePath); err != nil {
+		if err := rows.Scan(&seed.id, &seed.sourcePath, &seed.currentVariantID); err != nil {
 			return err
 		}
 		seeds = append(seeds, seed)
@@ -323,6 +329,14 @@ func backfillSkillVariants(db *sql.DB) error {
 		}
 
 		if _, err := db.Exec(`UPDATE skill_targets SET variant_id = ? WHERE skill_id = ? AND variant_id = 0`, variantID, seed.id); err != nil {
+			return err
+		}
+		if seed.currentVariantID == 0 {
+			if _, err := db.Exec(`UPDATE skills SET current_variant_id = ? WHERE id = ?`, variantID, seed.id); err != nil {
+				return err
+			}
+		}
+		if _, err := db.Exec(`UPDATE skill_targets SET source_kind = 'global' WHERE skill_id = ? AND TRIM(source_kind) = ''`, seed.id); err != nil {
 			return err
 		}
 	}

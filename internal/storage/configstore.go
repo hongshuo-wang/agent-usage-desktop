@@ -27,12 +27,13 @@ type MCPServerRecord struct {
 }
 
 type SkillRecord struct {
-	ID          int64
-	Name        string
-	SourcePath  string
-	Description string
-	Enabled     bool
-	CreatedAt   time.Time
+	ID               int64
+	Name             string
+	SourcePath       string
+	Description      string
+	Enabled          bool
+	CurrentVariantID int64
+	CreatedAt        time.Time
 }
 
 type SkillVariantRecord struct {
@@ -50,10 +51,14 @@ type ToolTarget struct {
 }
 
 type SkillTargetRecord struct {
-	Tool      string
-	Method    string
-	Enabled   bool
-	VariantID int64
+	Tool            string
+	Method          string
+	Enabled         bool
+	VariantID       int64
+	SourceKind      string
+	LocalSourcePath string
+	LocalSourceHash string
+	LocalOriginTool string
 }
 
 type SyncState struct {
@@ -332,14 +337,14 @@ func (d *DB) CreateSkillWithID(record SkillRecord) error {
 		return fmt.Errorf("skill id is required")
 	}
 
-	_, err := d.db.Exec(`INSERT INTO skills(id, name, source_path, description, enabled, created_at)
-		VALUES(?, ?, ?, ?, ?, ?)`,
-		record.ID, record.Name, record.SourcePath, record.Description, record.Enabled, record.CreatedAt)
+	_, err := d.db.Exec(`INSERT INTO skills(id, name, source_path, description, enabled, current_variant_id, created_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?)`,
+		record.ID, record.Name, record.SourcePath, record.Description, record.Enabled, record.CurrentVariantID, record.CreatedAt)
 	return err
 }
 
 func (d *DB) ListSkills() ([]SkillRecord, error) {
-	rows, err := d.db.Query(`SELECT id, name, source_path, description, enabled, created_at
+	rows, err := d.db.Query(`SELECT id, name, source_path, description, enabled, current_variant_id, created_at
 		FROM skills
 		ORDER BY id`)
 	if err != nil {
@@ -350,7 +355,7 @@ func (d *DB) ListSkills() ([]SkillRecord, error) {
 	var skills []SkillRecord
 	for rows.Next() {
 		var skill SkillRecord
-		if err := rows.Scan(&skill.ID, &skill.Name, &skill.SourcePath, &skill.Description, &skill.Enabled, &skill.CreatedAt); err != nil {
+		if err := rows.Scan(&skill.ID, &skill.Name, &skill.SourcePath, &skill.Description, &skill.Enabled, &skill.CurrentVariantID, &skill.CreatedAt); err != nil {
 			return nil, err
 		}
 		skills = append(skills, skill)
@@ -364,9 +369,9 @@ func (d *DB) ListSkills() ([]SkillRecord, error) {
 
 func (d *DB) GetSkill(id int64) (*SkillRecord, error) {
 	var skill SkillRecord
-	err := d.db.QueryRow(`SELECT id, name, source_path, description, enabled, created_at
+	err := d.db.QueryRow(`SELECT id, name, source_path, description, enabled, current_variant_id, created_at
 		FROM skills
-		WHERE id = ?`, id).Scan(&skill.ID, &skill.Name, &skill.SourcePath, &skill.Description, &skill.Enabled, &skill.CreatedAt)
+		WHERE id = ?`, id).Scan(&skill.ID, &skill.Name, &skill.SourcePath, &skill.Description, &skill.Enabled, &skill.CurrentVariantID, &skill.CreatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -383,6 +388,27 @@ func (d *DB) UpdateSkill(id int64, name, sourcePath, description string, enabled
 	result, err := d.db.Exec(`UPDATE skills
 		SET name = ?, source_path = ?, description = ?, enabled = ?
 		WHERE id = ?`, name, sourcePath, description, enabled, id)
+	if err != nil {
+		return err
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("skill not found: %d", id)
+	}
+	return nil
+}
+
+func (d *DB) SetSkillCurrentVariant(id, currentVariantID int64) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	result, err := d.db.Exec(`UPDATE skills
+		SET current_variant_id = ?
+		WHERE id = ?`, currentVariantID, id)
 	if err != nil {
 		return err
 	}
@@ -427,8 +453,8 @@ func (d *DB) UpdateSkillWithTargets(id int64, name, sourcePath, description stri
 	}
 
 	for _, target := range targets {
-		if _, err := tx.Exec(`INSERT INTO skill_targets(skill_id, tool, method, enabled, variant_id)
-			VALUES(?, ?, ?, ?, ?)`, id, target.Tool, target.Method, target.Enabled, target.VariantID); err != nil {
+		if _, err := tx.Exec(`INSERT INTO skill_targets(skill_id, tool, method, enabled, variant_id, source_kind, local_source_path, local_source_hash, local_origin_tool)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, target.Tool, target.Method, target.Enabled, target.VariantID, target.SourceKind, target.LocalSourcePath, target.LocalSourceHash, target.LocalOriginTool); err != nil {
 			return err
 		}
 	}
@@ -567,8 +593,8 @@ func (d *DB) SetSkillTargets(skillID int64, targets []SkillTargetRecord) error {
 	}
 
 	for _, target := range targets {
-		if _, err := tx.Exec(`INSERT INTO skill_targets(skill_id, tool, method, enabled, variant_id)
-			VALUES(?, ?, ?, ?, ?)`, skillID, target.Tool, target.Method, target.Enabled, target.VariantID); err != nil {
+		if _, err := tx.Exec(`INSERT INTO skill_targets(skill_id, tool, method, enabled, variant_id, source_kind, local_source_path, local_source_hash, local_origin_tool)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`, skillID, target.Tool, target.Method, target.Enabled, target.VariantID, target.SourceKind, target.LocalSourcePath, target.LocalSourceHash, target.LocalOriginTool); err != nil {
 			return err
 		}
 	}
@@ -577,7 +603,7 @@ func (d *DB) SetSkillTargets(skillID int64, targets []SkillTargetRecord) error {
 }
 
 func (d *DB) GetSkillTargets(skillID int64) (map[string]SkillTargetRecord, error) {
-	rows, err := d.db.Query(`SELECT tool, method, enabled, variant_id
+	rows, err := d.db.Query(`SELECT tool, method, enabled, variant_id, source_kind, local_source_path, local_source_hash, local_origin_tool
 		FROM skill_targets
 		WHERE skill_id = ?
 		ORDER BY tool`, skillID)
@@ -589,7 +615,7 @@ func (d *DB) GetSkillTargets(skillID int64) (map[string]SkillTargetRecord, error
 	targets := map[string]SkillTargetRecord{}
 	for rows.Next() {
 		var target SkillTargetRecord
-		if err := rows.Scan(&target.Tool, &target.Method, &target.Enabled, &target.VariantID); err != nil {
+		if err := rows.Scan(&target.Tool, &target.Method, &target.Enabled, &target.VariantID, &target.SourceKind, &target.LocalSourcePath, &target.LocalSourceHash, &target.LocalOriginTool); err != nil {
 			return nil, err
 		}
 		targets[target.Tool] = target

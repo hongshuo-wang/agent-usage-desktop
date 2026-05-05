@@ -562,18 +562,27 @@ func (m *Manager) CreateSkill(name, sourcePath, description string, targets map[
 		_ = m.db.DeleteSkill(id)
 		return 0, err
 	}
+	if err := m.db.SetSkillCurrentVariant(id, defaultVariantID); err != nil {
+		_ = m.db.DeleteSkill(id)
+		return 0, err
+	}
 
 	mapped := make([]storage.SkillTargetRecord, 0, len(targets))
 	for _, target := range targets {
-		variantID := target.VariantID
-		if variantID == 0 {
+		normalized := normalizeSkillTargetRecord(target)
+		variantID := normalized.VariantID
+		if normalized.SourceKind != "local" && variantID == 0 {
 			variantID = defaultVariantID
 		}
 		mapped = append(mapped, storage.SkillTargetRecord{
-			Tool:      target.Tool,
-			Method:    target.Method,
-			Enabled:   target.Enabled,
-			VariantID: variantID,
+			Tool:            normalized.Tool,
+			Method:          normalized.Method,
+			Enabled:         normalized.Enabled,
+			VariantID:       variantID,
+			SourceKind:      normalized.SourceKind,
+			LocalSourcePath: normalized.LocalSourcePath,
+			LocalSourceHash: normalized.LocalSourceHash,
+			LocalOriginTool: normalized.LocalOriginTool,
 		})
 	}
 	if err := m.setSkillTargetsFn(id, mapped); err != nil {
@@ -609,13 +618,17 @@ func (m *Manager) UpdateSkill(id int64, name, sourcePath, description string, en
 	if err := m.db.UpdateSkill(id, name, sourcePath, description, enabled); err != nil {
 		return err
 	}
+	if err := m.db.SetSkillCurrentVariant(id, newVariantID); err != nil {
+		return err
+	}
 	targets, err := m.db.GetSkillTargets(id)
 	if err != nil {
 		return err
 	}
 	changed := false
 	for tool, target := range targets {
-		if target.VariantID == 0 || (oldVariant != nil && target.VariantID == oldVariant.ID) {
+		target = normalizeSkillTargetRecord(target)
+		if target.SourceKind == "global" && (target.VariantID != newVariantID || target.VariantID == 0 || (oldVariant != nil && target.VariantID == oldVariant.ID)) {
 			target.VariantID = newVariantID
 			targets[tool] = target
 			changed = true
@@ -640,16 +653,24 @@ func (m *Manager) UpdateSkillWithTargets(id int64, name, sourcePath, description
 	if err != nil {
 		return err
 	}
+	if err := m.db.SetSkillCurrentVariant(id, defaultVariantID); err != nil {
+		return err
+	}
 	for _, target := range targets {
-		variantID := target.VariantID
-		if variantID == 0 {
+		normalized := normalizeSkillTargetRecord(target)
+		variantID := normalized.VariantID
+		if normalized.SourceKind != "local" && variantID == 0 {
 			variantID = defaultVariantID
 		}
 		mapped = append(mapped, storage.SkillTargetRecord{
-			Tool:      target.Tool,
-			Method:    target.Method,
-			Enabled:   target.Enabled,
-			VariantID: variantID,
+			Tool:            normalized.Tool,
+			Method:          normalized.Method,
+			Enabled:         normalized.Enabled,
+			VariantID:       variantID,
+			SourceKind:      normalized.SourceKind,
+			LocalSourcePath: normalized.LocalSourcePath,
+			LocalSourceHash: normalized.LocalSourceHash,
+			LocalOriginTool: normalized.LocalOriginTool,
 		})
 	}
 
@@ -660,6 +681,26 @@ func (m *Manager) DeleteSkill(id int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.db.DeleteSkill(id)
+}
+
+func (m *Manager) DeleteSkillPath(path string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if path == "" {
+		return fmt.Errorf("path is required")
+	}
+	allowed, err := m.skillPathIsDeletable(path)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return fmt.Errorf("path %q is outside managed skill locations", path)
+	}
+	if err := os.RemoveAll(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 func (m *Manager) ensureSkillVariantLocked(skillID int64, sourcePath, originTool string) (int64, error) {
@@ -673,6 +714,73 @@ func (m *Manager) ensureSkillVariantLocked(skillID int64, sourcePath, originTool
 	return m.db.CreateSkillVariant(skillID, sourcePath, originTool)
 }
 
+func (m *Manager) skillPathIsDeletable(path string) (bool, error) {
+	libraryRoot, err := skillsLibraryPath()
+	if err != nil {
+		return false, err
+	}
+	if pathWithin(path, libraryRoot) {
+		return true, nil
+	}
+	for _, adapter := range m.adapters {
+		if adapter == nil {
+			continue
+		}
+		for _, root := range adapter.GetSkillPaths() {
+			if root != "" && pathWithin(path, root) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func (m *Manager) SetSkillCurrentVariant(skillID, variantID int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	skill, err := m.db.GetSkill(skillID)
+	if err != nil {
+		return err
+	}
+	if skill == nil {
+		return fmt.Errorf("skill not found: %d", skillID)
+	}
+	variant, err := m.db.GetSkillVariant(variantID)
+	if err != nil {
+		return err
+	}
+	if variant == nil || variant.SkillID != skillID {
+		return fmt.Errorf("variant %d does not belong to skill %d", variantID, skillID)
+	}
+	if err := validateSkillSourcePath(variant.SourcePath); err != nil {
+		return err
+	}
+	if err := m.db.UpdateSkill(skillID, skill.Name, variant.SourcePath, skill.Description, skill.Enabled); err != nil {
+		return err
+	}
+	if err := m.db.SetSkillCurrentVariant(skillID, variantID); err != nil {
+		return err
+	}
+	targets, err := m.db.GetSkillTargets(skillID)
+	if err != nil {
+		return err
+	}
+	changed := false
+	for tool, target := range targets {
+		target = normalizeSkillTargetRecord(target)
+		if target.SourceKind == "global" && target.VariantID != variantID {
+			target.VariantID = variantID
+			targets[tool] = target
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return m.db.SetSkillTargets(skillID, skillTargetRecordsFromMap(targets))
+}
+
 func (m *Manager) findVariantBySourceLocked(skillID int64, sourcePath string) (*storage.SkillVariantRecord, error) {
 	return m.db.FindSkillVariantByPath(skillID, sourcePath)
 }
@@ -683,9 +791,30 @@ func (m *Manager) defaultVariantForSkillLocked(skill storage.SkillRecord) (*stor
 		return nil, err
 	}
 	if variant != nil {
+		if skill.CurrentVariantID != variant.ID {
+			if err := m.db.SetSkillCurrentVariant(skill.ID, variant.ID); err != nil {
+				return nil, err
+			}
+		}
 		return variant, nil
 	}
-	if _, err := m.ensureSkillVariantLocked(skill.ID, skill.SourcePath, "global"); err != nil {
+	if skill.CurrentVariantID > 0 {
+		currentVariant, err := m.db.GetSkillVariant(skill.CurrentVariantID)
+		if err != nil {
+			return nil, err
+		}
+		if currentVariant != nil && currentVariant.SkillID == skill.ID && currentVariant.SourcePath == skill.SourcePath {
+			return currentVariant, nil
+		}
+	}
+	if err := validateSkillSourcePath(skill.SourcePath); err != nil {
+		return &storage.SkillVariantRecord{ID: skill.CurrentVariantID, SkillID: skill.ID, SourcePath: skill.SourcePath, OriginTool: "global"}, nil
+	}
+	variantID, err := m.ensureSkillVariantLocked(skill.ID, skill.SourcePath, "global")
+	if err != nil {
+		return nil, err
+	}
+	if err := m.db.SetSkillCurrentVariant(skill.ID, variantID); err != nil {
 		return nil, err
 	}
 	return m.findVariantBySourceLocked(skill.ID, skill.SourcePath)
@@ -756,15 +885,25 @@ func (m *Manager) SyncSkills() ([]AffectedFile, error) {
 				method = defaultSkillSyncMethodForOS(runtime.GOOS)
 			}
 			actualMethod := method
+			target = normalizeSkillTargetRecord(target)
 			sourcePath := defaultVariant.SourcePath
-			if target.VariantID != 0 {
-				if variant, ok := variantsByID[target.VariantID]; ok {
-					sourcePath = variant.SourcePath
+			if target.SourceKind == "local" {
+				sourcePath = target.LocalSourcePath
+				if target.VariantID != 0 {
+					target.VariantID = 0
+					targets[tool] = target
+					targetsChanged = true
 				}
 			} else {
+				target.SourceKind = "global"
 				target.VariantID = defaultVariant.ID
-				targets[tool] = target
-				targetsChanged = true
+				if existing, ok := variantsByID[target.VariantID]; ok {
+					sourcePath = existing.SourcePath
+				}
+				if previous := targets[tool]; previous.SourceKind != target.SourceKind || previous.VariantID != target.VariantID {
+					targets[tool] = target
+					targetsChanged = true
+				}
 			}
 			if err := validateSkillSourcePath(sourcePath); err != nil {
 				return fail(err)
@@ -778,7 +917,7 @@ func (m *Manager) SyncSkills() ([]AffectedFile, error) {
 					return fail(err)
 				}
 
-				destinationPath := filepath.Join(skillRoot, filepath.Base(sourcePath))
+				destinationPath := filepath.Join(skillRoot, skillInstallDirName(skill.Name, sourcePath))
 				if err := captureSkillPathSnapshot(destinationPath, rollbackDir, snapshots, &snapshotOrder); err != nil {
 					return fail(err)
 				}
@@ -930,9 +1069,37 @@ func skillTargetRecordsFromMap(targets map[string]storage.SkillTargetRecord) []s
 
 	records := make([]storage.SkillTargetRecord, 0, len(tools))
 	for _, tool := range tools {
-		records = append(records, targets[tool])
+		records = append(records, normalizeSkillTargetRecord(targets[tool]))
 	}
 	return records
+}
+
+func normalizeSkillTargetRecord(target storage.SkillTargetRecord) storage.SkillTargetRecord {
+	if target.Method == "" {
+		target.Method = defaultSkillSyncMethodForOS(runtime.GOOS)
+	}
+	if target.SourceKind == "" {
+		target.SourceKind = "global"
+	}
+	if target.SourceKind != "local" {
+		target.SourceKind = "global"
+		target.LocalSourcePath = ""
+		target.LocalSourceHash = ""
+		target.LocalOriginTool = ""
+	}
+	return target
+}
+
+func skillInstallDirName(skillName, sourcePath string) string {
+	name := sanitizeSkillDirName(skillName)
+	if name != "" && name != "skill" {
+		return name
+	}
+	base := sanitizeSkillDirName(filepath.Base(sourcePath))
+	if base != "" {
+		return base
+	}
+	return "skill"
 }
 
 func skillPathsMatch(sourcePath, destinationPath string) (bool, error) {
@@ -997,17 +1164,26 @@ func detectSkillPathMethod(path string) (string, error) {
 }
 
 func validateSkillSourcePath(sourcePath string) error {
-	info, err := os.Stat(sourcePath)
+	status, err := inspectSkillDefinitionStatus(sourcePath)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("skill source_path %q must exist and be a directory", sourcePath)
-		}
 		return fmt.Errorf("skill source_path %q is invalid: %w", sourcePath, err)
 	}
-	if !info.IsDir() {
+	switch status {
+	case skillDefinitionStatusValid:
+		return nil
+	case skillDefinitionStatusMissingPath:
+		return fmt.Errorf("skill source_path %q must exist and be a directory", sourcePath)
+	case skillDefinitionStatusNotDirectory:
 		return fmt.Errorf("skill source_path %q must be a directory", sourcePath)
+	case skillDefinitionStatusLegacyContainer:
+		return fmt.Errorf("skill source_path %q must point to a skill definition, not a container directory", sourcePath)
+	case skillDefinitionStatusMissingSkillMD:
+		return fmt.Errorf("skill source_path %q must contain SKILL.md", sourcePath)
+	case skillDefinitionStatusInvalidSkillMD:
+		return fmt.Errorf("skill source_path %q must contain a regular SKILL.md file", sourcePath)
+	default:
+		return fmt.Errorf("skill source_path %q is invalid", sourcePath)
 	}
-	return nil
 }
 
 type skillPathSnapshot struct {

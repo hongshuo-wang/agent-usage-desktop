@@ -91,13 +91,21 @@ type updateSkillReq struct {
 }
 
 type skillTargetReq struct {
-	Method    string `json:"method"`
-	Enabled   bool   `json:"enabled"`
-	VariantID int64  `json:"variant_id"`
+	Method          string `json:"method"`
+	Enabled         bool   `json:"enabled"`
+	VariantID       int64  `json:"variant_id"`
+	SourceKind      string `json:"source_kind"`
+	LocalSourcePath string `json:"local_source_path"`
+	LocalSourceHash string `json:"local_source_hash"`
+	LocalOriginTool string `json:"local_origin_tool"`
 }
 
 type setSkillTargetsReq struct {
 	Targets map[string]skillTargetReq `json:"targets"`
+}
+
+type setSkillCurrentVariantReq struct {
+	VariantID int64 `json:"variant_id"`
 }
 
 type resolveSkillConflictReq struct {
@@ -113,6 +121,10 @@ type importManagedSkillReq struct {
 	Name       string `json:"name"`
 	Tool       string `json:"tool"`
 	SourcePath string `json:"source_path"`
+}
+
+type deleteSkillPathReq struct {
+	Path string `json:"path"`
 }
 
 type agentUsageSkillActionReq struct {
@@ -624,6 +636,19 @@ func (s *Server) handleSkillsOverview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, overview)
 }
 
+func (s *Server) handleSkillsCLIOverview(w http.ResponseWriter, r *http.Request) {
+	if s.mgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "config_manager_unavailable", "config manager is unavailable", nil)
+		return
+	}
+	overview, err := s.mgr.SkillsCLIOverview(strings.TrimSpace(r.PathValue("tool")))
+	if err != nil {
+		writeError(w, configErrorStatus(err), "skills_overview_failed", "failed to load skills overview", err.Error())
+		return
+	}
+	writeJSON(w, overview)
+}
+
 func (s *Server) handleInstallAgentUsageSkill(w http.ResponseWriter, r *http.Request) {
 	if s.mgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "config_manager_unavailable", "config manager is unavailable", nil)
@@ -740,6 +765,33 @@ func (s *Server) handleImportManagedSkill(w http.ResponseWriter, r *http.Request
 		CreatedNew:    result.CreatedNew,
 		AffectedFiles: affected,
 	})
+}
+
+func (s *Server) handleDeleteSkillPath(w http.ResponseWriter, r *http.Request) {
+	if s.mgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "config_manager_unavailable", "config manager is unavailable", nil)
+		return
+	}
+
+	var req deleteSkillPathReq
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "invalid JSON request body", err.Error())
+		return
+	}
+	path := strings.TrimSpace(req.Path)
+	if path == "" {
+		writeError(w, http.StatusBadRequest, "invalid_skill_path", "path is required", nil)
+		return
+	}
+	if err := s.mgr.DeleteSkillPath(path); err != nil {
+		writeError(w, configErrorStatus(err), "delete_skill_path_failed", "failed to delete skill directory", err.Error())
+		return
+	}
+	writeJSON(w, mutationResp{AffectedFiles: []configmanager.AffectedFile{{
+		Path:      path,
+		Tool:      "filesystem",
+		Operation: "delete",
+	}}})
 }
 
 func (s *Server) handleResolveSkillConflict(w http.ResponseWriter, r *http.Request) {
@@ -921,6 +973,109 @@ func (s *Server) handleSetSkillTargets(w http.ResponseWriter, r *http.Request) {
 	affected, err := s.mgr.SyncSkills()
 	if err != nil {
 		err = combineConfigMutationErrors(err, s.restoreSkillTargets(id, previousTargets))
+		writeError(w, configErrorStatus(err), "sync_skills_failed", "failed to sync skills", err.Error())
+		return
+	}
+	writeJSON(w, mutationResp{AffectedFiles: affected})
+}
+
+func (s *Server) handleSetSkillBinding(w http.ResponseWriter, r *http.Request) {
+	if s.mgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "config_manager_unavailable", "config manager is unavailable", nil)
+		return
+	}
+
+	id, err := pathID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_skill_id", "invalid skill id", err.Error())
+		return
+	}
+	tool := strings.TrimSpace(r.PathValue("tool"))
+	if tool == "" {
+		writeError(w, http.StatusBadRequest, "invalid_tool", "tool is required", nil)
+		return
+	}
+	skill, err := s.db.GetSkill(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "set_skill_targets_failed", "failed to set skill binding", err.Error())
+		return
+	}
+	if skill == nil {
+		writeError(w, http.StatusNotFound, "skill_not_found", "skill not found", nil)
+		return
+	}
+
+	var req skillTargetReq
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "invalid JSON request body", err.Error())
+		return
+	}
+	target, err := validateSkillTarget(tool, req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_skill_targets", err.Error(), nil)
+		return
+	}
+	previousTargets, err := s.db.GetSkillTargets(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "set_skill_targets_failed", "failed to load existing skill bindings", err.Error())
+		return
+	}
+	nextTargets := cloneSkillTargets(previousTargets)
+	nextTargets[tool] = storage.SkillTargetRecord{
+		Tool:            target.Tool,
+		Method:          target.Method,
+		Enabled:         target.Enabled,
+		VariantID:       target.VariantID,
+		SourceKind:      target.SourceKind,
+		LocalSourcePath: target.LocalSourcePath,
+		LocalSourceHash: target.LocalSourceHash,
+		LocalOriginTool: target.LocalOriginTool,
+	}
+	if err := s.db.SetSkillTargets(id, mapsSkillTargetsToSlice(nextTargets)); err != nil {
+		writeError(w, configErrorStatus(err), "set_skill_targets_failed", "failed to set skill binding", err.Error())
+		return
+	}
+	affected, err := s.mgr.SyncSkills()
+	if err != nil {
+		err = combineConfigMutationErrors(err, s.restoreSkillTargets(id, previousTargets))
+		writeError(w, configErrorStatus(err), "sync_skills_failed", "failed to sync skills", err.Error())
+		return
+	}
+	writeJSON(w, mutationResp{AffectedFiles: affected})
+}
+
+func (s *Server) handleSetSkillCurrentVariant(w http.ResponseWriter, r *http.Request) {
+	if s.mgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "config_manager_unavailable", "config manager is unavailable", nil)
+		return
+	}
+
+	id, err := pathID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_skill_id", "invalid skill id", err.Error())
+		return
+	}
+	var req setSkillCurrentVariantReq
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "invalid JSON request body", err.Error())
+		return
+	}
+	if req.VariantID <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid_variant_id", "variant_id is required", nil)
+		return
+	}
+	previous, previousTargets, err := s.snapshotSkill(id)
+	if err != nil {
+		writeError(w, configErrorStatus(err), "set_skill_current_variant_failed", "failed to set current skill variant", err.Error())
+		return
+	}
+	if err := s.mgr.SetSkillCurrentVariant(id, req.VariantID); err != nil {
+		writeError(w, configErrorStatus(err), "set_skill_current_variant_failed", "failed to set current skill variant", err.Error())
+		return
+	}
+	affected, err := s.mgr.SyncSkills()
+	if err != nil {
+		err = combineConfigMutationErrors(err, s.restoreSkill(previous, previousTargets))
 		writeError(w, configErrorStatus(err), "sync_skills_failed", "failed to sync skills", err.Error())
 		return
 	}
@@ -1127,21 +1282,48 @@ func validateSkillBasics(name, sourcePath string) error {
 func validateSkillTargets(targets map[string]skillTargetReq) (map[string]configmanager.SkillTargetRecord, error) {
 	records := make(map[string]configmanager.SkillTargetRecord, len(targets))
 	for tool, target := range targets {
-		method := target.Method
-		if method == "" {
-			method = "symlink"
+		record, err := validateSkillTarget(tool, target)
+		if err != nil {
+			return nil, err
 		}
-		if method != "symlink" && method != "copy" {
-			return nil, fmt.Errorf("unsupported skill target method for %s: %s", tool, method)
-		}
-		records[tool] = configmanager.SkillTargetRecord{
-			Tool:      tool,
-			Method:    method,
-			Enabled:   target.Enabled,
-			VariantID: target.VariantID,
-		}
+		records[tool] = record
 	}
 	return records, nil
+}
+
+func validateSkillTarget(tool string, target skillTargetReq) (configmanager.SkillTargetRecord, error) {
+	method := target.Method
+	if method == "" {
+		method = "symlink"
+	}
+	if method != "symlink" && method != "copy" {
+		return configmanager.SkillTargetRecord{}, fmt.Errorf("unsupported skill target method for %s: %s", tool, method)
+	}
+	sourceKind := strings.TrimSpace(target.SourceKind)
+	if sourceKind == "" {
+		sourceKind = "global"
+	}
+	if sourceKind != "global" && sourceKind != "local" {
+		return configmanager.SkillTargetRecord{}, fmt.Errorf("unsupported skill source_kind for %s: %s", tool, sourceKind)
+	}
+	localSourcePath := strings.TrimSpace(target.LocalSourcePath)
+	if sourceKind == "local" && localSourcePath == "" {
+		return configmanager.SkillTargetRecord{}, fmt.Errorf("local_source_path is required for %s when source_kind=local", tool)
+	}
+	variantID := target.VariantID
+	if sourceKind == "local" {
+		variantID = 0
+	}
+	return configmanager.SkillTargetRecord{
+		Tool:            tool,
+		Method:          method,
+		Enabled:         target.Enabled,
+		VariantID:       variantID,
+		SourceKind:      sourceKind,
+		LocalSourcePath: localSourcePath,
+		LocalSourceHash: strings.TrimSpace(target.LocalSourceHash),
+		LocalOriginTool: strings.TrimSpace(target.LocalOriginTool),
+	}, nil
 }
 
 func validateResolveConflict(req resolveConflictReq) error {
@@ -1163,9 +1345,14 @@ func skillTargetsToStorage(targets map[string]configmanager.SkillTargetRecord) [
 	records := make([]storage.SkillTargetRecord, 0, len(targets))
 	for _, target := range targets {
 		records = append(records, storage.SkillTargetRecord{
-			Tool:    target.Tool,
-			Method:  target.Method,
-			Enabled: target.Enabled,
+			Tool:            target.Tool,
+			Method:          target.Method,
+			Enabled:         target.Enabled,
+			VariantID:       target.VariantID,
+			SourceKind:      target.SourceKind,
+			LocalSourcePath: target.LocalSourcePath,
+			LocalSourceHash: target.LocalSourceHash,
+			LocalOriginTool: target.LocalOriginTool,
 		})
 	}
 	return records
@@ -1353,9 +1540,13 @@ func (s *Server) skillTargetsResponse(skillID int64) (map[string]skillTargetReq,
 	response := make(map[string]skillTargetReq, len(targets))
 	for tool, target := range targets {
 		response[tool] = skillTargetReq{
-			Method:    target.Method,
-			Enabled:   target.Enabled,
-			VariantID: target.VariantID,
+			Method:          target.Method,
+			Enabled:         target.Enabled,
+			VariantID:       target.VariantID,
+			SourceKind:      target.SourceKind,
+			LocalSourcePath: target.LocalSourcePath,
+			LocalSourceHash: target.LocalSourceHash,
+			LocalOriginTool: target.LocalOriginTool,
 		}
 	}
 	return response, nil

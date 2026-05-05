@@ -83,6 +83,18 @@ func AtomicWrite(path string, data []byte) error {
 }
 
 func FileHash(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("stat path: %w", err)
+	}
+	if info.IsDir() {
+		hash, err := hashSkillDirectory(path)
+		if err != nil {
+			return "", fmt.Errorf("hash directory: %w", err)
+		}
+		return hash, nil
+	}
+
 	file, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("open file: %w", err)
