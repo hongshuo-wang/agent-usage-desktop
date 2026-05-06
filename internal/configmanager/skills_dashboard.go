@@ -105,9 +105,10 @@ type SkillsDashboardSummary struct {
 }
 
 type SkillsDashboard struct {
-	LibraryPath string                 `json:"library_path"`
-	Summary     SkillsDashboardSummary `json:"summary"`
-	Managed     []ManagedSkillView     `json:"managed"`
+	LibraryPath      string                 `json:"library_path"`
+	ToolAvailability map[string]bool        `json:"tool_availability"`
+	Summary          SkillsDashboardSummary `json:"summary"`
+	Managed          []ManagedSkillView     `json:"managed"`
 }
 
 type LocalDiscoveredSkillView struct {
@@ -228,8 +229,9 @@ func (m *Manager) SkillsDashboard() (*SkillsDashboard, error) {
 
 	entryIndex := groupSkillEntries(entries)
 	result := &SkillsDashboard{
-		LibraryPath: libraryPath,
-		Managed:     make([]ManagedSkillView, 0, len(skills)),
+		LibraryPath:      libraryPath,
+		ToolAvailability: m.skillToolAvailability(),
+		Managed:          make([]ManagedSkillView, 0, len(skills)),
 	}
 	result.Summary.SourceCount = len(repoSources)
 
@@ -260,6 +262,25 @@ func (m *Manager) SkillsDashboard() (*SkillsDashboard, error) {
 	})
 
 	return result, nil
+}
+
+func (m *Manager) skillToolAvailability() map[string]bool {
+	availability := make(map[string]bool, len(supportedSkillTools))
+	for _, tool := range supportedSkillTools {
+		availability[tool] = m.skillToolAvailable(tool)
+	}
+	return availability
+}
+
+func (m *Manager) skillToolAvailable(tool string) bool {
+	if toolCLIAvailable(tool) {
+		return true
+	}
+	adapter, ok := m.adapters[tool]
+	if !ok || adapter == nil {
+		return false
+	}
+	return adapter.IsInstalled()
 }
 
 func (m *Manager) buildManagedSkillDashboardView(skill storage.SkillRecord, entryIndex map[string]map[string][]SkillInventoryEntry, libraryPath string) (ManagedSkillView, error) {

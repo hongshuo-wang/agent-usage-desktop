@@ -57,6 +57,34 @@ func TestSkillsDashboardExposesImportedToolSource(t *testing.T) {
 	}
 }
 
+func TestSkillsDashboardReportsSupportedToolAvailability(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	db := openManagerTestDB(t)
+	mgr := NewManager(
+		db,
+		filepath.Join(t.TempDir(), "backups"),
+		WithAdapter(&fakeManagerAdapter{tool: "codex", installed: true, skillPaths: []string{filepath.Join(t.TempDir(), "codex-skills")}}),
+		WithEncryptionKey(make([]byte, 32)),
+	)
+
+	dashboard, err := mgr.SkillsDashboard()
+	if err != nil {
+		t.Fatalf("SkillsDashboard: %v", err)
+	}
+	if len(dashboard.ToolAvailability) != len(supportedSkillTools) {
+		t.Fatalf("len(tool_availability) = %d, want %d: %+v", len(dashboard.ToolAvailability), len(supportedSkillTools), dashboard.ToolAvailability)
+	}
+	for _, tool := range supportedSkillTools {
+		if _, ok := dashboard.ToolAvailability[tool]; !ok {
+			t.Fatalf("tool_availability missing key %q: %+v", tool, dashboard.ToolAvailability)
+		}
+	}
+	if !dashboard.ToolAvailability["codex"] {
+		t.Fatalf("tool_availability[codex] = false, want true when adapter is installed")
+	}
+}
+
 func TestSkillsDashboardPreservesLegacyManualSourceWhileExposingOriginTool(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

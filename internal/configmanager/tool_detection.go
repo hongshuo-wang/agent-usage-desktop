@@ -2,6 +2,8 @@ package configmanager
 
 import "os/exec"
 
+var supportedSkillTools = []string{"claude", "codex", "opencode", "openclaw"}
+
 func toolCommandName(tool string) (string, bool) {
 	switch tool {
 	case "claude":

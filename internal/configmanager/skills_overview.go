@@ -127,7 +127,7 @@ func (m *Manager) SkillsOverview() (*SkillOverview, error) {
 
 	for _, tool := range m.sortedAdapterTools() {
 		if adapter, ok := m.adapters[tool]; ok && adapter != nil {
-			overview.ToolAvailability[tool] = toolCLIAvailable(tool)
+			overview.ToolAvailability[tool] = m.skillToolAvailable(tool)
 		}
 	}
 

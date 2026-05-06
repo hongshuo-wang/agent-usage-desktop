@@ -160,7 +160,7 @@ func (m *Manager) SkillsCLIOverview(tool string) (*SkillsCLIOverview, error) {
 		Tool:          tool,
 		LibraryPath:   libraryPath,
 		CLI:           m.detectSkillsCLIFn(),
-		ToolAvailable: toolCLIAvailable(tool),
+		ToolAvailable: m.skillToolAvailable(tool),
 		Skills:        []SkillsCLISkillRow{},
 	}
 

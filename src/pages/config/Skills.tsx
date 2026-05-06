@@ -134,6 +134,7 @@ type ManagedSkillView = {
 
 type SkillsDashboard = {
   library_path: string;
+  tool_availability: Record<ToolTarget, boolean>;
   summary: {
     managed_count: number;
     healthy_count: number;
@@ -316,13 +317,27 @@ function sourceTone(sourceType: SkillSourceType) {
 }
 
 function sourceDisplayLabel(t: ReturnType<typeof useTranslation>["t"], source: SkillSourceView) {
-  if (source.repo_owner && source.repo_name) {
-    return source.repo_subpath ? `${source.repo_owner}/${source.repo_name}:${source.repo_subpath}` : `${source.repo_owner}/${source.repo_name}`;
+  if (source.type === "repo") {
+    if (source.repo_owner && source.repo_name) {
+      return source.repo_subpath ? `${source.repo_owner}/${source.repo_name}:${source.repo_subpath}` : `${source.repo_owner}/${source.repo_name}`;
+    }
+    if (source.label) {
+      return source.label.replace(/^https?:\/\/github\.com\//i, "");
+    }
+    return t("skillsSourceRepository", { defaultValue: "Repository" });
   }
-  if (source.url || /^https?:\/\//i.test(source.label)) {
-    return source.label.replace(/^https?:\/\/github\.com\//i, "");
+  if (source.type === "imported_tool") {
+    const tool = source.origin_tool && TOOLS.includes(source.origin_tool as ToolTarget) ? TOOL_LABELS[source.origin_tool as ToolTarget] : "";
+    return tool ? t("skillsSourceImportedTool", { defaultValue: "Imported from {{tool}}", tool }) : source.label || t("skillsSourceImportedToolFallback", { defaultValue: "Imported from CLI" });
   }
-  return t("skillsSourceUnlinkedRepo", { defaultValue: "Repository not linked" });
+  if (source.type === "imported_local") {
+    return t("skillsSourceImportedLocal", { defaultValue: "Imported from local folder" });
+  }
+  return source.label || t("skillsSourceManual", { defaultValue: "Manual" });
+}
+
+function sourceSecondaryHint(t: ReturnType<typeof useTranslation>["t"], source: SkillSourceView) {
+  return source.type === "repo" ? "" : t("skillsSourceUnlinkedRepoHint", { defaultValue: "Repository not linked" });
 }
 
 function toolTone(tool: ToolTarget) {
@@ -384,6 +399,87 @@ function comparisonTone(state: SkillComparisonState | undefined) {
   return skillStatusTone(comparisonStatus(state));
 }
 
+function defaultToolAvailability(): Record<ToolTarget, boolean> {
+  return {
+    claude: false,
+    codex: false,
+    opencode: false,
+    openclaw: false,
+  };
+}
+
+function normalizeToolAvailability(value: Partial<Record<ToolTarget, boolean>> | undefined): Record<ToolTarget, boolean> {
+  if (!value) {
+    return {
+      claude: true,
+      codex: true,
+      opencode: true,
+      openclaw: true,
+    };
+  }
+  const availability = defaultToolAvailability();
+  for (const tool of TOOLS) {
+    availability[tool] = Boolean(value[tool]);
+  }
+  return availability;
+}
+
+function distributionByTool(distribution: SkillDistributionView[] | undefined) {
+  const byTool = new Map<ToolTarget, SkillDistributionView>();
+  for (const item of distribution ?? []) {
+    if (TOOLS.includes(item.tool)) {
+      byTool.set(item.tool, item);
+    }
+  }
+  return byTool;
+}
+
+function toolIndicatorState(t: ReturnType<typeof useTranslation>["t"], tool: ToolTarget, available: boolean, distribution?: SkillDistributionView) {
+  const label = TOOL_LABELS[tool];
+  if (!available) {
+    const text = t("skillsToolIndicatorCliUnavailable", { defaultValue: "{{tool}} is not detected on this machine.", tool: label });
+    return {
+      label,
+      title: text,
+      ariaLabel: text,
+      pillClass: "bg-muted text-muted-foreground",
+      dotClass: "bg-muted-foreground/50",
+      text,
+    };
+  }
+  if (!distribution || distribution.comparison_state === "missing" || distribution.comparison_state === "disabled") {
+    const text = t("skillsToolIndicatorMissing", { defaultValue: "{{tool}} is available, but this skill is not installed for it.", tool: label });
+    return {
+      label,
+      title: text,
+      ariaLabel: text,
+      pillClass: toolTone(tool),
+      dotClass: "bg-muted-foreground/60",
+      text,
+    };
+  }
+  if (distribution.comparison_state === "invalid" || distribution.comparison_state === "different" || distribution.status === "problem") {
+    const text = t("skillsToolIndicatorAbnormal", { defaultValue: "{{tool}} needs attention: {{state}}.", tool: label, state: comparisonLabel(t, distribution.comparison_state) });
+    return {
+      label,
+      title: text,
+      ariaLabel: text,
+      pillClass: toolTone(tool),
+      dotClass: "bg-red-500",
+      text,
+    };
+  }
+  const text = t("skillsToolIndicatorSynced", { defaultValue: "{{tool}} is installed and synced.", tool: label });
+  return {
+    label,
+    title: text,
+    ariaLabel: text,
+    pillClass: toolTone(tool),
+    dotClass: "bg-emerald-500",
+    text,
+  };
+}
+
 function installMethodLabel(t: ReturnType<typeof useTranslation>["t"], method: string | undefined) {
   return method === "copy"
     ? t("skillsInstallMethodCopy", { defaultValue: "Copy" })
@@ -407,12 +503,6 @@ function primaryActionLabel(t: ReturnType<typeof useTranslation>["t"], action: S
 
 function countEnabledTools(distribution: SkillDistributionView[]) {
   return distribution.filter(isConnectedDistribution).length;
-}
-
-function summarizeTools(distribution: SkillDistributionView[]) {
-  return distribution
-    .filter(isConnectedDistribution)
-    .map((item) => item.tool);
 }
 
 function isConnectedDistribution(item: SkillDistributionView) {
@@ -449,9 +539,11 @@ function normalizeManagedSkill(skill: ManagedSkillView): ManagedSkillView {
 }
 
 function normalizeDashboard(data: SkillsDashboard): SkillsDashboard {
+  const managed = Array.isArray(data.managed) ? data.managed.map(normalizeManagedSkill) : [];
   return {
     ...data,
-    managed: Array.isArray(data.managed) ? data.managed.map(normalizeManagedSkill) : [],
+    tool_availability: normalizeToolAvailability(data.tool_availability),
+    managed,
   };
 }
 
@@ -707,15 +799,22 @@ export default function SkillsPage() {
 
   function sourceBadge(source: SkillSourceView, size: "xs" | "sm" = "xs") {
     const label = sourceDisplayLabel(t, source);
-    const className = `inline-flex max-w-full rounded-full px-2.5 py-1 font-medium ${size === "sm" ? "text-xs" : "text-[11px]"} ${sourceTone(source.type)}`;
-    if (source.url) {
+    const hint = sourceSecondaryHint(t, source);
+    const className = `inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 font-medium ${size === "sm" ? "text-xs" : "text-[11px]"} ${sourceTone(source.type)}`;
+    const content = (
+      <>
+        <span className="truncate">{label}</span>
+        {hint ? <span className="shrink-0 text-[10px] font-normal opacity-70">{hint}</span> : null}
+      </>
+    );
+    if (source.type === "repo" && source.url) {
       return (
         <button type="button" onClick={() => void handleOpen(source.url ?? "")} className={`${className} cursor-pointer hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30`}>
-          {label}
+          {content}
         </button>
       );
     }
-    return <span className={className}>{label}</span>;
+    return <span className={className}>{content}</span>;
   }
 
   const managedSkills = useMemo(() => {
@@ -877,7 +976,7 @@ export default function SkillsPage() {
               ) : (
                 <div className="overflow-hidden rounded-[24px] border border-border bg-background/60">
                   {managedSkills.map((skill, index) => {
-                    const enabledTools = summarizeTools(skill.distribution);
+                    const byTool = distributionByTool(skill.distribution);
                     return (
                       <article
                         key={skill.id}
@@ -908,24 +1007,20 @@ export default function SkillsPage() {
 
                         <div className="flex flex-col gap-3 lg:w-[360px] lg:items-end">
                           <div className="flex flex-wrap gap-1.5 lg:justify-end">
-                            {enabledTools.length > 0 ? (
-                              skill.distribution
-                                .filter(isConnectedDistribution)
-                                .map((item) => (
-                                  <span key={`${skill.id}:${item.tool}`} className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${toolTone(item.tool)}`}>
-                                    <span
-                                      className={`h-1.5 w-1.5 rounded-full ${
-                                        item.comparison_state === "synced" ? "bg-emerald-500" : item.comparison_state === "invalid" ? "bg-red-500" : "bg-amber-500"
-                                      }`}
-                                    />
-                                    {TOOL_LABELS[item.tool]}
-                                  </span>
-                                ))
-                            ) : (
-                              <span className="inline-flex rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground">
-                                {t("skillsBindingStatusDisabled", { defaultValue: "Not enabled" })}
-                              </span>
-                            )}
+                            {TOOLS.map((tool) => {
+                              const state = toolIndicatorState(t, tool, Boolean(dashboard?.tool_availability[tool]), byTool.get(tool));
+                              return (
+                                <span
+                                  key={`${skill.id}:${tool}`}
+                                  title={state.title}
+                                  aria-label={state.ariaLabel}
+                                  className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${state.pillClass}`}
+                                >
+                                  <span className={`h-1.5 w-1.5 rounded-full ${state.dotClass}`} />
+                                  {state.label}
+                                </span>
+                              );
+                            })}
                           </div>
                           <div className="flex items-center gap-2">
                             <DetailsButton label={t("details", { defaultValue: "Details" })} onClick={() => setSelectedSkill(skill)} />
@@ -952,36 +1047,44 @@ export default function SkillsPage() {
 
               <DetailSection title={t("skillsCliInstallSection", { defaultValue: "CLI installs" })}>
                 <div className="space-y-3">
-                  {(selectedSkill.distribution ?? []).map((distribution) => {
-                    const currentMethod = distribution.method === "copy" ? "copy" : "symlink";
+                  {TOOLS.map((tool) => {
+                    const distribution = distributionByTool(selectedSkill.distribution).get(tool);
+                    const available = Boolean(dashboard?.tool_availability[tool]);
+                    const state = toolIndicatorState(t, tool, available, distribution);
+                    const comparisonState = distribution?.comparison_state ?? "missing";
+                    const currentMethod = distribution?.method === "copy" ? "copy" : "symlink";
                     return (
-                      <div key={distribution.tool} className="rounded-2xl border border-border/70 bg-card px-4 py-3">
+                      <div key={tool} className={`rounded-2xl border px-4 py-3 ${available ? "border-border/70 bg-card" : "border-border/60 bg-muted/50 text-muted-foreground"}`}>
                         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
-                              <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${toolTone(distribution.tool)}`}>{TOOL_LABELS[distribution.tool]}</span>
-                              <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium ${comparisonTone(distribution.comparison_state)}`}>
-                                {comparisonLabel(t, distribution.comparison_state)}
+                              <span title={state.title} aria-label={state.ariaLabel} className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ${state.pillClass}`}>
+                                <span className={`h-1.5 w-1.5 rounded-full ${state.dotClass}`} />
+                                {TOOL_LABELS[tool]}
+                              </span>
+                              <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium ${available ? comparisonTone(comparisonState) : "border-border bg-muted text-muted-foreground"}`}>
+                                {comparisonLabel(t, comparisonState)}
                               </span>
                               <span className="text-xs text-muted-foreground">
                                 {t("skillsInstallMethodCurrent", {
                                   defaultValue: "Current: {{method}}",
-                                  method: distribution.installed_path ? installMethodLabel(t, currentMethod) : "-",
+                                  method: distribution?.installed_path ? installMethodLabel(t, currentMethod) : "-",
                                 })}
                               </span>
                             </div>
                             <div className="mt-2 text-xs text-muted-foreground">
-                              {distribution.installed_path
+                              {distribution?.installed_path
                                 ? t("skillsCliInstalledByMethod", {
                                     defaultValue: "Installed with {{method}}.",
                                     method: installMethodLabel(t, currentMethod),
                                   })
                                 : t("skillsCliNotInstalledForSkill", { defaultValue: "Not installed for this CLI." })}
+                              {!available ? ` ${t("skillsToolCliUnavailableDetail", { defaultValue: "CLI executable not detected." })}` : ""}
                             </div>
                           </div>
 
                           <div className="flex flex-wrap items-center gap-2">
-                            {distribution.installed_path ? (
+                            {distribution?.installed_path ? (
                               <IconButton
                                 label={t("skillsOpenInstalled", { defaultValue: "Open install location" })}
                                 onClick={() => {
@@ -989,21 +1092,23 @@ export default function SkillsPage() {
                                 }}
                               />
                             ) : null}
-                            <div className="inline-flex overflow-hidden rounded-xl border border-border bg-background">
-                              {(["symlink", "copy"] as const).map((method) => (
-                                <button
-                                  key={method}
-                                  type="button"
-                                  onClick={() => void setInstallMethod(selectedSkill, distribution, method)}
-                                  disabled={mutating || (distribution.installed_path ? currentMethod === method : false)}
-                                  className={`min-h-10 cursor-pointer px-3.5 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-70 ${
-                                    distribution.installed_path && currentMethod === method ? "bg-accent text-white" : "text-foreground hover:bg-muted"
-                                  }`}
-                                >
-                                  {installMethodLabel(t, method)}
-                                </button>
-                              ))}
-                            </div>
+                            {distribution ? (
+                              <div className="inline-flex overflow-hidden rounded-xl border border-border bg-background">
+                                {(["symlink", "copy"] as const).map((method) => (
+                                  <button
+                                    key={method}
+                                    type="button"
+                                    onClick={() => void setInstallMethod(selectedSkill, distribution, method)}
+                                    disabled={mutating || (distribution.installed_path ? currentMethod === method : false)}
+                                    className={`min-h-10 cursor-pointer px-3.5 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-70 ${
+                                      distribution.installed_path && currentMethod === method ? "bg-accent text-white" : "text-foreground hover:bg-muted"
+                                    }`}
+                                  >
+                                    {installMethodLabel(t, method)}
+                                  </button>
+                                ))}
+                              </div>
+                            ) : null}
                           </div>
                         </div>
                       </div>

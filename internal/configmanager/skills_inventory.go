@@ -281,7 +281,7 @@ func (m *Manager) classifySkillInventory(libraryPath string, entries []SkillInve
 	}
 	for _, tool := range m.sortedAdapterTools() {
 		if adapter, ok := m.adapters[tool]; ok && adapter != nil {
-			inventory.ToolAvailability[tool] = toolCLIAvailable(tool)
+			inventory.ToolAvailability[tool] = m.skillToolAvailable(tool)
 		}
 	}
 
