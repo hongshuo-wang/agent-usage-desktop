@@ -31,6 +31,7 @@ type Manager struct {
 	keyProvider       func() ([]byte, error)
 	detectSkillsCLIFn func() SkillCLIStatus
 	runSkillsCLIFn    func(context.Context, ...string) (string, error)
+	skillRepoFetcher  func(context.Context, storage.SkillRepoSourceRecord) ([]RepoDiscoveredSkill, error)
 	mu                sync.Mutex
 }
 
@@ -66,6 +67,7 @@ func NewManager(db *storage.DB, backupDir string, opts ...ManagerOption) *Manage
 		keyProvider:       GetOrCreateEncryptionKey,
 		detectSkillsCLIFn: detectSkillsCLI,
 		runSkillsCLIFn:    runSkillsCLI,
+		skillRepoFetcher:  fetchGitHubRepoSkills,
 	}
 	m.syncEngine = NewSyncEngine(db, m.backup)
 
@@ -122,6 +124,14 @@ func WithSkillsCLIRunner(runner func(context.Context, ...string) (string, error)
 	return func(m *Manager) {
 		if runner != nil {
 			m.runSkillsCLIFn = runner
+		}
+	}
+}
+
+func WithSkillRepoFetcher(fetcher func(context.Context, storage.SkillRepoSourceRecord) ([]RepoDiscoveredSkill, error)) ManagerOption {
+	return func(m *Manager) {
+		if fetcher != nil {
+			m.skillRepoFetcher = fetcher
 		}
 	}
 }
@@ -992,6 +1002,244 @@ func (m *Manager) SyncSkills() ([]AffectedFile, error) {
 	return affected, nil
 }
 
+func (m *Manager) SyncSkill(skillID int64) ([]AffectedFile, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	skill, err := m.db.GetSkill(skillID)
+	if err != nil {
+		return nil, err
+	}
+	if skill == nil {
+		return nil, fmt.Errorf("skill not found: %d", skillID)
+	}
+	if isPrunableStaleLocalSkillRecord(*skill) {
+		if err := m.db.DeleteSkill(skill.ID); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+
+	targets, err := m.db.GetSkillTargets(skill.ID)
+	if err != nil {
+		return nil, err
+	}
+	variants, err := m.db.ListSkillVariants(skill.ID)
+	if err != nil {
+		return nil, err
+	}
+	variantsByID := make(map[int64]storage.SkillVariantRecord, len(variants))
+	for _, variant := range variants {
+		variantsByID[variant.ID] = variant
+	}
+
+	var affected []AffectedFile
+	desiredSkills := make(map[string]AffectedFile)
+	originalTargets := cloneSkillTargets(targets)
+	targetsChanged := false
+	rollbackDir, err := os.MkdirTemp("", "configmanager-skill-sync-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(rollbackDir)
+	snapshots := map[string]skillPathSnapshot{}
+	snapshotOrder := make([]string, 0)
+	fail := func(err error) ([]AffectedFile, error) {
+		rollbackErr := rollbackSkillPathSnapshots(snapshotOrder, snapshots)
+		return nil, combineErrors(err, rollbackErr)
+	}
+
+	var defaultVariant *storage.SkillVariantRecord
+	defaultVariantForSync := func() (*storage.SkillVariantRecord, error) {
+		if defaultVariant != nil {
+			return defaultVariant, nil
+		}
+		var err error
+		defaultVariant, err = m.defaultVariantForSkillLocked(*skill)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateSkillSourcePath(defaultVariant.SourcePath); err != nil {
+			return nil, err
+		}
+		return defaultVariant, nil
+	}
+
+	if skill.Enabled {
+		for tool, target := range targets {
+			if !target.Enabled {
+				continue
+			}
+			adapter, ok := m.adapters[tool]
+			if !ok {
+				continue
+			}
+
+			method := target.Method
+			if method == "" {
+				method = defaultSkillSyncMethodForOS(runtime.GOOS)
+			}
+			actualMethod := method
+			target = normalizeSkillTargetRecord(target)
+			sourcePath := target.LocalSourcePath
+			if target.SourceKind == "local" {
+				if target.VariantID != 0 {
+					target.VariantID = 0
+					targets[tool] = target
+					targetsChanged = true
+				}
+			} else {
+				globalVariant, err := defaultVariantForSync()
+				if err != nil {
+					return fail(err)
+				}
+				target.SourceKind = "global"
+				target.VariantID = globalVariant.ID
+				sourcePath = globalVariant.SourcePath
+				if existing, ok := variantsByID[target.VariantID]; ok {
+					sourcePath = existing.SourcePath
+				}
+				if previous := targets[tool]; previous.SourceKind != target.SourceKind || previous.VariantID != target.VariantID {
+					targets[tool] = target
+					targetsChanged = true
+				}
+			}
+			if err := validateSkillSourcePath(sourcePath); err != nil {
+				return fail(err)
+			}
+
+			for _, skillRoot := range adapter.GetSkillPaths() {
+				if skillRoot == "" {
+					continue
+				}
+				if err := os.MkdirAll(skillRoot, 0o755); err != nil {
+					return fail(err)
+				}
+
+				destinationPath := filepath.Join(skillRoot, skillInstallDirName(skill.Name, sourcePath))
+				if err := captureSkillPathSnapshot(destinationPath, rollbackDir, snapshots, &snapshotOrder); err != nil {
+					return fail(err)
+				}
+				rootMethod, changed, err := m.syncSkillPath(sourcePath, destinationPath, method)
+				if err != nil {
+					return fail(err)
+				}
+				actualMethod = mergeSkillSyncMethod(actualMethod, rootMethod)
+				desiredSkills[skillSyncKey(tool, destinationPath)] = AffectedFile{
+					Path:      destinationPath,
+					Tool:      tool,
+					Operation: rootMethod,
+				}
+
+				if changed {
+					affected = append(affected, AffectedFile{
+						Path:      destinationPath,
+						Tool:      tool,
+						Operation: rootMethod,
+					})
+				}
+			}
+
+			if target.Method != actualMethod {
+				target.Method = actualMethod
+				targets[tool] = target
+				targetsChanged = true
+			}
+		}
+	}
+
+	staleEntries := m.trackedSkillInstallations(skill.Name, targets, variants)
+	for key, entry := range staleEntries {
+		if _, ok := desiredSkills[key]; ok {
+			continue
+		}
+		if err := captureSkillPathSnapshot(entry.Path, rollbackDir, snapshots, &snapshotOrder); err != nil {
+			return fail(err)
+		}
+		if err := os.RemoveAll(entry.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fail(err)
+		}
+		affected = append(affected, AffectedFile{
+			Path:      entry.Path,
+			Tool:      entry.Tool,
+			Operation: "delete",
+		})
+	}
+
+	if targetsChanged {
+		if err := m.setSkillTargetsFn(skill.ID, skillTargetRecordsFromMap(targets)); err != nil {
+			fsRollbackErr := rollbackSkillPathSnapshots(snapshotOrder, snapshots)
+			targetRollbackErr := m.db.SetSkillTargets(skill.ID, skillTargetRecordsFromMap(originalTargets))
+			return nil, combineErrors(err, combineErrors(targetRollbackErr, fsRollbackErr))
+		}
+	}
+
+	for key := range staleEntries {
+		delete(m.syncedSkills, key)
+	}
+	for key, entry := range desiredSkills {
+		m.syncedSkills[key] = entry
+	}
+	return affected, nil
+}
+
+func (m *Manager) pruneStaleLocalSkillRecordsLocked(skills []storage.SkillRecord) ([]storage.SkillRecord, error) {
+	filtered := make([]storage.SkillRecord, 0, len(skills))
+	for _, skill := range skills {
+		if !isPrunableStaleLocalSkillRecord(skill) {
+			filtered = append(filtered, skill)
+			continue
+		}
+		if err := m.db.DeleteSkill(skill.ID); err != nil {
+			return nil, err
+		}
+	}
+	return filtered, nil
+}
+
+func isPrunableStaleLocalSkillRecord(skill storage.SkillRecord) bool {
+	switch skill.SourceType {
+	case "", skillSourceTypeManual, skillSourceTypeImportedTool, skillSourceTypeImportedLocal:
+	default:
+		return false
+	}
+	status, err := inspectSkillDefinitionStatus(skill.SourcePath)
+	if err != nil {
+		return false
+	}
+	return status == skillDefinitionStatusMissingPath || status == skillDefinitionStatusNotDirectory
+}
+
+func (m *Manager) trackedSkillInstallations(skillName string, targets map[string]storage.SkillTargetRecord, variants []storage.SkillVariantRecord) map[string]AffectedFile {
+	dirNames := map[string]bool{}
+	targetTools := map[string]bool{}
+	for tool, target := range targets {
+		targetTools[tool] = true
+		if target.LocalSourcePath != "" {
+			dirNames[skillInstallDirName(skillName, target.LocalSourcePath)] = true
+		}
+	}
+	for _, variant := range variants {
+		if variant.SourcePath != "" {
+			dirNames[skillInstallDirName(skillName, variant.SourcePath)] = true
+		}
+	}
+	if skillName != "" {
+		dirNames[skillInstallDirName(skillName, skillName)] = true
+	}
+
+	matches := map[string]AffectedFile{}
+	for key, entry := range m.syncedSkills {
+		if len(targetTools) > 0 && !targetTools[entry.Tool] {
+			continue
+		}
+		if dirNames[filepath.Base(filepath.Clean(entry.Path))] {
+			matches[key] = entry
+		}
+	}
+	return matches
+}
+
 func (m *Manager) syncSkillPath(sourcePath, destinationPath, method string) (string, bool, error) {
 	switch method {
 	case "symlink", "copy":
@@ -999,16 +1247,29 @@ func (m *Manager) syncSkillPath(sourcePath, destinationPath, method string) (str
 		return "", false, fmt.Errorf("unsupported skill sync method: %s", method)
 	}
 
-	samePath, err := skillPathsMatch(sourcePath, destinationPath)
+	sourceAbs, destinationAbs, err := absoluteSkillPaths(sourcePath, destinationPath)
 	if err != nil {
 		return "", false, err
 	}
-	if samePath {
+	if sourceAbs == destinationAbs {
 		actualMethod, err := detectSkillPathMethod(destinationPath)
 		if err != nil {
 			return "", false, err
 		}
 		return actualMethod, false, nil
+	}
+	if method == "symlink" {
+		samePath, err := skillPathsMatch(sourcePath, destinationPath)
+		if err != nil {
+			return "", false, err
+		}
+		if samePath {
+			actualMethod, err := detectSkillPathMethod(destinationPath)
+			if err != nil {
+				return "", false, err
+			}
+			return actualMethod, false, nil
+		}
 	}
 
 	overlap, err := skillPathsOverlap(sourcePath, destinationPath)

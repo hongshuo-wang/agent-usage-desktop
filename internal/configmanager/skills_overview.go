@@ -247,13 +247,14 @@ func (m *Manager) ImportManagedSkill(req ImportManagedSkillRequest) (*ImportMana
 	if err != nil {
 		return nil, err
 	}
+	sourceMeta := inferSkillSourceMeta(req.SourcePath, req.Tool)
 
 	if skill == nil {
 		managedPath, err := m.prepareManagedSkillPath(name, req.SourcePath, sourceHash, libraryRoot)
 		if err != nil {
 			return nil, err
 		}
-		skillID, err := m.db.CreateSkill(name, managedPath, description)
+		skillID, err := m.db.CreateSkillWithSource(name, managedPath, description, sourceMeta)
 		if err != nil {
 			return nil, err
 		}
@@ -309,6 +310,9 @@ func (m *Manager) ImportManagedSkill(req ImportManagedSkillRequest) (*ImportMana
 		}
 	}
 	if req.Tool == "global" {
+		if err := m.db.UpdateSkillSourceMetadata(skill.ID, sourceMeta); err != nil {
+			return nil, err
+		}
 		return &ImportManagedSkillResult{SkillID: skill.ID, VariantID: variantID, CreatedNew: false}, nil
 	}
 	targets, err := m.db.GetSkillTargets(skill.ID)
@@ -328,6 +332,9 @@ func (m *Manager) ImportManagedSkill(req ImportManagedSkillRequest) (*ImportMana
 	current.LocalOriginTool = req.Tool
 	targets[req.Tool] = current
 	if err := m.db.SetSkillTargets(skill.ID, skillTargetRecordsFromMap(targets)); err != nil {
+		return nil, err
+	}
+	if err := m.db.UpdateSkillSourceMetadata(skill.ID, sourceMeta); err != nil {
 		return nil, err
 	}
 	return &ImportManagedSkillResult{SkillID: skill.ID, VariantID: variantID, CreatedNew: false}, nil

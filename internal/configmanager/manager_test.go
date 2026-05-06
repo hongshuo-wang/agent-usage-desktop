@@ -498,6 +498,65 @@ func TestManagerSyncSkillsCopy(t *testing.T) {
 	}
 }
 
+func TestManagerSyncSkillIgnoresUnrelatedBrokenSkill(t *testing.T) {
+	t.Parallel()
+
+	db := openManagerTestDB(t)
+	installRoot := filepath.Join(t.TempDir(), "skills-target")
+	adapter := &fakeManagerAdapter{
+		tool:       "codex",
+		installed:  true,
+		skillPaths: []string{installRoot},
+	}
+	mgr := NewManager(
+		db,
+		filepath.Join(t.TempDir(), "backups"),
+		WithAdapter(adapter),
+		WithEncryptionKey(make([]byte, 32)),
+	)
+
+	sourceGood := filepath.Join(t.TempDir(), "good-skill")
+	writeSkillFile(t, sourceGood, "good", "Good skill", "good-v1")
+	goodID, err := mgr.CreateSkill("good", sourceGood, "desc", map[string]SkillTargetRecord{
+		"codex": {Tool: "codex", Method: "copy", Enabled: true},
+	})
+	if err != nil {
+		t.Fatalf("CreateSkill good: %v", err)
+	}
+
+	sourceBroken := filepath.Join(t.TempDir(), "broken-skill")
+	writeSkillFile(t, sourceBroken, "broken", "Broken skill", "broken-v1")
+	if _, err := mgr.CreateSkill("broken", sourceBroken, "desc", map[string]SkillTargetRecord{
+		"codex": {Tool: "codex", Method: "copy", Enabled: true},
+	}); err != nil {
+		t.Fatalf("CreateSkill broken: %v", err)
+	}
+	if err := os.RemoveAll(sourceBroken); err != nil {
+		t.Fatalf("RemoveAll sourceBroken: %v", err)
+	}
+
+	affected, err := mgr.SyncSkill(goodID)
+	if err != nil {
+		t.Fatalf("SyncSkill good with unrelated broken skill: %v", err)
+	}
+	if len(affected) == 0 {
+		t.Fatalf("len(affected) = 0, want > 0")
+	}
+
+	dstFile := filepath.Join(installRoot, skillInstallDirName("good", sourceGood), "SKILL.md")
+	data, err := os.ReadFile(dstFile)
+	if err != nil {
+		t.Fatalf("ReadFile dstFile: %v", err)
+	}
+	if !strings.Contains(string(data), "good-v1") {
+		t.Fatalf("installed skill content = %q, want good-v1", string(data))
+	}
+
+	if _, err := mgr.SyncSkills(); err == nil {
+		t.Fatalf("SyncSkills error = nil, want unrelated broken skill to fail full sync")
+	}
+}
+
 func TestManagerCreateSkillRejectsMissingSourceDirectory(t *testing.T) {
 	t.Parallel()
 

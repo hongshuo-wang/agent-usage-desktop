@@ -127,6 +127,14 @@ type deleteSkillPathReq struct {
 	Path string `json:"path"`
 }
 
+type createSkillRepoSourceReq struct {
+	Owner   string `json:"owner"`
+	Repo    string `json:"repo"`
+	Branch  string `json:"branch"`
+	Subpath string `json:"subpath"`
+	Enabled bool   `json:"enabled"`
+}
+
 type agentUsageSkillActionReq struct {
 	Agents []string `json:"agents"`
 }
@@ -623,6 +631,32 @@ func (s *Server) handleSkillsInventory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, inventory)
 }
 
+func (s *Server) handleSkillsDashboard(w http.ResponseWriter, r *http.Request) {
+	if s.mgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "config_manager_unavailable", "config manager is unavailable", nil)
+		return
+	}
+	dashboard, err := s.mgr.SkillsDashboard()
+	if err != nil {
+		writeError(w, configErrorStatus(err), "skills_dashboard_failed", "failed to load skills dashboard", err.Error())
+		return
+	}
+	writeJSON(w, dashboard)
+}
+
+func (s *Server) handleSkillsDiscover(w http.ResponseWriter, r *http.Request) {
+	if s.mgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "config_manager_unavailable", "config manager is unavailable", nil)
+		return
+	}
+	discover, err := s.mgr.SkillsDiscover(r.Context())
+	if err != nil {
+		writeError(w, configErrorStatus(err), "skills_discover_failed", "failed to discover skills", err.Error())
+		return
+	}
+	writeJSON(w, discover)
+}
+
 func (s *Server) handleSkillsOverview(w http.ResponseWriter, r *http.Request) {
 	if s.mgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "config_manager_unavailable", "config manager is unavailable", nil)
@@ -634,6 +668,73 @@ func (s *Server) handleSkillsOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, overview)
+}
+
+func (s *Server) handleListSkillRepoSources(w http.ResponseWriter, r *http.Request) {
+	if s.mgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "config_manager_unavailable", "config manager is unavailable", nil)
+		return
+	}
+	sources, err := s.mgr.ListSkillRepoSources(r.Context())
+	if err != nil {
+		writeError(w, configErrorStatus(err), "list_skill_repo_sources_failed", "failed to list skill repo sources", err.Error())
+		return
+	}
+	writeJSON(w, sources)
+}
+
+func (s *Server) handleCreateSkillRepoSource(w http.ResponseWriter, r *http.Request) {
+	if s.mgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "config_manager_unavailable", "config manager is unavailable", nil)
+		return
+	}
+	var req createSkillRepoSourceReq
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "invalid JSON request body", err.Error())
+		return
+	}
+	id, err := s.mgr.CreateSkillRepoSource(configmanager.SkillRepoSourceCreateRequest{
+		Owner:   req.Owner,
+		Repo:    req.Repo,
+		Branch:  req.Branch,
+		Subpath: req.Subpath,
+		Enabled: req.Enabled,
+	})
+	if err != nil {
+		writeError(w, configErrorStatus(err), "create_skill_repo_source_failed", "failed to create skill repo source", err.Error())
+		return
+	}
+	writeJSON(w, map[string]int64{"id": id})
+}
+
+func (s *Server) handleDeleteSkillRepoSource(w http.ResponseWriter, r *http.Request) {
+	if s.mgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "config_manager_unavailable", "config manager is unavailable", nil)
+		return
+	}
+	id, err := pathID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_repo_source_id", "invalid repo source id", err.Error())
+		return
+	}
+	if err := s.mgr.DeleteSkillRepoSource(id); err != nil {
+		writeError(w, configErrorStatus(err), "delete_skill_repo_source_failed", "failed to delete skill repo source", err.Error())
+		return
+	}
+	writeJSON(w, mutationResp{AffectedFiles: []configmanager.AffectedFile{}})
+}
+
+func (s *Server) handleRefreshSkillRepoSources(w http.ResponseWriter, r *http.Request) {
+	if s.mgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "config_manager_unavailable", "config manager is unavailable", nil)
+		return
+	}
+	sources, err := s.mgr.RefreshSkillRepoSources(r.Context())
+	if err != nil {
+		writeError(w, configErrorStatus(err), "refresh_skill_repo_sources_failed", "failed to refresh skill repo sources", err.Error())
+		return
+	}
+	writeJSON(w, sources)
 }
 
 func (s *Server) handleSkillsCLIOverview(w http.ResponseWriter, r *http.Request) {
@@ -709,6 +810,19 @@ func (s *Server) handleImportSkills(w http.ResponseWriter, r *http.Request) {
 	result, err := s.mgr.ImportNonConflictingSkills()
 	if err != nil {
 		writeError(w, configErrorStatus(err), "import_skills_failed", "failed to import skills", err.Error())
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) handleImportExistingSkills(w http.ResponseWriter, r *http.Request) {
+	if s.mgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "config_manager_unavailable", "config manager is unavailable", nil)
+		return
+	}
+	result, err := s.mgr.ImportExistingSkills()
+	if err != nil {
+		writeError(w, configErrorStatus(err), "import_existing_skills_failed", "failed to import existing skills", err.Error())
 		return
 	}
 	writeJSON(w, result)
@@ -792,6 +906,32 @@ func (s *Server) handleDeleteSkillPath(w http.ResponseWriter, r *http.Request) {
 		Tool:      "filesystem",
 		Operation: "delete",
 	}}})
+}
+
+func (s *Server) handleSyncAllSkills(w http.ResponseWriter, r *http.Request) {
+	if s.mgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "config_manager_unavailable", "config manager is unavailable", nil)
+		return
+	}
+	result, err := s.mgr.SyncAllSkills()
+	if err != nil {
+		writeError(w, configErrorStatus(err), "sync_all_skills_failed", "failed to sync all skills", err.Error())
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) handleRepairSkills(w http.ResponseWriter, r *http.Request) {
+	if s.mgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "config_manager_unavailable", "config manager is unavailable", nil)
+		return
+	}
+	result, err := s.mgr.RepairSkills()
+	if err != nil {
+		writeError(w, configErrorStatus(err), "repair_skills_failed", "failed to repair skills", err.Error())
+		return
+	}
+	writeJSON(w, result)
 }
 
 func (s *Server) handleResolveSkillConflict(w http.ResponseWriter, r *http.Request) {
@@ -970,7 +1110,7 @@ func (s *Server) handleSetSkillTargets(w http.ResponseWriter, r *http.Request) {
 		writeError(w, configErrorStatus(err), "set_skill_targets_failed", "failed to set skill targets", err.Error())
 		return
 	}
-	affected, err := s.mgr.SyncSkills()
+	affected, err := s.mgr.SyncSkill(id)
 	if err != nil {
 		err = combineConfigMutationErrors(err, s.restoreSkillTargets(id, previousTargets))
 		writeError(w, configErrorStatus(err), "sync_skills_failed", "failed to sync skills", err.Error())
@@ -1035,7 +1175,7 @@ func (s *Server) handleSetSkillBinding(w http.ResponseWriter, r *http.Request) {
 		writeError(w, configErrorStatus(err), "set_skill_targets_failed", "failed to set skill binding", err.Error())
 		return
 	}
-	affected, err := s.mgr.SyncSkills()
+	affected, err := s.mgr.SyncSkill(id)
 	if err != nil {
 		err = combineConfigMutationErrors(err, s.restoreSkillTargets(id, previousTargets))
 		writeError(w, configErrorStatus(err), "sync_skills_failed", "failed to sync skills", err.Error())
@@ -1520,7 +1660,7 @@ func (s *Server) recreateSkill(skill *storage.SkillRecord, targets map[string]st
 
 func (s *Server) restoreSkillTargets(id int64, targets map[string]storage.SkillTargetRecord) error {
 	restoreErr := s.db.SetSkillTargets(id, mapsSkillTargetsToSlice(targets))
-	_, syncErr := s.mgr.SyncSkills()
+	_, syncErr := s.mgr.SyncSkill(id)
 	return combineConfigMutationErrors(restoreErr, syncErr)
 }
 

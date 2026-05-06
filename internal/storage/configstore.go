@@ -33,6 +33,16 @@ type SkillRecord struct {
 	Description      string
 	Enabled          bool
 	CurrentVariantID int64
+	SourceType       string
+	SourceLabel      string
+	RepoOwner        string
+	RepoName         string
+	RepoBranch       string
+	RepoSubpath      string
+	ReadmeURL        string
+	Updatable        bool
+	LastCheckedAt    sql.NullTime
+	LastSyncedAt     sql.NullTime
 	CreatedAt        time.Time
 }
 
@@ -67,6 +77,30 @@ type SyncState struct {
 	LastHash    string
 	LastSync    time.Time
 	LastSyncDir string
+}
+
+type SkillSourceMeta struct {
+	SourceType    string
+	SourceLabel   string
+	RepoOwner     string
+	RepoName      string
+	RepoBranch    string
+	RepoSubpath   string
+	ReadmeURL     string
+	Updatable     bool
+	LastCheckedAt sql.NullTime
+	LastSyncedAt  sql.NullTime
+}
+
+type SkillRepoSourceRecord struct {
+	ID        int64
+	Owner     string
+	Repo      string
+	Branch    string
+	Subpath   string
+	Enabled   bool
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type BackupRecord struct {
@@ -318,11 +352,33 @@ func (d *DB) DeleteMCPServer(id int64) error {
 }
 
 func (d *DB) CreateSkill(name, sourcePath, description string) (int64, error) {
+	return d.CreateSkillWithSource(name, sourcePath, description, SkillSourceMeta{SourceType: "manual"})
+}
+
+func (d *DB) CreateSkillWithSource(name, sourcePath, description string, source SkillSourceMeta) (int64, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	result, err := d.db.Exec(`INSERT INTO skills(name, source_path, description, enabled)
-		VALUES(?, ?, ?, 1)`, name, sourcePath, description)
+	result, err := d.db.Exec(`INSERT INTO skills(
+			name, source_path, description, enabled,
+			source_type, source_label, repo_owner, repo_name, repo_branch, repo_subpath,
+			readme_url, updatable, last_checked_at, last_synced_at
+		)
+		VALUES(?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		name,
+		sourcePath,
+		description,
+		source.SourceType,
+		source.SourceLabel,
+		source.RepoOwner,
+		source.RepoName,
+		source.RepoBranch,
+		source.RepoSubpath,
+		source.ReadmeURL,
+		source.Updatable,
+		source.LastCheckedAt,
+		source.LastSyncedAt,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -337,14 +393,38 @@ func (d *DB) CreateSkillWithID(record SkillRecord) error {
 		return fmt.Errorf("skill id is required")
 	}
 
-	_, err := d.db.Exec(`INSERT INTO skills(id, name, source_path, description, enabled, current_variant_id, created_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?)`,
-		record.ID, record.Name, record.SourcePath, record.Description, record.Enabled, record.CurrentVariantID, record.CreatedAt)
+	_, err := d.db.Exec(`INSERT INTO skills(
+			id, name, source_path, description, enabled, current_variant_id,
+			source_type, source_label, repo_owner, repo_name, repo_branch, repo_subpath,
+			readme_url, updatable, last_checked_at, last_synced_at, created_at
+		)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		record.ID,
+		record.Name,
+		record.SourcePath,
+		record.Description,
+		record.Enabled,
+		record.CurrentVariantID,
+		record.SourceType,
+		record.SourceLabel,
+		record.RepoOwner,
+		record.RepoName,
+		record.RepoBranch,
+		record.RepoSubpath,
+		record.ReadmeURL,
+		record.Updatable,
+		record.LastCheckedAt,
+		record.LastSyncedAt,
+		record.CreatedAt,
+	)
 	return err
 }
 
 func (d *DB) ListSkills() ([]SkillRecord, error) {
-	rows, err := d.db.Query(`SELECT id, name, source_path, description, enabled, current_variant_id, created_at
+	rows, err := d.db.Query(`SELECT
+			id, name, source_path, description, enabled, current_variant_id,
+			source_type, source_label, repo_owner, repo_name, repo_branch, repo_subpath,
+			readme_url, updatable, last_checked_at, last_synced_at, created_at
 		FROM skills
 		ORDER BY id`)
 	if err != nil {
@@ -355,7 +435,25 @@ func (d *DB) ListSkills() ([]SkillRecord, error) {
 	var skills []SkillRecord
 	for rows.Next() {
 		var skill SkillRecord
-		if err := rows.Scan(&skill.ID, &skill.Name, &skill.SourcePath, &skill.Description, &skill.Enabled, &skill.CurrentVariantID, &skill.CreatedAt); err != nil {
+		if err := rows.Scan(
+			&skill.ID,
+			&skill.Name,
+			&skill.SourcePath,
+			&skill.Description,
+			&skill.Enabled,
+			&skill.CurrentVariantID,
+			&skill.SourceType,
+			&skill.SourceLabel,
+			&skill.RepoOwner,
+			&skill.RepoName,
+			&skill.RepoBranch,
+			&skill.RepoSubpath,
+			&skill.ReadmeURL,
+			&skill.Updatable,
+			&skill.LastCheckedAt,
+			&skill.LastSyncedAt,
+			&skill.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		skills = append(skills, skill)
@@ -369,9 +467,30 @@ func (d *DB) ListSkills() ([]SkillRecord, error) {
 
 func (d *DB) GetSkill(id int64) (*SkillRecord, error) {
 	var skill SkillRecord
-	err := d.db.QueryRow(`SELECT id, name, source_path, description, enabled, current_variant_id, created_at
+	err := d.db.QueryRow(`SELECT
+			id, name, source_path, description, enabled, current_variant_id,
+			source_type, source_label, repo_owner, repo_name, repo_branch, repo_subpath,
+			readme_url, updatable, last_checked_at, last_synced_at, created_at
 		FROM skills
-		WHERE id = ?`, id).Scan(&skill.ID, &skill.Name, &skill.SourcePath, &skill.Description, &skill.Enabled, &skill.CurrentVariantID, &skill.CreatedAt)
+		WHERE id = ?`, id).Scan(
+		&skill.ID,
+		&skill.Name,
+		&skill.SourcePath,
+		&skill.Description,
+		&skill.Enabled,
+		&skill.CurrentVariantID,
+		&skill.SourceType,
+		&skill.SourceLabel,
+		&skill.RepoOwner,
+		&skill.RepoName,
+		&skill.RepoBranch,
+		&skill.RepoSubpath,
+		&skill.ReadmeURL,
+		&skill.Updatable,
+		&skill.LastCheckedAt,
+		&skill.LastSyncedAt,
+		&skill.CreatedAt,
+	)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -392,6 +511,44 @@ func (d *DB) UpdateSkill(id int64, name, sourcePath, description string, enabled
 		return err
 	}
 
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("skill not found: %d", id)
+	}
+	return nil
+}
+
+func (d *DB) UpdateSkillWithSource(id int64, name, sourcePath, description string, enabled bool, source SkillSourceMeta) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	result, err := d.db.Exec(`UPDATE skills
+		SET name = ?, source_path = ?, description = ?, enabled = ?,
+			source_type = ?, source_label = ?, repo_owner = ?, repo_name = ?, repo_branch = ?, repo_subpath = ?,
+			readme_url = ?, updatable = ?, last_checked_at = ?, last_synced_at = ?
+		WHERE id = ?`,
+		name,
+		sourcePath,
+		description,
+		enabled,
+		source.SourceType,
+		source.SourceLabel,
+		source.RepoOwner,
+		source.RepoName,
+		source.RepoBranch,
+		source.RepoSubpath,
+		source.ReadmeURL,
+		source.Updatable,
+		source.LastCheckedAt,
+		source.LastSyncedAt,
+		id,
+	)
+	if err != nil {
+		return err
+	}
 	rows, err := result.RowsAffected()
 	if err != nil {
 		return err
@@ -460,6 +617,39 @@ func (d *DB) UpdateSkillWithTargets(id int64, name, sourcePath, description stri
 	}
 
 	return tx.Commit()
+}
+
+func (d *DB) UpdateSkillSourceMetadata(id int64, source SkillSourceMeta) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	result, err := d.db.Exec(`UPDATE skills
+		SET source_type = ?, source_label = ?, repo_owner = ?, repo_name = ?, repo_branch = ?, repo_subpath = ?,
+			readme_url = ?, updatable = ?, last_checked_at = ?, last_synced_at = ?
+		WHERE id = ?`,
+		source.SourceType,
+		source.SourceLabel,
+		source.RepoOwner,
+		source.RepoName,
+		source.RepoBranch,
+		source.RepoSubpath,
+		source.ReadmeURL,
+		source.Updatable,
+		source.LastCheckedAt,
+		source.LastSyncedAt,
+		id,
+	)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("skill not found: %d", id)
+	}
+	return nil
 }
 
 func (d *DB) DeleteSkill(id int64) error {
@@ -769,6 +959,68 @@ func (d *DB) ListBackups() ([]BackupRecord, error) {
 	}
 
 	return backups, nil
+}
+
+func (d *DB) CreateSkillRepoSource(owner, repo, branch, subpath string, enabled bool) (int64, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	result, err := d.db.Exec(`INSERT INTO skill_repo_sources(owner, repo, branch, subpath, enabled)
+		VALUES(?, ?, ?, ?, ?)`, owner, repo, branch, subpath, enabled)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+func (d *DB) ListSkillRepoSources() ([]SkillRepoSourceRecord, error) {
+	rows, err := d.db.Query(`SELECT id, owner, repo, branch, subpath, enabled, created_at, updated_at
+		FROM skill_repo_sources
+		ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []SkillRepoSourceRecord
+	for rows.Next() {
+		var record SkillRepoSourceRecord
+		if err := rows.Scan(
+			&record.ID,
+			&record.Owner,
+			&record.Repo,
+			&record.Branch,
+			&record.Subpath,
+			&record.Enabled,
+			&record.CreatedAt,
+			&record.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return records, nil
+}
+
+func (d *DB) DeleteSkillRepoSource(id int64) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	result, err := d.db.Exec(`DELETE FROM skill_repo_sources WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("skill repo source not found: %d", id)
+	}
+	return nil
 }
 
 func (d *DB) GetBackupByID(id int64) (*BackupRecord, error) {

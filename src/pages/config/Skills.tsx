@@ -1,97 +1,204 @@
 import { openPath as open, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { useEffect, useState, type ReactNode } from "react";
-import type { TFunction } from "i18next";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import ConfirmPanel, { type AffectedFile } from "../../components/ConfirmPanel";
+import { useNavigate } from "react-router-dom";
 import { TOOL_LABELS, TOOLS, type ToolTarget } from "../../components/ToolTargets";
 import { fetchRaw, mutateAPI } from "../../lib/api";
 
-type SyncMethod = "symlink" | "copy";
-type SourceKind = "global" | "local";
-type RowStatus = "ok" | "problem";
-type DefinitionStatus = "valid" | "missing_path" | "not_directory" | "missing_skill_md" | "invalid_skill_md" | "";
-type SyncState = "in_sync" | "can_import_to_global" | "can_sync_to_cli" | "managed_using_local" | "definition_error";
-type PrimaryAction = "none" | "import_to_global" | "sync_to_cli" | "override_global";
-type IssueScope = "global_definition" | "local_definition" | "actual_install";
+type SkillSourceType = "repo" | "imported_tool" | "imported_local" | "manual";
+type SkillStatus = "healthy" | "needs_sync" | "update_available" | "broken";
+type SkillPrimaryAction = "none" | "import_into_library" | "sync_distribution" | "update_from_source" | "repair";
+type SkillComparisonState = "synced" | "different" | "missing" | "invalid" | "disabled";
 
-type SkillsCLIIssue = {
-  scope: IssueScope;
-  code: string;
+type AffectedFile = {
   path: string;
-  message_key: string;
-  details?: Record<string, string>;
+  tool: string;
+  operation: string;
+  diff?: string;
 };
 
-type ActualInstall = {
+type SkillOverviewActualInstall = {
   path: string;
   hash: string;
-  method: SyncMethod;
+  method: string;
   valid: boolean;
   problem_reason: string;
 };
 
-type SkillsCLIOverview = {
-  tool: ToolTarget;
-  library_path: string;
-  cli: {
-    available: boolean;
-    command: string;
-    message: string;
-  };
-  tool_available: boolean;
-  summary: {
-    visible_skills: number;
-    global_bindings: number;
-    local_bindings: number;
-    issue_count: number;
-  };
-  skills: SkillsCLISkill[];
+type SkillOverviewVariant = {
+  id: number;
+  source_path: string;
+  origin_tool: string;
+  hash: string;
 };
 
-type SkillsCLISkill = {
+type SkillSourceView = {
+  type: SkillSourceType;
+  label: string;
+  repo_owner?: string;
+  repo_name?: string;
+  repo_branch?: string;
+  repo_subpath?: string;
+  origin_tool?: string;
+  url?: string;
+  readme_url?: string;
+  updatable: boolean;
+  last_checked_at?: string;
+  last_synced_at?: string;
+};
+
+type SkillDistributionView = {
+  tool: ToolTarget;
+  enabled: boolean;
+  method: string;
+  healthy: boolean;
+  status: string;
+  sync_state: string;
+  source_kind: string;
+  variant_id?: number;
+  local_source_path?: string;
+  local_source_hash?: string;
+  local_origin_tool?: string;
+  library_path?: string;
+  library_hash?: string;
+  library_short_hash?: string;
+  installed_path?: string;
+  installed_hash?: string;
+  installed_short_hash?: string;
+  comparison_state: SkillComparisonState;
+  actual: SkillOverviewActualInstall[];
+};
+
+type SkillToolDetail = {
   id: number;
   name: string;
   description: string;
   managed: boolean;
-  source_kind: SourceKind;
-  status: RowStatus;
-  is_valid: boolean;
+  source_kind: string;
+  status: string;
   problem_reason: string;
-  definition_status?: DefinitionStatus;
-  sync_state: SyncState;
-  primary_action: PrimaryAction;
-  action_source_path: string;
-  action_target_path: string;
-  can_delete: boolean;
-  delete_path: string;
-  issues: SkillsCLIIssue[];
+  definition_status?: string;
+  sync_state: string;
+  primary_action: string;
+  issues: Array<{ code: string; path: string; scope: string; message_key: string }>;
   binding: {
     enabled: boolean;
-    method: SyncMethod;
-    source_kind: SourceKind;
-    variant_id: number;
-    local_source_path: string;
-    local_source_hash: string;
-    actual: ActualInstall[];
+    method: string;
+    source_kind: string;
+    variant_id?: number;
+    local_source_path?: string;
+    local_source_hash?: string;
+    actual: SkillOverviewActualInstall[];
   };
   global: {
     present: boolean;
     valid: boolean;
-    definition_status?: DefinitionStatus;
-    problem_reason: string;
-    current_variant_id: number;
     current_path: string;
     current_hash: string;
   };
   local: {
     present: boolean;
     valid: boolean;
-    definition_status?: DefinitionStatus;
-    problem_reason: string;
     path: string;
     hash: string;
     origin_tool: string;
   };
+};
+
+type ManagedSkillView = {
+  id: number;
+  name: string;
+  description: string;
+  managed: boolean;
+  source: SkillSourceView;
+  library: {
+    present: boolean;
+    path: string;
+    hash: string;
+    variant_id: number;
+  };
+  distribution: SkillDistributionView[];
+  status: SkillStatus;
+  primary_action: SkillPrimaryAction;
+  issue_summary: string;
+  details: {
+    definition_status?: string;
+    problem_reason?: string;
+    current_path?: string;
+    current_hash?: string;
+    archived_variants: SkillOverviewVariant[];
+    per_tool: SkillToolDetail[];
+    discovered: Array<{ path: string; tool: string; hash: string; method: string }>;
+  };
+};
+
+type SkillsDashboard = {
+  library_path: string;
+  summary: {
+    managed_count: number;
+    healthy_count: number;
+    issue_count: number;
+    needs_action_count: number;
+    source_count: number;
+  };
+  managed: ManagedSkillView[];
+};
+
+type LocalDiscoveredSkill = {
+  name: string;
+  description: string;
+  path: string;
+  origin_tool: ToolTarget;
+  hash: string;
+  importable: boolean;
+  status: SkillStatus;
+  primary_action: SkillPrimaryAction;
+  issue_summary: string;
+  source: SkillSourceView;
+};
+
+type RepoDiscoveredSkill = {
+  name: string;
+  description: string;
+  path: string;
+  readme_url: string;
+  hash?: string;
+};
+
+type RepoDiscoveryGroup = {
+  source_id: number;
+  source_label: string;
+  owner: string;
+  repo: string;
+  branch: string;
+  subpath: string;
+  enabled: boolean;
+  skill_count: number;
+  error?: string;
+  skills: RepoDiscoveredSkill[];
+};
+
+type SkillsDiscover = {
+  summary: {
+    local_count: number;
+    repo_count: number;
+    importable_count: number;
+  };
+  local: LocalDiscoveredSkill[];
+  repos: RepoDiscoveryGroup[];
+};
+
+type SkillRepoSourceView = {
+  id: number;
+  owner: string;
+  repo: string;
+  branch: string;
+  subpath: string;
+  enabled: boolean;
+  label: string;
+  skill_count: number;
+  last_error?: string;
+  last_checked_at?: string;
 };
 
 type MutationResponse = {
@@ -104,44 +211,21 @@ type ImportManagedSkillResponse = MutationResponse & {
   created_new: boolean;
 };
 
-function normalizeSkill(skill: SkillsCLISkill): SkillsCLISkill {
-  return {
-    ...skill,
-    issues: Array.isArray(skill.issues) ? skill.issues : [],
-    binding: {
-      ...skill.binding,
-      actual: Array.isArray(skill.binding?.actual) ? skill.binding.actual : [],
-    },
-    global: {
-      ...skill.global,
-    },
-    local: {
-      ...skill.local,
-    },
-  };
-}
-
-function normalizeOverview(overview: SkillsCLIOverview): SkillsCLIOverview {
-  return {
-    ...overview,
-    skills: Array.isArray(overview.skills) ? overview.skills.map(normalizeSkill) : [],
-  };
-}
+type ImportExistingSkillsResponse = MutationResponse & {
+  imported_count: number;
+  skipped_count: number;
+};
 
 const SECONDARY_BUTTON =
-  "inline-flex min-h-11 cursor-pointer items-center justify-center rounded-xl border border-border bg-background px-4 py-2 text-sm text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-60";
+  "inline-flex min-h-10 cursor-pointer items-center justify-center rounded-xl border border-border bg-background px-4 py-2 text-sm text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-60";
 const PRIMARY_BUTTON =
-  "inline-flex min-h-11 cursor-pointer items-center justify-center rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:opacity-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-60";
+  "inline-flex min-h-10 cursor-pointer items-center justify-center rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:opacity-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-60";
 const DANGER_BUTTON =
-  "inline-flex min-h-11 cursor-pointer items-center justify-center rounded-xl border border-red-500/30 px-4 py-2 text-sm font-medium text-red-500 transition-colors hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/20 disabled:cursor-not-allowed disabled:opacity-60";
+  "inline-flex min-h-10 cursor-pointer items-center justify-center rounded-xl border border-red-500/30 px-4 py-2 text-sm font-medium text-red-500 transition-colors hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/20 disabled:cursor-not-allowed disabled:opacity-60";
 const GHOST_BUTTON =
-  "inline-flex min-h-10 cursor-pointer items-center justify-center rounded-lg border border-border/70 px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-60";
+  "inline-flex min-h-10 cursor-pointer items-center justify-center rounded-xl border border-border/70 px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-60";
 const INPUT_CLASS =
   "w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none transition-colors focus:border-accent focus:ring-4 focus:ring-accent/10";
-
-function skillKey(skill: SkillsCLISkill) {
-  return skill.id > 0 ? `managed:${skill.id}` : `local:${skill.name.toLowerCase()}:${skill.local.path}`;
-}
 
 function getFolderPath(path: string) {
   const normalized = path.trim().replace(/[\\/]+$/, "");
@@ -155,212 +239,269 @@ function getFolderPath(path: string) {
   return normalized.slice(0, lastSeparator);
 }
 
-function getOpenCandidates(path: string) {
-  const candidates = [path.trim(), getFolderPath(path)];
-  return candidates.filter((candidate, index, all) => candidate && all.indexOf(candidate) === index);
-}
-
-function sourceLabel(t: TFunction, sourceKind: SourceKind) {
-  return t(sourceKind === "global" ? "skillsBindingGlobal" : "skillsBindingLocal");
-}
-
-function statusLabel(t: TFunction, status: RowStatus) {
-  return status === "problem" ? t("skillsStatusProblem") : t("skillsStatusOk");
-}
-
-function syncStateLabel(t: TFunction, syncState: SyncState) {
-  switch (syncState) {
-    case "can_import_to_global":
-      return t("skillsSyncStateCanImportToGlobal");
-    case "can_sync_to_cli":
-      return t("skillsSyncStateCanSyncToCli");
-    case "managed_using_local":
-      return t("skillsSyncStateManagedUsingLocal");
-    case "definition_error":
-      return t("skillsSyncStateDefinitionError");
-    default:
-      return t("skillsSyncStateInSync");
+async function openLocation(path: string) {
+  if (/^https?:\/\//i.test(path)) {
+    await open(path);
+    return;
   }
+  const candidates = [path.trim(), getFolderPath(path)].filter(Boolean);
+  for (const candidate of candidates) {
+    try {
+      await revealItemInDir(candidate);
+      return;
+    } catch {
+      try {
+        await open(candidate);
+        return;
+      } catch {
+        continue;
+      }
+    }
+  }
+  throw new Error("open_failed");
 }
 
-function syncStateTone(syncState: SyncState) {
-  switch (syncState) {
-    case "can_import_to_global":
-      return "border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300";
-    case "can_sync_to_cli":
-      return "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300";
-    case "managed_using_local":
-      return "border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300";
-    case "definition_error":
-      return "border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-300";
+async function openFolderPath(path: string) {
+  const normalized = path.trim();
+  const candidates = [normalized, getFolderPath(normalized)].filter(Boolean);
+  for (const candidate of candidates) {
+    try {
+      await open(candidate);
+      return;
+    } catch {
+      try {
+        await revealItemInDir(candidate);
+        return;
+      } catch {
+        continue;
+      }
+    }
+  }
+  throw new Error("open_failed");
+}
+
+async function openDirectoryLocation(path: string) {
+  const folder = getFolderPath(path);
+  if (!folder) {
+    await openLocation(path);
+    return;
+  }
+  await openFolderPath(folder);
+}
+
+function skillStatusTone(status: SkillStatus) {
+  switch (status) {
+    case "broken":
+      return "border-red-500/20 bg-red-500/10 text-red-700 dark:text-red-300";
+    case "update_available":
+      return "border-sky-500/20 bg-sky-500/10 text-sky-700 dark:text-sky-300";
+    case "needs_sync":
+      return "border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300";
     default:
       return "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
   }
 }
 
-function primaryActionLabel(t: TFunction, action: PrimaryAction) {
-  switch (action) {
-    case "import_to_global":
-      return t("skillsActionImportToGlobal");
-    case "sync_to_cli":
-      return t("skillsActionSyncToCli");
-    case "override_global":
-      return t("skillsActionOverrideGlobal");
+function sourceTone(sourceType: SkillSourceType) {
+  switch (sourceType) {
+    case "repo":
+      return "bg-sky-500/12 text-sky-700 dark:text-sky-300";
+    case "imported_tool":
+      return "bg-amber-500/12 text-amber-700 dark:text-amber-300";
+    case "imported_local":
+      return "bg-violet-500/12 text-violet-700 dark:text-violet-300";
     default:
-      return t("skillsNoAction");
+      return "bg-muted text-foreground";
   }
 }
 
-function primaryActionDoneLabel(t: TFunction, action: PrimaryAction) {
-  switch (action) {
-    case "import_to_global":
-      return t("skillsActionImportToGlobalDone");
-    case "sync_to_cli":
-      return t("skillsActionSyncToCliDone");
-    case "override_global":
-      return t("skillsActionOverrideGlobalDone");
+function sourceDisplayLabel(t: ReturnType<typeof useTranslation>["t"], source: SkillSourceView) {
+  if (source.repo_owner && source.repo_name) {
+    return source.repo_subpath ? `${source.repo_owner}/${source.repo_name}:${source.repo_subpath}` : `${source.repo_owner}/${source.repo_name}`;
+  }
+  if (source.url || /^https?:\/\//i.test(source.label)) {
+    return source.label.replace(/^https?:\/\/github\.com\//i, "");
+  }
+  return t("skillsSourceUnlinkedRepo", { defaultValue: "Repository not linked" });
+}
+
+function toolTone(tool: ToolTarget) {
+  switch (tool) {
+    case "claude":
+      return "bg-amber-500/12 text-amber-700 dark:text-amber-300";
+    case "codex":
+      return "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300";
+    case "openclaw":
+      return "bg-violet-500/12 text-violet-700 dark:text-violet-300";
     default:
-      return "";
+      return "bg-sky-500/12 text-sky-700 dark:text-sky-300";
   }
 }
 
-function issueMessage(t: TFunction, issue?: SkillsCLIIssue | null) {
-  if (!issue) {
-    return "";
-  }
-  return t(issue.message_key, {
-    path: issue.path,
-    expected_path: issue.details?.expected_path ?? "",
-    expected_hash: issue.details?.expected_hash ?? "",
-    actual_path: issue.details?.actual_path ?? "",
-    actual_hash: issue.details?.actual_hash ?? "",
-    source_kind: issue.details?.source_kind ?? "",
-    defaultValue: issue.code,
-  });
-}
-
-function issueScopeLabel(t: TFunction, scope: IssueScope) {
-  switch (scope) {
-    case "global_definition":
-      return t("skillsIssueScopeGlobalDefinition");
-    case "local_definition":
-      return t("skillsIssueScopeLocalDefinition");
-    default:
-      return t("skillsIssueScopeActualInstall");
-  }
-}
-
-function definitionStatusLabel(t: TFunction, status?: DefinitionStatus) {
+function statusLabel(t: ReturnType<typeof useTranslation>["t"], status: SkillStatus) {
   switch (status) {
-    case "valid":
-      return t("skillsDefinitionStatusValid");
-    case "missing_path":
-      return t("skillsDefinitionStatusMissingPath");
-    case "not_directory":
-      return t("skillsDefinitionStatusNotDirectory");
-    case "missing_skill_md":
-      return t("skillsDefinitionStatusMissingSkillFile");
-    case "invalid_skill_md":
-      return t("skillsDefinitionStatusInvalidSkillFile");
+    case "broken":
+      return t("skillsHubStatusBroken", { defaultValue: "Definition unavailable" });
+    case "update_available":
+      return t("skillsHubStatusUpdateAvailable", { defaultValue: "Source has updates" });
+    case "needs_sync":
+      return t("skillsHubStatusNeedsSync", { defaultValue: "Local content differs" });
     default:
-      return "-";
+      return t("skillsHubStatusHealthy", { defaultValue: "Synced" });
   }
 }
 
-function presenceLabel(t: TFunction, present: boolean, valid: boolean) {
-  if (!present) {
-    return t("skillsPresenceMissing");
+function comparisonLabel(t: ReturnType<typeof useTranslation>["t"], state: SkillComparisonState | undefined) {
+  switch (state) {
+    case "different":
+      return t("skillsComparisonDifferent", { defaultValue: "Local content differs" });
+    case "missing":
+      return t("skillsComparisonMissing", { defaultValue: "Not installed" });
+    case "invalid":
+      return t("skillsComparisonInvalid", { defaultValue: "Definition unavailable" });
+    case "disabled":
+      return t("skillsComparisonDisabled", { defaultValue: "Disabled" });
+    default:
+      return t("skillsComparisonSynced", { defaultValue: "Synced" });
   }
-  return valid ? t("skillsPresenceAvailable") : t("skillsPresenceInvalid");
 }
 
-function currentSourcePath(skill: SkillsCLISkill) {
-  return skill.source_kind === "global" ? skill.global.current_path : skill.local.path;
-}
-
-function primaryIssue(skill: SkillsCLISkill) {
-  return (skill.issues ?? [])[0] ?? null;
-}
-
-function scopeSummary(t: TFunction, summary?: SkillsCLIOverview["summary"]) {
-  const issues = summary?.issue_count ?? 0;
-  if (issues === 0) {
-    return t("skillsCliFocusSummaryNoIssues", { count: summary?.visible_skills ?? 0 });
+function comparisonStatus(state: SkillComparisonState | undefined): SkillStatus {
+  switch (state) {
+    case "different":
+      return "needs_sync";
+    case "invalid":
+      return "broken";
+    default:
+      return "healthy";
   }
-  return t("skillsCliFocusSummary", {
-    count: summary?.visible_skills ?? 0,
-    issues,
-  });
 }
 
-function SyncBadge({ t, syncState }: { t: TFunction; syncState: SyncState }) {
+function comparisonTone(state: SkillComparisonState | undefined) {
+  if (state === "missing" || state === "disabled") {
+    return "border-border bg-muted text-muted-foreground";
+  }
+  return skillStatusTone(comparisonStatus(state));
+}
+
+function installMethodLabel(t: ReturnType<typeof useTranslation>["t"], method: string | undefined) {
+  return method === "copy"
+    ? t("skillsInstallMethodCopy", { defaultValue: "Copy" })
+    : t("skillsInstallMethodSymlink", { defaultValue: "Link" });
+}
+
+function primaryActionLabel(t: ReturnType<typeof useTranslation>["t"], action: SkillPrimaryAction) {
+  switch (action) {
+    case "import_into_library":
+      return t("skillsHubActionImport", { defaultValue: "Import into management" });
+    case "sync_distribution":
+      return t("skillsHubActionSync", { defaultValue: "Apply to tools again" });
+    case "update_from_source":
+      return t("skillsHubActionUpdate", { defaultValue: "Update source" });
+    case "repair":
+      return t("skillsHubActionRepair", { defaultValue: "Repair" });
+    default:
+      return t("skillsNoAction", { defaultValue: "No action needed" });
+  }
+}
+
+function countEnabledTools(distribution: SkillDistributionView[]) {
+  return distribution.filter(isConnectedDistribution).length;
+}
+
+function summarizeTools(distribution: SkillDistributionView[]) {
+  return distribution
+    .filter(isConnectedDistribution)
+    .map((item) => item.tool);
+}
+
+function isConnectedDistribution(item: SkillDistributionView) {
+  return Boolean(item.installed_path) && item.comparison_state !== "missing" && item.comparison_state !== "disabled";
+}
+
+function normalizeManagedSkill(skill: ManagedSkillView): ManagedSkillView {
+  const distribution = Array.isArray(skill.distribution)
+    ? skill.distribution.map((item) => {
+        const comparisonState =
+          item.enabled && !item.installed_path && item.comparison_state !== "disabled" && item.comparison_state !== "invalid"
+            ? "missing"
+            : item.comparison_state ?? (item.healthy ? "synced" : "different");
+        return {
+          ...item,
+          comparison_state: comparisonState,
+          actual: Array.isArray(item.actual) ? item.actual : [],
+        };
+      })
+    : [];
+  const hasContentDrift = distribution.some((item) => item.comparison_state === "different");
+  const status = skill.status === "needs_sync" && !hasContentDrift ? "healthy" : skill.status;
+  return {
+    ...skill,
+    status,
+    distribution,
+    details: {
+      ...skill.details,
+      archived_variants: Array.isArray(skill.details?.archived_variants) ? skill.details.archived_variants : [],
+      per_tool: Array.isArray(skill.details?.per_tool) ? skill.details.per_tool : [],
+      discovered: Array.isArray(skill.details?.discovered) ? skill.details.discovered : [],
+    },
+  };
+}
+
+function normalizeDashboard(data: SkillsDashboard): SkillsDashboard {
+  return {
+    ...data,
+    managed: Array.isArray(data.managed) ? data.managed.map(normalizeManagedSkill) : [],
+  };
+}
+
+function normalizeDiscover(data: SkillsDiscover): SkillsDiscover {
+  return {
+    ...data,
+    local: Array.isArray(data.local) ? data.local : [],
+    repos: Array.isArray(data.repos)
+      ? data.repos.map((group) => ({
+          ...group,
+          skills: Array.isArray(group.skills) ? group.skills : [],
+        }))
+      : [],
+  };
+}
+
+function IconButton({
+  label,
+  onClick,
+  disabled,
+  kind = "secondary",
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  kind?: "secondary" | "primary" | "danger";
+}) {
+  const className = kind === "primary" ? PRIMARY_BUTTON : kind === "danger" ? DANGER_BUTTON : SECONDARY_BUTTON;
   return (
-    <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium ${syncStateTone(syncState)}`}>
-      {syncStateLabel(t, syncState)}
-    </span>
+    <button type="button" onClick={onClick} disabled={disabled} className={className}>
+      {label}
+    </button>
   );
 }
 
-function ProblemIndicator({
-  t,
-  issue,
+function DetailsButton({
+  label,
+  onClick,
 }: {
-  t: TFunction;
-  issue?: SkillsCLIIssue | null;
-}) {
-  if (!issue) {
-    return null;
-  }
-  const tooltip = issueMessage(t, issue) || t("skillsStatusProblem");
-  return (
-    <div className="group relative inline-flex">
-      <span
-        className="inline-flex h-6 min-w-6 items-center justify-center rounded-full border border-red-500/30 bg-red-500/10 px-2 text-[11px] font-semibold text-red-600 dark:text-red-300"
-        aria-label={tooltip}
-        title={tooltip}
-      >
-        !
-      </span>
-      <div className="pointer-events-none absolute left-1/2 top-full z-10 mt-2 hidden w-72 -translate-x-1/2 rounded-xl border border-border bg-card px-3 py-2 text-xs leading-5 text-foreground shadow-lg group-hover:block group-focus-within:block">
-        {tooltip}
-      </div>
-    </div>
-  );
-}
-
-function DetailSection({
-  title,
-  children,
-}: {
-  title: string;
-  children: ReactNode;
+  label: string;
+  onClick: () => void;
 }) {
   return (
-    <section className="rounded-[24px] border border-border bg-background/70 p-4">
-      <h3 className="text-base font-semibold text-foreground">{title}</h3>
-      <div className="mt-3 space-y-3 text-sm">{children}</div>
-    </section>
-  );
-}
-
-function PathValue({ value }: { value: string }) {
-  return <div className="mt-1.5 break-all text-sm leading-6 text-foreground">{value || "-"}</div>;
-}
-
-function InfoGrid({
-  items,
-}: {
-  items: Array<{ label: string; value: ReactNode }>;
-}) {
-  return (
-    <div className="grid gap-4 sm:grid-cols-2">
-      {items.map((item) => (
-        <div key={item.label}>
-          <div className="text-xs font-medium text-muted-foreground">{item.label}</div>
-          <div className="mt-1 text-foreground">{item.value}</div>
-        </div>
-      ))}
-    </div>
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex min-h-10 cursor-pointer items-center rounded-xl border border-border bg-background px-3.5 py-2 text-sm text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+    >
+      {label}
+    </button>
   );
 }
 
@@ -378,11 +519,11 @@ function ModalShell({
   children: ReactNode;
 }) {
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/45 px-4 py-6">
-      <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-[28px] border border-border bg-card p-5 shadow-2xl sm:p-6">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-xl font-semibold text-foreground">{title}</h2>
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/55 px-4 py-6">
+      <div className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-[28px] border border-border bg-card p-5 shadow-2xl sm:p-6">
+        <div className="flex items-start justify-between gap-4 border-b border-border pb-4">
+          <div className="min-w-0">
+            <h2 className="truncate text-xl font-semibold text-foreground">{title}</h2>
             {subtitle ? <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p> : null}
           </div>
           <button type="button" onClick={onClose} className={GHOST_BUTTON}>
@@ -395,284 +536,326 @@ function ModalShell({
   );
 }
 
+function DetailSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="rounded-[24px] border border-border bg-background/70 p-4">
+      <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+      <div className="mt-3 space-y-3 text-sm">{children}</div>
+    </section>
+  );
+}
+
 export default function SkillsPage() {
   const { t } = useTranslation();
-  const [overviews, setOverviews] = useState<Partial<Record<ToolTarget, SkillsCLIOverview>>>({});
-  const [scope, setScope] = useState<ToolTarget>("codex");
+  const navigate = useNavigate();
+  const [dashboard, setDashboard] = useState<SkillsDashboard | null>(null);
+  const [discover, setDiscover] = useState<SkillsDiscover | null>(null);
+  const [sources, setSources] = useState<SkillRepoSourceView[]>([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [mutating, setMutating] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [pendingDelete, setPendingDelete] = useState<SkillsCLISkill | null>(null);
+  const [selectedSkill, setSelectedSkill] = useState<ManagedSkillView | null>(null);
+  const [discoverOpen, setDiscoverOpen] = useState(false);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [sourceForm, setSourceForm] = useState({
+    owner: "",
+    repo: "",
+    branch: "main",
+    subpath: "",
+    enabled: true,
+  });
 
   useEffect(() => {
     void loadAll();
   }, []);
 
-  async function loadAll(selected?: string | null) {
+  useEffect(() => {
+    if (!error && !message) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setError("");
+      setMessage("");
+    }, 4200);
+    return () => window.clearTimeout(timer);
+  }, [error, message]);
+
+  async function loadAll() {
     setLoading(true);
     setError("");
     try {
-      const results = await Promise.all(
-        TOOLS.map(async (tool) => [tool, await fetchRaw<SkillsCLIOverview>(`config/skills/cli/${tool}`)] as const)
-      );
-      const next: Partial<Record<ToolTarget, SkillsCLIOverview>> = {};
-      for (const [tool, overview] of results) {
-        next[tool] = normalizeOverview(overview);
-      }
-      setOverviews(next);
-      if (selected === null) {
-        setSelectedKey(null);
-      } else if (selected) {
-        setSelectedKey(selected);
-      }
+      const [dashboardResp, discoverResp, sourcesResp] = await Promise.all([
+        fetchRaw<SkillsDashboard>("config/skills/dashboard"),
+        fetchRaw<SkillsDiscover>("config/skills/discover"),
+        fetchRaw<SkillRepoSourceView[]>("config/skills/sources/repos"),
+      ]);
+      const nextDashboard = normalizeDashboard(dashboardResp);
+      setDashboard(nextDashboard);
+      setDiscover(normalizeDiscover(discoverResp));
+      setSources(Array.isArray(sourcesResp) ? sourcesResp : []);
+      return nextDashboard;
     } catch (err) {
       setError(err instanceof Error ? err.message : t("skillsLoadFailed"));
+      return null;
     } finally {
       setLoading(false);
     }
   }
 
-  async function openFolder(path: string) {
-    for (const candidate of getOpenCandidates(path)) {
-      try {
-        await revealItemInDir(candidate);
-        return;
-      } catch {
-        try {
-          await open(candidate);
-          return;
-        } catch {
-          continue;
+  async function handleOpen(path: string) {
+    try {
+      await openLocation(path);
+    } catch {
+      setError(t("skillsOpenFailed"));
+    }
+  }
+
+  async function runMutation(action: () => Promise<void>, success: string) {
+    setMutating(true);
+    setError("");
+    setMessage("");
+    try {
+      await action();
+      if (success) {
+        setMessage(success);
+      }
+      const nextDashboard = await loadAll();
+      if (nextDashboard && selectedSkill) {
+        setSelectedSkill(nextDashboard.managed.find((skill) => skill.id === selectedSkill.id) ?? null);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("skillsActionFailed"));
+    } finally {
+      setMutating(false);
+    }
+  }
+
+  async function importExisting() {
+    await runMutation(async () => {
+      const result = await mutateAPI<ImportExistingSkillsResponse>("POST", "config/skills/import-existing");
+      setMessage(
+        t("skillsHubImportedExisting", {
+          defaultValue: "Imported {{count}} existing skills.",
+          count: result.imported_count,
+        })
+      );
+    }, "");
+  }
+
+  async function refreshSources() {
+    await runMutation(async () => {
+      await mutateAPI<RepoDiscoveryGroup[]>("POST", "config/skills/sources/refresh");
+    }, t("skillsHubRefreshDone", { defaultValue: "Sources refreshed." }));
+  }
+
+  async function importDiscovered(skill: LocalDiscoveredSkill) {
+    await runMutation(async () => {
+      await mutateAPI<ImportManagedSkillResponse>("POST", "config/skills/import-managed", {
+        name: skill.name,
+        tool: skill.origin_tool,
+        source_path: skill.path,
+      });
+    }, t("skillsActionImportToGlobalDone", { defaultValue: "Imported into the global library." }));
+  }
+
+  async function setInstallMethod(skill: ManagedSkillView, distribution: SkillDistributionView, method: "symlink" | "copy") {
+    const sourceKind = distribution.source_kind === "local" && distribution.local_source_path ? "local" : "global";
+    await runMutation(async () => {
+      await mutateAPI<MutationResponse>("PUT", `config/skills/${skill.id}/bindings/${distribution.tool}`, {
+        method,
+        enabled: true,
+        variant_id: sourceKind === "global" ? skill.library.variant_id : 0,
+        source_kind: sourceKind,
+        local_source_path: sourceKind === "local" ? distribution.local_source_path : "",
+        local_source_hash: sourceKind === "local" ? distribution.local_source_hash ?? "" : "",
+        local_origin_tool: sourceKind === "local" ? distribution.local_origin_tool ?? distribution.tool : "",
+      });
+    }, t("skillsInstallMethodUpdated", { defaultValue: "Install method updated." }));
+  }
+
+  async function createRepoSource() {
+    await runMutation(async () => {
+      await mutateAPI<{ id: number }>("POST", "config/skills/sources/repos", sourceForm);
+      setSourceForm({ owner: "", repo: "", branch: "main", subpath: "", enabled: true });
+    }, t("skillsHubSourceAdded", { defaultValue: "Source added." }));
+  }
+
+  async function deleteRepoSource(id: number) {
+    await runMutation(async () => {
+      await mutateAPI<MutationResponse>("DELETE", `config/skills/sources/repos/${id}`);
+    }, t("skillsHubSourceDeleted", { defaultValue: "Source removed." }));
+  }
+
+  function openSourcesPanel() {
+    setActionsOpen(false);
+    setSourcesOpen(true);
+  }
+
+  function openDiscoverPanel() {
+    setActionsOpen(false);
+    setDiscoverOpen(true);
+  }
+
+  function sourceBadge(source: SkillSourceView, size: "xs" | "sm" = "xs") {
+    const label = sourceDisplayLabel(t, source);
+    const className = `inline-flex max-w-full rounded-full px-2.5 py-1 font-medium ${size === "sm" ? "text-xs" : "text-[11px]"} ${sourceTone(source.type)}`;
+    if (source.url) {
+      return (
+        <button type="button" onClick={() => void handleOpen(source.url ?? "")} className={`${className} cursor-pointer hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30`}>
+          {label}
+        </button>
+      );
+    }
+    return <span className={className}>{label}</span>;
+  }
+
+  const managedSkills = useMemo(() => {
+    const items = dashboard?.managed ?? [];
+    if (!query.trim()) {
+      return items;
+    }
+    const search = query.trim().toLowerCase();
+    return items.filter((skill) =>
+      [skill.name, skill.description, sourceDisplayLabel(t, skill.source), skill.issue_summary, skill.library.path].join("\n").toLowerCase().includes(search)
+    );
+  }, [dashboard, query, t]);
+
+  const localDiscoveries = useMemo(() => {
+    const items = discover?.local ?? [];
+    return items;
+  }, [discover]);
+
+  const repoDiscoveries = useMemo(() => {
+    const groups = discover?.repos ?? [];
+    return groups;
+  }, [discover]);
+
+  const toolCounts = useMemo(() => {
+    const counts: Record<ToolTarget, number> = {
+      claude: 0,
+      codex: 0,
+      opencode: 0,
+      openclaw: 0,
+    };
+    for (const skill of dashboard?.managed ?? []) {
+      for (const item of skill.distribution) {
+        if (item.enabled) {
+          counts[item.tool] += 1;
         }
       }
     }
-    setError(t("skillsOpenFailed"));
-  }
-
-  async function importToGlobal(skill: SkillsCLISkill) {
-    if (!skill.local.path) {
-      setError(t("skillsNoLocalVersion"));
-      return;
-    }
-    setMutating(true);
-    setError("");
-    setMessage("");
-    try {
-      await mutateAPI<ImportManagedSkillResponse>("POST", "config/skills/import-managed", {
-        skill_id: skill.id || 0,
-        name: skill.name,
-        tool: scope,
-        source_path: skill.local.path,
-      });
-      setMessage(primaryActionDoneLabel(t, "import_to_global"));
-      await loadAll(skill.id > 0 ? skillKey(skill) : null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("skillsActionFailed"));
-    } finally {
-      setMutating(false);
-    }
-  }
-
-  async function syncToCurrentCLI(skill: SkillsCLISkill) {
-    if (!skill.global.current_path) {
-      setError(t("skillsNoGlobalVersion"));
-      return;
-    }
-    setMutating(true);
-    setError("");
-    setMessage("");
-    try {
-      let skillID = skill.id;
-      if (skillID <= 0) {
-        const imported = await mutateAPI<ImportManagedSkillResponse>("POST", "config/skills/import-managed", {
-          skill_id: 0,
-          name: skill.name,
-          tool: "global",
-          source_path: skill.global.current_path,
-        });
-        skillID = imported.skill_id;
-      }
-      await mutateAPI<MutationResponse>("PUT", `config/skills/${skillID}/bindings/${scope}`, {
-        enabled: true,
-        method: skill.binding.method || "symlink",
-        source_kind: "global",
-      });
-      setMessage(primaryActionDoneLabel(t, "sync_to_cli"));
-      await loadAll(skillID > 0 && skill.id > 0 ? skillKey(skill) : null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("skillsActionFailed"));
-    } finally {
-      setMutating(false);
-    }
-  }
-
-  async function overrideGlobal(skill: SkillsCLISkill) {
-    if (!skill.local.path) {
-      setError(t("skillsNoLocalVersion"));
-      return;
-    }
-    setMutating(true);
-    setError("");
-    setMessage("");
-    try {
-      const imported = await mutateAPI<ImportManagedSkillResponse>("POST", "config/skills/import-managed", {
-        skill_id: skill.id || 0,
-        name: skill.name,
-        tool: scope,
-        source_path: skill.local.path,
-      });
-      await mutateAPI<MutationResponse>("POST", `config/skills/${imported.skill_id}/current-variant`, {
-        variant_id: imported.variant_id,
-      });
-      setMessage(primaryActionDoneLabel(t, "override_global"));
-      await loadAll(skill.id > 0 ? skillKey(skill) : null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("skillsActionFailed"));
-    } finally {
-      setMutating(false);
-    }
-  }
-
-  async function performPrimaryAction(skill: SkillsCLISkill) {
-    switch (skill.primary_action) {
-      case "import_to_global":
-        await importToGlobal(skill);
-        break;
-      case "sync_to_cli":
-        await syncToCurrentCLI(skill);
-        break;
-      case "override_global":
-        await overrideGlobal(skill);
-        break;
-      default:
-        break;
-    }
-  }
-
-  async function confirmDelete() {
-    if (!pendingDelete) {
-      return;
-    }
-    const deletingManagedRecord = pendingDelete.id > 0;
-    setMutating(true);
-    setError("");
-    setMessage("");
-    try {
-      if (deletingManagedRecord) {
-        await mutateAPI<MutationResponse>("DELETE", `config/skills/${pendingDelete.id}`);
-      } else {
-        await mutateAPI<MutationResponse>("POST", "config/skills/delete-path", {
-          path: pendingDelete.delete_path,
-        });
-      }
-      setPendingDelete(null);
-      setSelectedKey(null);
-      setMessage(t(deletingManagedRecord ? "skillsDeletedManaged" : "skillsDeletedDirectory"));
-      await loadAll(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t(deletingManagedRecord ? "skillsDeleteManagedFailed" : "skillsDeleteDirectoryFailed"));
-    } finally {
-      setMutating(false);
-    }
-  }
-
-  const currentOverview = overviews[scope] ?? null;
-  const visibleSkills = (currentOverview?.skills ?? []).filter((skill) => {
-    if (!query.trim()) {
-      return true;
-    }
-    const search = query.trim().toLowerCase();
-    return [
-      skill.name,
-      skill.description,
-      skill.local.path,
-      skill.global.current_path,
-      skill.action_source_path,
-      skill.action_target_path,
-      skill.sync_state,
-      skill.primary_action,
-      ...(skill.issues ?? []).flatMap((issue) => [issue.path, issueScopeLabel(t, issue.scope), issueMessage(t, issue)]),
-    ]
-      .join("\n")
-      .toLowerCase()
-      .includes(search);
-  });
-  const selectedSkill =
-    visibleSkills.find((skill) => skillKey(skill) === selectedKey) ??
-    currentOverview?.skills.find((skill) => skillKey(skill) === selectedKey) ??
-    null;
-  const summary = currentOverview?.summary;
+    return counts;
+  }, [dashboard]);
 
   return (
     <div className="h-full overflow-y-auto pr-1">
+      {(error || message) ? (
+        <div className="pointer-events-none fixed right-8 top-32 z-50 flex max-w-md justify-end">
+          <div
+            role="status"
+            className={`pointer-events-auto rounded-2xl border px-4 py-3 text-sm shadow-2xl backdrop-blur ${
+              error
+                ? "border-red-500/25 bg-card/95 text-red-600 dark:text-red-300"
+                : "border-emerald-500/25 bg-card/95 text-emerald-700 dark:text-emerald-300"
+            }`}
+          >
+            {error || message}
+          </div>
+        </div>
+      ) : null}
+
       <div className="flex flex-col gap-4 pb-6">
-        <section className="relative rounded-[28px] border border-border bg-card px-5 py-5 sm:px-6 sm:py-6">
-          <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-[28px]">
-            <div className="absolute -left-10 -top-10 h-32 w-32 rounded-full bg-accent/10 blur-3xl" />
-            <div className="absolute right-0 top-0 h-28 w-28 rounded-full bg-sky-500/10 blur-3xl" />
-          </div>
-          <div className="relative flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
-            <div className="min-w-0">
-              <h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-[2.05rem]">{t("skills")}</h1>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">{t("skillsCliOverviewDescription")}</p>
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              {currentOverview?.library_path ? (
-                <button type="button" onClick={() => void openFolder(currentOverview.library_path)} className={GHOST_BUTTON}>
-                  {t("skillsOpenGlobalLibrary")}
-                </button>
-              ) : null}
-              <button type="button" onClick={() => void loadAll(selectedKey)} className={SECONDARY_BUTTON}>
-                {t("refresh")}
-              </button>
-            </div>
-          </div>
-        </section>
-
-        {error ? (
-          <div className="rounded-2xl border border-red-500/25 bg-red-500/8 px-4 py-3 text-sm text-red-600 dark:text-red-300">{error}</div>
-        ) : null}
-        {message ? (
-          <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/8 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-300">{message}</div>
-        ) : null}
-
         <section className="rounded-[28px] border border-border bg-card p-4 sm:p-5">
-          <div className="flex min-w-max items-end gap-2 overflow-x-auto border-b border-border">
-            {TOOLS.map((tool) => {
-              const overview = overviews[tool];
-              return (
+          <div className="flex flex-col gap-3 border-b border-border pb-4 2xl:flex-row 2xl:items-center 2xl:justify-between">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+              <IconButton label={t("skillsHubToolbarRestoreBackup", { defaultValue: "Restore Backup" })} onClick={() => navigate("/config/files")} disabled={mutating} />
+              <IconButton label={t("skillsHubToolbarInstallZip", { defaultValue: "Install from ZIP" })} onClick={openDiscoverPanel} disabled={mutating} />
+              <IconButton label={t("skillsHubToolbarImportExisting", { defaultValue: "Import Existing" })} onClick={() => void importExisting()} disabled={mutating} />
+              <IconButton label={t("skillsHubDiscoverTab", { defaultValue: "Discover Skills" })} onClick={openDiscoverPanel} disabled={mutating} kind="primary" />
+              <div className="relative">
                 <button
-                  key={tool}
                   type="button"
-                  onClick={() => {
-                    setScope(tool);
-                    setSelectedKey(null);
-                  }}
-                  className={`inline-flex min-h-11 cursor-pointer items-center gap-3 rounded-t-2xl border border-b-0 px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 ${
-                    scope === tool
-                      ? "border-border bg-card text-foreground"
-                      : "border-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-                  }`}
+                  onClick={() => setActionsOpen((current) => !current)}
+                  className="inline-flex min-h-10 cursor-pointer items-center justify-center rounded-xl border border-border bg-background px-3.5 py-2 text-sm text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
                 >
-                  <span className="text-sm font-semibold">{TOOL_LABELS[tool]}</span>
-                  <span className={`rounded-full px-2 py-0.5 text-[11px] ${scope === tool ? "bg-accent text-white" : "bg-muted text-muted-foreground"}`}>
-                    {overview?.summary.visible_skills ?? 0}
-                  </span>
+                  {t("skillsHubMoreActions", { defaultValue: "More" })}
                 </button>
-              );
-            })}
-          </div>
-
-          <div className="space-y-5 pt-5">
-            <div className="space-y-1">
-              <div className="text-xl font-semibold text-foreground">{TOOL_LABELS[scope]}</div>
-              <p className="text-sm leading-6 text-muted-foreground">{scopeSummary(t, summary)}</p>
+                {actionsOpen ? (
+                  <div className="absolute right-0 top-full z-20 mt-2 w-72 overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
+                    <button
+                      type="button"
+                      onClick={openSourcesPanel}
+                      className="flex w-full items-start justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-muted"
+                    >
+                      <span>
+                        <span className="block text-sm text-foreground">{t("skillsHubSourcesTab", { defaultValue: "Sources" })}</span>
+                        <span className="mt-1 block text-xs text-muted-foreground">
+                          {t("skillsHubSourcesActionHelp", {
+                            defaultValue: "Manage repository sources and review what they can discover.",
+                          })}
+                        </span>
+                      </span>
+                      <span className="pt-0.5 text-xs text-muted-foreground">{sources.length}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActionsOpen(false);
+                        void refreshSources();
+                      }}
+                      className="flex w-full items-start px-4 py-3 text-left transition-colors hover:bg-muted"
+                    >
+                      <span>
+                        <span className="block text-sm text-foreground">{t("skillsHubToolbarRefresh", { defaultValue: "Refresh Sources" })}</span>
+                        <span className="mt-1 block text-xs text-muted-foreground">
+                          {t("skillsHubRefreshActionHelp", {
+                            defaultValue: "Re-scan repository sources and check whether managed sources have updates.",
+                          })}
+                        </span>
+                      </span>
+                    </button>
+                    {dashboard?.library_path ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActionsOpen(false);
+                          void handleOpen(dashboard.library_path);
+                        }}
+                        className="flex w-full items-start px-4 py-3 text-left transition-colors hover:bg-muted"
+                      >
+                        <span>
+                          <span className="block text-sm text-foreground">{t("skillsOpenGlobalLibrary")}</span>
+                          <span className="mt-1 block text-xs text-muted-foreground">
+                            {t("skillsHubOpenLibraryHelp", {
+                              defaultValue: "Open the central managed library folder on disk.",
+                            })}
+                          </span>
+                        </span>
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
             </div>
 
-            <div className="w-full lg:max-w-xl">
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              {TOOLS.map((tool) => (
+                <span key={tool} className={`inline-flex rounded-full px-3.5 py-2 text-sm font-medium ${toolTone(tool)}`}>
+                  {TOOL_LABELS[tool]}: {toolCounts[tool]}
+                </span>
+              ))}
+            </div>
+
+            <div className="w-full 2xl:max-w-md">
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
@@ -680,275 +863,319 @@ export default function SkillsPage() {
                 className={INPUT_CLASS}
               />
             </div>
+          </div>
 
-            {loading ? (
-              <div className="rounded-[24px] border border-border bg-background px-6 py-10 text-sm text-muted-foreground">{t("loading")}</div>
-            ) : visibleSkills.length === 0 ? (
-              <div className="rounded-[24px] border border-dashed border-border bg-background px-6 py-10 text-center">
-                <h3 className="text-base font-semibold text-foreground">{t("skillsEmptyTitle")}</h3>
-                <p className="mt-2 text-sm leading-7 text-muted-foreground">{t("skillsEmptyDescription")}</p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {visibleSkills.map((skill) => {
-                  const issue = primaryIssue(skill);
-                  const path = currentSourcePath(skill);
+          <div className="pt-5">
+            {loading ? <div className="rounded-[24px] border border-border bg-background px-6 py-10 text-sm text-muted-foreground">{t("loading")}</div> : null}
 
-                  return (
-                    <article
-                      key={skillKey(skill)}
-                      className="rounded-[24px] border border-border bg-background/80 p-4 transition-all hover:border-accent/20 hover:bg-muted/20 hover:shadow-sm"
-                    >
-                      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                        <div className="min-w-0 flex-1 space-y-3">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="text-lg font-semibold text-foreground">{skill.name}</h3>
-                            <span className="rounded-full border border-border px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
-                              {sourceLabel(t, skill.source_kind)}
+            {!loading ? (
+              managedSkills.length === 0 ? (
+                <div className="rounded-[24px] border border-dashed border-border bg-background px-6 py-10 text-center">
+                  <h3 className="text-base font-semibold text-foreground">{t("skillsEmptyTitle")}</h3>
+                  <p className="mt-2 text-sm leading-7 text-muted-foreground">{t("skillsEmptyDescription")}</p>
+                </div>
+              ) : (
+                <div className="overflow-hidden rounded-[24px] border border-border bg-background/60">
+                  {managedSkills.map((skill, index) => {
+                    const enabledTools = summarizeTools(skill.distribution);
+                    return (
+                      <article
+                        key={skill.id}
+                        className={`flex flex-col gap-4 px-4 py-4 transition-colors hover:bg-muted/50 lg:flex-row lg:items-center lg:justify-between ${
+                          index !== managedSkills.length - 1 ? "border-b border-border" : ""
+                        }`}
+                      >
+                        <div className="grid min-w-0 flex-1 gap-2 lg:grid-cols-[minmax(180px,0.9fr)_minmax(220px,1.4fr)_minmax(180px,1fr)] lg:items-center">
+                          <div className="min-w-0">
+                            <div className="truncate text-base font-semibold text-foreground">{skill.name}</div>
+                            <div className="mt-1">{sourceBadge(skill.source)}</div>
+                          </div>
+                          <p className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-sm text-muted-foreground">
+                            {skill.description || t("skillsNoDescription")}
+                          </p>
+                          <div className="flex min-w-0 flex-wrap items-center gap-2">
+                            <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium ${skillStatusTone(skill.status)}`}>
+                              {statusLabel(t, skill.status)}
                             </span>
-                            <SyncBadge t={t} syncState={skill.sync_state} />
-                            <ProblemIndicator t={t} issue={skill.status === "problem" ? issue : null} />
-                          </div>
-
-                          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                            <div className="rounded-[18px] border border-border/70 bg-card px-3 py-3">
-                              <div className="text-xs font-medium text-muted-foreground">{t("skillsGlobalVersionState")}</div>
-                              <div className="mt-2 text-sm text-foreground">{presenceLabel(t, skill.global.present, skill.global.valid)}</div>
-                            </div>
-                            <div className="rounded-[18px] border border-border/70 bg-card px-3 py-3">
-                              <div className="text-xs font-medium text-muted-foreground">{t("skillsCurrentCliVersionState", { tool: TOOL_LABELS[scope] })}</div>
-                              <div className="mt-2 text-sm text-foreground">{presenceLabel(t, skill.local.present, skill.local.valid)}</div>
-                            </div>
-                          </div>
-
-                          <div className="rounded-[18px] border border-border/70 bg-card px-3 py-3">
-                            <div className="text-xs font-medium text-muted-foreground">{t("skillsNextAction")}</div>
-                            <div className="mt-2 text-sm leading-6 text-foreground">{primaryActionLabel(t, skill.primary_action)}</div>
-                          </div>
-
-                          {issue ? (
-                            <div className="rounded-[18px] border border-red-500/20 bg-red-500/5 px-3 py-3">
-                              <div className="text-xs font-medium text-red-600 dark:text-red-300">{issueScopeLabel(t, issue.scope)}</div>
-                              <div className="mt-2 text-sm leading-6 text-foreground">{issueMessage(t, issue)}</div>
-                            </div>
-                          ) : null}
-
-                          <div className="rounded-[18px] border border-border/70 bg-card px-3 py-3">
-                            <div className="text-xs font-medium text-muted-foreground">{t("skillsCurrentVersion")}</div>
-                            <div className="mt-2 break-all text-sm text-foreground">{path || "-"}</div>
+                            <span className="text-xs text-muted-foreground">
+                              {t("skillsSummaryConnected", {
+                                defaultValue: "{{count}} CLIs connected",
+                                count: countEnabledTools(skill.distribution),
+                              })}
+                            </span>
                           </div>
                         </div>
 
-                        <div className="flex shrink-0 flex-col items-start gap-2 lg:items-end">
-                          <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-                            {skill.primary_action !== "none" ? (
-                              <button type="button" onClick={() => void performPrimaryAction(skill)} disabled={mutating} className={PRIMARY_BUTTON}>
-                                {primaryActionLabel(t, skill.primary_action)}
-                              </button>
-                            ) : null}
-                            {skill.can_delete ? (
-                              <button type="button" onClick={() => setPendingDelete(skill)} disabled={mutating} className={DANGER_BUTTON}>
-                                {t("delete")}
-                              </button>
-                            ) : null}
-                            <button type="button" onClick={() => setSelectedKey(skillKey(skill))} className={SECONDARY_BUTTON}>
-                              {t("skillsActionViewDetails")}
-                            </button>
-                            {path ? (
-                              <button type="button" onClick={() => void openFolder(path)} className={GHOST_BUTTON}>
-                                {t("skillsOpenFolder")}
-                              </button>
-                            ) : null}
+                        <div className="flex flex-col gap-3 lg:w-[360px] lg:items-end">
+                          <div className="flex flex-wrap gap-1.5 lg:justify-end">
+                            {enabledTools.length > 0 ? (
+                              skill.distribution
+                                .filter(isConnectedDistribution)
+                                .map((item) => (
+                                  <span key={`${skill.id}:${item.tool}`} className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${toolTone(item.tool)}`}>
+                                    <span
+                                      className={`h-1.5 w-1.5 rounded-full ${
+                                        item.comparison_state === "synced" ? "bg-emerald-500" : item.comparison_state === "invalid" ? "bg-red-500" : "bg-amber-500"
+                                      }`}
+                                    />
+                                    {TOOL_LABELS[item.tool]}
+                                  </span>
+                                ))
+                            ) : (
+                              <span className="inline-flex rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground">
+                                {t("skillsBindingStatusDisabled", { defaultValue: "Not enabled" })}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <DetailsButton label={t("details", { defaultValue: "Details" })} onClick={() => setSelectedSkill(skill)} />
                           </div>
                         </div>
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            )}
+                      </article>
+                    );
+                  })}
+                </div>
+              )
+            ) : null}
           </div>
         </section>
 
         {selectedSkill ? (
-          <ModalShell
-            title={selectedSkill.name}
-            subtitle={selectedSkill.description || t("skillsNoDescription")}
-            closeLabel={t("close")}
-            onClose={() => setSelectedKey(null)}
-          >
+          <ModalShell title={selectedSkill.name} subtitle={selectedSkill.description || t("skillsNoDescription")} closeLabel={t("close")} onClose={() => setSelectedSkill(null)}>
             <div className="space-y-5">
-              <DetailSection title={t("skillsSectionSync")}>
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <SyncBadge t={t} syncState={selectedSkill.sync_state} />
-                    <span className="rounded-full border border-border px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
-                      {sourceLabel(t, selectedSkill.source_kind)}
-                    </span>
-                    <ProblemIndicator t={t} issue={selectedSkill.status === "problem" ? primaryIssue(selectedSkill) : null} />
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {selectedSkill.primary_action !== "none" ? (
-                      <button type="button" onClick={() => void performPrimaryAction(selectedSkill)} disabled={mutating} className={PRIMARY_BUTTON}>
-                        {primaryActionLabel(t, selectedSkill.primary_action)}
-                      </button>
-                    ) : null}
-                    {selectedSkill.can_delete ? (
-                      <button type="button" onClick={() => setPendingDelete(selectedSkill)} disabled={mutating} className={DANGER_BUTTON}>
-                        {t("delete")}
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-                <InfoGrid
-                  items={[
-                    { label: t("skillsStatus"), value: statusLabel(t, selectedSkill.status) },
-                    { label: t("skillsDefinitionStatus"), value: definitionStatusLabel(t, selectedSkill.definition_status) },
-                    { label: t("skillsSyncState"), value: syncStateLabel(t, selectedSkill.sync_state) },
-                    { label: t("skillsNextAction"), value: primaryActionLabel(t, selectedSkill.primary_action) },
-                  ]}
-                />
-                {selectedSkill.action_source_path || selectedSkill.action_target_path ? (
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <div className="text-xs font-medium text-muted-foreground">{t("skillsActionSourcePath")}</div>
-                      <PathValue value={selectedSkill.action_source_path} />
-                    </div>
-                    <div>
-                      <div className="text-xs font-medium text-muted-foreground">{t("skillsActionTargetPath")}</div>
-                      <PathValue value={selectedSkill.action_target_path} />
-                    </div>
-                  </div>
-                ) : null}
-              </DetailSection>
+              <div className="flex flex-wrap items-center gap-2">
+                {sourceBadge(selectedSkill.source, "sm")}
+                <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${skillStatusTone(selectedSkill.status)}`}>{statusLabel(t, selectedSkill.status)}</span>
+                {selectedSkill.library.path ? <IconButton label={t("skillsOpenFolder")} onClick={() => void handleOpen(selectedSkill.library.path)} /> : null}
+                {selectedSkill.source.readme_url ? <IconButton label={t("skillsHubOpenReadme", { defaultValue: "Open README" })} onClick={() => void handleOpen(selectedSkill.source.readme_url ?? "")} /> : null}
+              </div>
 
-              {(selectedSkill.issues ?? []).length > 0 ? (
-                <DetailSection title={t("skillsIssuesTitle")}>
-                  <div className="space-y-3">
-                    {(selectedSkill.issues ?? []).map((issue, index) => (
-                      <div key={`${issue.scope}:${issue.code}:${issue.path || index}`} className="rounded-2xl border border-border/70 bg-card px-4 py-3">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="rounded-full border border-border px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
-                            {issueScopeLabel(t, issue.scope)}
-                          </span>
-                          <span className="rounded-full border border-red-500/30 bg-red-500/10 px-2.5 py-1 text-[11px] font-medium text-red-600 dark:text-red-300">
-                            {issueMessage(t, issue)}
-                          </span>
-                        </div>
-                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                          <div>
-                            <div className="text-xs font-medium text-muted-foreground">{t("skillsIssueType")}</div>
-                            <div className="mt-1 text-foreground">{issue.code}</div>
-                          </div>
-                          <div>
-                            <div className="text-xs font-medium text-muted-foreground">{t("skillsIssuePath")}</div>
-                            <PathValue value={issue.path || issue.details?.expected_path || issue.details?.actual_path || ""} />
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </DetailSection>
-              ) : null}
-
-              <DetailSection title={t("skillsSectionGlobal")}>
-                {selectedSkill.global.current_path ? (
-                  <>
-                    <InfoGrid
-                      items={[
-                        { label: t("skillsDefinitionStatus"), value: definitionStatusLabel(t, selectedSkill.global.definition_status) },
-                        { label: t("skillsStatus"), value: presenceLabel(t, selectedSkill.global.present, selectedSkill.global.valid) },
-                      ]}
-                    />
-                    <div>
-                      <div className="text-xs font-medium text-muted-foreground">{t("skillsGlobalCurrentPath")}</div>
-                      <PathValue value={selectedSkill.global.current_path} />
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <button type="button" onClick={() => void openFolder(selectedSkill.global.current_path)} className={GHOST_BUTTON}>
-                        {t("skillsOpenFolder")}
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <div className="text-muted-foreground">{t("skillsNoGlobalVersion")}</div>
-                )}
-              </DetailSection>
-
-              <DetailSection title={t("skillsSectionLocal")}>
-                {selectedSkill.local.path ? (
-                  <>
-                    <InfoGrid
-                      items={[
-                        { label: t("skillsDefinitionStatus"), value: definitionStatusLabel(t, selectedSkill.local.definition_status) },
-                        { label: t("skillsStatus"), value: presenceLabel(t, selectedSkill.local.present, selectedSkill.local.valid) },
-                      ]}
-                    />
-                    <div>
-                      <div className="text-xs font-medium text-muted-foreground">{t("skillsLocalPath")}</div>
-                      <PathValue value={selectedSkill.local.path} />
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <button type="button" onClick={() => void openFolder(selectedSkill.local.path)} className={GHOST_BUTTON}>
-                        {t("skillsOpenFolder")}
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <div className="text-muted-foreground">{t("skillsNoLocalVersion")}</div>
-                )}
-              </DetailSection>
-
-              {(((selectedSkill.binding.actual ?? []).length > 0) || selectedSkill.binding.method) ? (
-                <details className="rounded-[24px] border border-border bg-background/50 p-4">
-                  <summary className="cursor-pointer list-none text-sm font-semibold text-foreground">
-                    {t("skillsSectionMoreInfo")}
-                  </summary>
-                  <div className="mt-4 space-y-4 text-sm">
-                    {selectedSkill.binding.method ? (
-                      <div>
-                        <div className="text-xs font-medium text-muted-foreground">{t("skillsBindingMethod")}</div>
-                        <div className="mt-1 text-foreground">{selectedSkill.binding.method}</div>
-                      </div>
-                    ) : null}
-                    {(selectedSkill.binding.actual ?? []).length > 0 ? (
-                      <div>
-                        <div className="text-xs font-medium text-muted-foreground">{t("skillsInstalledPath")}</div>
-                        <div className="mt-2 space-y-2">
-                          {(selectedSkill.binding.actual ?? []).map((install) => (
-                            <div key={install.path} className="rounded-xl border border-border/70 bg-background px-3 py-3">
-                              <div className="break-all text-foreground">{install.path}</div>
-                              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                                <span>{install.method}</span>
-                                {!install.valid && install.problem_reason ? <span>{t("skillsPresenceInvalid")}</span> : null}
-                              </div>
+              <DetailSection title={t("skillsCliInstallSection", { defaultValue: "CLI installs" })}>
+                <div className="space-y-3">
+                  {(selectedSkill.distribution ?? []).map((distribution) => {
+                    const currentMethod = distribution.method === "copy" ? "copy" : "symlink";
+                    return (
+                      <div key={distribution.tool} className="rounded-2xl border border-border/70 bg-card px-4 py-3">
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${toolTone(distribution.tool)}`}>{TOOL_LABELS[distribution.tool]}</span>
+                              <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium ${comparisonTone(distribution.comparison_state)}`}>
+                                {comparisonLabel(t, distribution.comparison_state)}
+                              </span>
+                              <span className="text-xs text-muted-foreground">
+                                {t("skillsInstallMethodCurrent", {
+                                  defaultValue: "Current: {{method}}",
+                                  method: distribution.installed_path ? installMethodLabel(t, currentMethod) : "-",
+                                })}
+                              </span>
                             </div>
-                          ))}
+                            <div className="mt-2 text-xs text-muted-foreground">
+                              {distribution.installed_path
+                                ? t("skillsCliInstalledByMethod", {
+                                    defaultValue: "Installed with {{method}}.",
+                                    method: installMethodLabel(t, currentMethod),
+                                  })
+                                : t("skillsCliNotInstalledForSkill", { defaultValue: "Not installed for this CLI." })}
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            {distribution.installed_path ? (
+                              <IconButton
+                                label={t("skillsOpenInstalled", { defaultValue: "Open install location" })}
+                                onClick={() => {
+                                  void openDirectoryLocation(distribution.installed_path ?? "").catch(() => setError(t("skillsOpenFailed")));
+                                }}
+                              />
+                            ) : null}
+                            <div className="inline-flex overflow-hidden rounded-xl border border-border bg-background">
+                              {(["symlink", "copy"] as const).map((method) => (
+                                <button
+                                  key={method}
+                                  type="button"
+                                  onClick={() => void setInstallMethod(selectedSkill, distribution, method)}
+                                  disabled={mutating || (distribution.installed_path ? currentMethod === method : false)}
+                                  className={`min-h-10 cursor-pointer px-3.5 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-70 ${
+                                    distribution.installed_path && currentMethod === method ? "bg-accent text-white" : "text-foreground hover:bg-muted"
+                                  }`}
+                                >
+                                  {installMethodLabel(t, method)}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
                         </div>
                       </div>
-                    ) : null}
-                  </div>
-                </details>
-              ) : null}
+                    );
+                  })}
+                </div>
+              </DetailSection>
             </div>
           </ModalShell>
         ) : null}
 
-        {pendingDelete ? (
-          <ConfirmPanel
-            title={t(pendingDelete.id > 0 ? "skillsDeleteManagedConfirmTitle" : "skillsDeleteDirectoryConfirmTitle")}
-            affectedFiles={[
-              {
-                path: pendingDelete.delete_path || currentSourcePath(pendingDelete) || pendingDelete.name,
-                tool: pendingDelete.source_kind === "global" ? "global" : scope,
-                operation: "delete",
-              },
-            ]}
-            confirmLabel={t("delete")}
-            loading={mutating}
-            onCancel={() => setPendingDelete(null)}
-            onConfirm={() => void confirmDelete()}
-          />
+        {discoverOpen ? (
+          <ModalShell
+            title={t("skillsHubDiscoverTab", { defaultValue: "Discover / Import" })}
+            subtitle={t("skillsHubDiscoverDescription", {
+              defaultValue: "Import local skills that already exist, then review repository discoveries separately.",
+            })}
+            closeLabel={t("close")}
+            onClose={() => setDiscoverOpen(false)}
+          >
+            <div className="space-y-5">
+              <div>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="text-sm font-semibold text-foreground">{t("skillsHubDiscoverLocalTitle", { defaultValue: "Existing local skills" })}</div>
+                  <IconButton label={t("skillsHubToolbarImportExisting", { defaultValue: "Import Existing" })} onClick={() => void importExisting()} disabled={mutating} />
+                </div>
+                <div className="mt-3 overflow-hidden rounded-[24px] border border-border bg-background/60">
+                  {localDiscoveries.length === 0 ? (
+                    <div className="px-6 py-8 text-sm text-muted-foreground">{t("skillsHubDiscoverLocalEmpty", { defaultValue: "No importable local skills were found." })}</div>
+                  ) : (
+                    localDiscoveries.map((skill, index) => (
+                      <article
+                        key={`${skill.origin_tool}:${skill.path}`}
+                        className={`flex flex-col gap-3 px-4 py-4 lg:flex-row lg:items-center lg:justify-between ${
+                          index !== localDiscoveries.length - 1 ? "border-b border-border" : ""
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="text-base font-semibold text-foreground">{skill.name}</h3>
+                            <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${toolTone(skill.origin_tool)}`}>
+                              {TOOL_LABELS[skill.origin_tool]}
+                            </span>
+                          </div>
+                          <p className="mt-1 overflow-hidden text-ellipsis whitespace-nowrap text-sm text-muted-foreground">
+                            {skill.description || t("skillsNoDescription")}
+                          </p>
+                          <div className="mt-1 overflow-hidden text-ellipsis whitespace-nowrap text-sm text-muted-foreground">{skill.path}</div>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <IconButton label={primaryActionLabel(t, skill.primary_action)} onClick={() => void importDiscovered(skill)} disabled={mutating} kind="primary" />
+                          <IconButton label={t("skillsOpenFolder")} onClick={() => void handleOpen(skill.path)} />
+                        </div>
+                      </article>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <div className="text-sm font-semibold text-foreground">{t("skillsHubDiscoverRepoTitle", { defaultValue: "Repository discoveries" })}</div>
+                <div className="mt-3 space-y-3">
+                  {repoDiscoveries.length === 0 ? (
+                    <div className="rounded-[24px] border border-dashed border-border bg-background px-6 py-8 text-sm text-muted-foreground">
+                      {t("skillsHubDiscoverRepoEmpty", { defaultValue: "No repository sources have been refreshed yet." })}
+                    </div>
+                  ) : (
+                    repoDiscoveries.map((group) => (
+                      <section key={group.source_id} className="overflow-hidden rounded-[24px] border border-border bg-background/60">
+                        <div className="flex flex-col gap-2 border-b border-border px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <div className="text-sm font-semibold text-foreground">{group.source_label}</div>
+                            <div className="text-xs text-muted-foreground">{group.skill_count} skills</div>
+                          </div>
+                          {group.error ? <div className="text-sm text-red-400">{group.error}</div> : null}
+                        </div>
+                        <div>
+                          {group.skills.map((skill, index) => (
+                            <article
+                              key={`${group.source_id}:${skill.path}`}
+                              className={`flex flex-col gap-3 px-4 py-4 lg:flex-row lg:items-center lg:justify-between ${
+                                index !== group.skills.length - 1 ? "border-b border-border" : ""
+                              }`}
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="text-sm font-semibold text-foreground">{skill.name}</div>
+                                <div className="mt-1 overflow-hidden text-ellipsis whitespace-nowrap text-sm text-muted-foreground">
+                                  {skill.description || t("skillsNoDescription")}
+                                </div>
+                                <div className="mt-1 overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted-foreground">{skill.path}</div>
+                              </div>
+                              {skill.readme_url ? <IconButton label={t("skillsHubOpenReadme", { defaultValue: "Open README" })} onClick={() => void handleOpen(skill.readme_url)} /> : null}
+                            </article>
+                          ))}
+                        </div>
+                      </section>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          </ModalShell>
+        ) : null}
+
+        {sourcesOpen ? (
+          <ModalShell
+            title={t("skillsHubSourcesTab", { defaultValue: "Sources" })}
+            subtitle={t("skillsHubSourcesDescription", {
+              defaultValue: "Configure repository sources, refresh them, and keep track of how many skills each source exposes.",
+            })}
+            closeLabel={t("close")}
+            onClose={() => setSourcesOpen(false)}
+          >
+            <div className="space-y-5">
+              <section className="rounded-[24px] border border-border bg-background/60 p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="text-sm font-semibold text-foreground">{t("skillsHubSourcesAddTitle", { defaultValue: "Add repository source" })}</div>
+                  <IconButton label={t("skillsHubToolbarRefresh", { defaultValue: "Refresh Sources" })} onClick={() => void refreshSources()} disabled={mutating} />
+                </div>
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <input value={sourceForm.owner} onChange={(event) => setSourceForm((current) => ({ ...current, owner: event.target.value }))} placeholder="owner" className={INPUT_CLASS} />
+                  <input value={sourceForm.repo} onChange={(event) => setSourceForm((current) => ({ ...current, repo: event.target.value }))} placeholder="repo" className={INPUT_CLASS} />
+                  <input value={sourceForm.branch} onChange={(event) => setSourceForm((current) => ({ ...current, branch: event.target.value }))} placeholder="branch" className={INPUT_CLASS} />
+                  <input value={sourceForm.subpath} onChange={(event) => setSourceForm((current) => ({ ...current, subpath: event.target.value }))} placeholder="subpath (optional)" className={INPUT_CLASS} />
+                </div>
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <label className="inline-flex items-center gap-2 text-sm text-foreground">
+                    <input
+                      type="checkbox"
+                      checked={sourceForm.enabled}
+                      onChange={(event) => setSourceForm((current) => ({ ...current, enabled: event.target.checked }))}
+                      className="h-4 w-4 rounded border-border accent-current"
+                    />
+                    {t("skillsHubSourceEnabled", { defaultValue: "Enabled" })}
+                  </label>
+                  <IconButton label={t("skillsHubSourceAddButton", { defaultValue: "Add source" })} onClick={() => void createRepoSource()} disabled={mutating} kind="primary" />
+                </div>
+              </section>
+
+              <div className="overflow-hidden rounded-[24px] border border-border bg-background/60">
+                {sources.length === 0 ? (
+                  <div className="px-6 py-8 text-sm text-muted-foreground">{t("skillsHubSourcesEmpty", { defaultValue: "No repository sources configured yet." })}</div>
+                ) : (
+                  sources.map((source, index) => (
+                    <article
+                      key={source.id}
+                      className={`flex flex-col gap-3 px-4 py-4 lg:flex-row lg:items-center lg:justify-between ${
+                        index !== sources.length - 1 ? "border-b border-border" : ""
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-base font-semibold text-foreground">{source.label}</h3>
+                          <span className="inline-flex rounded-full bg-sky-500/12 px-2.5 py-1 text-[11px] font-medium text-sky-300">
+                            {source.skill_count} skills
+                          </span>
+                        </div>
+                        <div className="mt-1 text-sm text-muted-foreground">
+                          {source.enabled ? t("skillsHubSourceEnabled", { defaultValue: "Enabled" }) : t("skillsBindingStatusDisabled", { defaultValue: "Not enabled" })}
+                        </div>
+                        {source.last_error ? <div className="mt-1 text-sm text-red-400">{source.last_error}</div> : null}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <IconButton label={t("refresh")} onClick={() => void refreshSources()} disabled={mutating} />
+                        <IconButton label={t("delete")} onClick={() => void deleteRepoSource(source.id)} disabled={mutating} kind="danger" />
+                      </div>
+                    </article>
+                  ))
+                )}
+              </div>
+            </div>
+          </ModalShell>
         ) : null}
       </div>
     </div>

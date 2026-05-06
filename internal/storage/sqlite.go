@@ -220,6 +220,16 @@ func migrate(db *sql.DB) error {
 					source_path TEXT NOT NULL,
 					description TEXT NOT NULL DEFAULT '',
 					enabled INTEGER NOT NULL DEFAULT 1,
+					source_type TEXT NOT NULL DEFAULT 'manual',
+					source_label TEXT NOT NULL DEFAULT '',
+					repo_owner TEXT NOT NULL DEFAULT '',
+					repo_name TEXT NOT NULL DEFAULT '',
+					repo_branch TEXT NOT NULL DEFAULT '',
+					repo_subpath TEXT NOT NULL DEFAULT '',
+					readme_url TEXT NOT NULL DEFAULT '',
+					updatable INTEGER NOT NULL DEFAULT 0,
+					last_checked_at DATETIME,
+					last_synced_at DATETIME,
 					created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 				);
 
@@ -250,6 +260,18 @@ func migrate(db *sql.DB) error {
 					last_sync DATETIME,
 					last_sync_dir TEXT NOT NULL DEFAULT '',
 					PRIMARY KEY (tool, file_path)
+				);
+
+				CREATE TABLE IF NOT EXISTS skill_repo_sources (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					owner TEXT NOT NULL,
+					repo TEXT NOT NULL,
+					branch TEXT NOT NULL DEFAULT 'main',
+					subpath TEXT NOT NULL DEFAULT '',
+					enabled INTEGER NOT NULL DEFAULT 1,
+					created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					UNIQUE (owner, repo, branch, subpath)
 				);
 			`,
 		},
@@ -285,6 +307,30 @@ func migrate(db *sql.DB) error {
 	db.Exec("ALTER TABLE skill_targets ADD COLUMN local_source_path TEXT NOT NULL DEFAULT ''")
 	db.Exec("ALTER TABLE skill_targets ADD COLUMN local_source_hash TEXT NOT NULL DEFAULT ''")
 	db.Exec("ALTER TABLE skill_targets ADD COLUMN local_origin_tool TEXT NOT NULL DEFAULT ''")
+	db.Exec("ALTER TABLE skills ADD COLUMN source_type TEXT NOT NULL DEFAULT 'manual'")
+	db.Exec("ALTER TABLE skills ADD COLUMN source_label TEXT NOT NULL DEFAULT ''")
+	db.Exec("ALTER TABLE skills ADD COLUMN repo_owner TEXT NOT NULL DEFAULT ''")
+	db.Exec("ALTER TABLE skills ADD COLUMN repo_name TEXT NOT NULL DEFAULT ''")
+	db.Exec("ALTER TABLE skills ADD COLUMN repo_branch TEXT NOT NULL DEFAULT ''")
+	db.Exec("ALTER TABLE skills ADD COLUMN repo_subpath TEXT NOT NULL DEFAULT ''")
+	db.Exec("ALTER TABLE skills ADD COLUMN readme_url TEXT NOT NULL DEFAULT ''")
+	db.Exec("ALTER TABLE skills ADD COLUMN updatable INTEGER NOT NULL DEFAULT 0")
+	db.Exec("ALTER TABLE skills ADD COLUMN last_checked_at DATETIME")
+	db.Exec("ALTER TABLE skills ADD COLUMN last_synced_at DATETIME")
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS skill_repo_sources (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			owner TEXT NOT NULL,
+			repo TEXT NOT NULL,
+			branch TEXT NOT NULL DEFAULT 'main',
+			subpath TEXT NOT NULL DEFAULT '',
+			enabled INTEGER NOT NULL DEFAULT 1,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE (owner, repo, branch, subpath)
+		)`); err != nil {
+		return err
+	}
 	return backfillSkillVariants(db)
 }
 

@@ -14,6 +14,7 @@ func TestConfigManagerMigration(t *testing.T) {
 		"mcp_servers",
 		"mcp_server_targets",
 		"skills",
+		"skill_repo_sources",
 		"skill_targets",
 		"config_backups",
 		"sync_state",
@@ -184,6 +185,12 @@ func TestSkillCRUD(t *testing.T) {
 	if skill.Name != "find-skills" || skill.SourcePath != "/tmp/find-skills" {
 		t.Fatalf("unexpected skill data: %+v", *skill)
 	}
+	if skill.SourceType != "manual" {
+		t.Fatalf("skill.SourceType = %q, want manual", skill.SourceType)
+	}
+	if skill.Updatable {
+		t.Fatalf("skill.Updatable = true, want false")
+	}
 
 	if err := db.UpdateSkill(id, "find-skills-v2", "/tmp/find-skills-v2", "discover and install skills", false); err != nil {
 		t.Fatalf("UpdateSkill: %v", err)
@@ -217,6 +224,36 @@ func TestSkillCRUD(t *testing.T) {
 	}
 	if err := db.DeleteSkill(id); err == nil {
 		t.Fatal("expected error deleting missing skill")
+	}
+}
+
+func TestSkillRepoSourceCRUD(t *testing.T) {
+	db := tempDB(t)
+
+	id, err := db.CreateSkillRepoSource("openai", "codex", "main", "skills", true)
+	if err != nil {
+		t.Fatalf("CreateSkillRepoSource: %v", err)
+	}
+	if id == 0 {
+		t.Fatal("expected non-zero id")
+	}
+
+	sources, err := db.ListSkillRepoSources()
+	if err != nil {
+		t.Fatalf("ListSkillRepoSources: %v", err)
+	}
+	if len(sources) != 1 {
+		t.Fatalf("len(sources) = %d, want 1", len(sources))
+	}
+	if sources[0].Owner != "openai" || sources[0].Repo != "codex" || !sources[0].Enabled {
+		t.Fatalf("unexpected repo source: %+v", sources[0])
+	}
+
+	if err := db.DeleteSkillRepoSource(id); err != nil {
+		t.Fatalf("DeleteSkillRepoSource: %v", err)
+	}
+	if err := db.DeleteSkillRepoSource(id); err == nil {
+		t.Fatal("expected error deleting missing repo source")
 	}
 }
 

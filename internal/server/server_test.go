@@ -1479,6 +1479,70 @@ func TestSkillsCLIOverviewAndBindingEndpoint(t *testing.T) {
 	}
 }
 
+func TestSetSkillBindingSyncsOnlySelectedSkill(t *testing.T) {
+	db := tempDB(t)
+	t.Setenv("HOME", t.TempDir())
+
+	installRoot := filepath.Join(t.TempDir(), "codex-skills")
+	mgr := configmanager.NewManager(
+		db,
+		t.TempDir(),
+		configmanager.WithEncryptionKey([]byte("12345678901234567890123456789012")),
+		configmanager.WithAdapter(&failingServerTestAdapter{
+			tool:       "codex",
+			installed:  true,
+			skillPaths: []string{installRoot},
+		}),
+	)
+	srv := New(db, mgr, "127.0.0.1:0")
+	handler := srv.Handler()
+
+	goodPath := filepath.Join(t.TempDir(), "good-skill")
+	if err := os.MkdirAll(goodPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll goodPath: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(goodPath, "SKILL.md"), []byte("---\nname: good\ndescription: good\n---\ngood-v1\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile good skill: %v", err)
+	}
+	goodID, err := mgr.CreateSkill("good", goodPath, "desc", map[string]configmanager.SkillTargetRecord{
+		"codex": {Tool: "codex", Method: "copy", Enabled: true},
+	})
+	if err != nil {
+		t.Fatalf("CreateSkill good: %v", err)
+	}
+
+	brokenPath := filepath.Join(t.TempDir(), "broken-skill")
+	if err := os.MkdirAll(brokenPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll brokenPath: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(brokenPath, "SKILL.md"), []byte("---\nname: broken\ndescription: broken\n---\nbroken-v1\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile broken skill: %v", err)
+	}
+	if _, err := mgr.CreateSkill("broken", brokenPath, "desc", map[string]configmanager.SkillTargetRecord{
+		"codex": {Tool: "codex", Method: "copy", Enabled: true},
+	}); err != nil {
+		t.Fatalf("CreateSkill broken: %v", err)
+	}
+	if err := os.RemoveAll(brokenPath); err != nil {
+		t.Fatalf("RemoveAll brokenPath: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/config/skills/%d/bindings/codex", goodID), bytes.NewBufferString(`{"enabled":true,"method":"copy","source_kind":"global"}`))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("binding update status = %d, body = %s", w.Code, w.Body.String())
+	}
+
+	data, err := os.ReadFile(filepath.Join(installRoot, "good", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("ReadFile installed skill: %v", err)
+	}
+	if !strings.Contains(string(data), "good-v1") {
+		t.Fatalf("installed content = %q, want good-v1", string(data))
+	}
+}
+
 func TestDeleteSkillPathEndpoint(t *testing.T) {
 	db := tempDB(t)
 	t.Setenv("HOME", t.TempDir())

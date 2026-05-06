@@ -364,6 +364,7 @@ func (m *Manager) installStatusForSkill(skill SkillInventoryEntry) map[string]Sk
 }
 
 func (m *Manager) upsertSkillRecord(name, sourcePath, description, tool string) error {
+	sourceMeta := inferSkillSourceMeta(sourcePath, tool)
 	if description == "" {
 		metadata, err := parseSkillMetadata(sourcePath)
 		if err == nil {
@@ -387,10 +388,13 @@ func (m *Manager) upsertSkillRecord(name, sourcePath, description, tool string) 
 			return err
 		}
 		targets[tool] = storage.SkillTargetRecord{Tool: tool, Method: "symlink", Enabled: true, VariantID: variantID}
-		return m.db.UpdateSkillWithTargets(skill.ID, name, sourcePath, description, true, skillTargetRecordsFromMap(targets))
+		if err := m.db.UpdateSkillWithTargets(skill.ID, name, sourcePath, description, true, skillTargetRecordsFromMap(targets)); err != nil {
+			return err
+		}
+		return m.db.UpdateSkillSourceMetadata(skill.ID, sourceMeta)
 	}
 
-	id, err := m.db.CreateSkill(name, sourcePath, description)
+	id, err := m.db.CreateSkillWithSource(name, sourcePath, description, sourceMeta)
 	if err != nil {
 		return err
 	}
