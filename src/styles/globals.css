@@ -34,6 +34,22 @@
   --color-accent-dim: rgba(249, 115, 22, 0.15);
 }
 
+.session-center-grid {
+  display: grid;
+  grid-template-columns: minmax(300px, 340px) minmax(420px, 1fr);
+}
+
+.session-center-grid[data-inspector-open="true"] {
+  grid-template-columns: minmax(300px, 340px) minmax(420px, 1fr) minmax(320px, 400px);
+}
+
+@media (max-width: 899px) {
+  .session-center-grid,
+  .session-center-grid[data-inspector-open="true"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

@@ -6,6 +6,10 @@ function clearPortCache() {
   cachedPort = null;
 }
 
+function isAbortError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "name" in error && error.name === "AbortError";
+}
+
 async function getPort(): Promise<number> {
   if (cachedPort) return cachedPort;
   // Retry up to 100 times (10s total) waiting for sidecar to be ready
@@ -95,6 +99,9 @@ async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
         throw err;
       }
     } catch (err) {
+      if (isAbortError(err)) {
+        throw err;
+      }
       if (!retriedAfterRefresh && usedCachedPort) {
         clearPortCache();
         retriedAfterRefresh = true;
@@ -108,12 +115,13 @@ async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
 export async function fetchAPI<T>(
   path: string,
   params: Record<string, string | number | undefined>,
+  init?: RequestInit,
 ): Promise<T> {
-  return requestJSON<T>(`${path}?${buildQuery(params)}`);
+  return requestJSON<T>(`${path}?${buildQuery(params)}`, init);
 }
 
-export async function fetchRaw<T>(path: string): Promise<T> {
-  return requestJSON<T>(path);
+export async function fetchRaw<T>(path: string, init?: RequestInit): Promise<T> {
+  return requestJSON<T>(path, init);
 }
 
 export class ApiError extends Error {

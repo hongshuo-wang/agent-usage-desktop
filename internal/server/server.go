@@ -66,7 +66,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/sessions", s.handleSessionSearch)
 	mux.HandleFunc("GET /api/sessions/{source}/{session_id}/events", s.handleSessionEventsRoute)
 	mux.HandleFunc("GET /api/sessions/{source}/{session_id}/events/{event_id}/raw", s.handleSessionRawRoute)
-	mux.HandleFunc("/api/session-detail", s.handleSessionDetail)
 	mux.HandleFunc("POST /api/session-index/rebuild", s.handleSessionIndexRebuild)
 
 	return corsMiddleware(mux)
@@ -238,21 +237,6 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	source := r.URL.Query().Get("source")
 	data, err := s.db.GetSessions(from, to, source)
-	if err != nil {
-		serverError(w, err)
-		return
-	}
-	writeJSON(w, data)
-}
-
-func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
-	source := r.URL.Query().Get("source")
-	sid := r.URL.Query().Get("session_id")
-	if source == "" || sid == "" {
-		http.Error(w, "source and session_id required", http.StatusBadRequest)
-		return
-	}
-	data, err := s.db.GetSessionDetail(source, sid)
 	if err != nil {
 		serverError(w, err)
 		return

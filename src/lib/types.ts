@@ -72,3 +72,52 @@ export interface CollectionIndexStatus {
   stale_parser_files: number;
   malformed_lines: number;
 }
+
+export interface SessionSummary {
+  source: string;
+  session_id: string;
+  title: string;
+  project: string;
+  cwd: string;
+  git_branch: string;
+  start_time: string;
+  last_activity: string;
+  models: string[];
+  input_tokens: number;
+  output_tokens: number;
+  cache_read: number;
+  cache_create: number;
+  total_tokens: number;
+  total_cost: number;
+  prompts: number;
+  tool_calls: number;
+  errors: number;
+  unknown_price: boolean;
+  coverage_status: string;
+  source_status: string;
+  malformed_lines: number;
+}
+
+export interface SessionEvent {
+  id: number;
+  event_type: string;
+  source_event_type: string;
+  timestamp: string;
+  role: string;
+  content: string;
+  tool_name: string;
+  tool_call_id: string;
+  tool_input: string;
+  tool_output: string;
+  event_status: string;
+  duration_ms: number | null;
+  has_raw: boolean;
+}
+
+export interface RawEventResponse {
+  path: string;
+  offset: number;
+  length: number;
+  content_type: string;
+  content: string;
+}

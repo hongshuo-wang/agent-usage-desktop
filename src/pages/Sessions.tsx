@@ -1,235 +1,354 @@
-import { useState, useEffect, useCallback, Fragment } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { fetchAPI, fetchRaw } from "../lib/api";
-import { fmtCost, fmtTokens, getTimeRange, relativeTime, TimePreset } from "../lib/utils";
+import { useLocation, useNavigate } from "react-router-dom";
+import EventInspector from "../components/sessions/EventInspector";
+import SessionList, { sessionIdentity } from "../components/sessions/SessionList";
+import SessionTimeline from "../components/sessions/SessionTimeline";
 import TimeRangeSelector from "../components/TimeRangeSelector";
+import { fetchAPI, fetchRaw } from "../lib/api";
+import type { RawEventResponse, SessionEvent, SessionSummary, UsageFilters } from "../lib/types";
+import { DEFAULT_USAGE_FILTERS, getInitialUsageFilters, persistUsageFilters } from "../lib/usageFilters";
+import { getTimeRange, type TimePreset } from "../lib/utils";
 
-interface Session {
-  session_id: string;
-  source: string;
-  project: string;
-  cwd: string;
-  git_branch: string;
-  start_time: string;
-  prompts: number;
-  tokens: number;
-  total_cost: number;
+const SESSION_PAGE_SIZE = 50;
+const EVENT_PAGE_SIZE = 100;
+const MOBILE_QUERY = "(max-width: 899px)";
+
+type DrilldownContext = Pick<UsageFilters, "from" | "to" | "source" | "model" | "project">;
+
+const isAbortError = (error: unknown) =>
+  typeof error === "object" && error !== null && "name" in error && error.name === "AbortError";
+
+function initialDrilldown(search: string): DrilldownContext {
+  const query = new URLSearchParams(search);
+  return {
+    from: query.get("from") || "",
+    to: query.get("to") || "",
+    source: query.get("source") || "",
+    model: query.get("model") || "",
+    project: query.get("project") || "",
+  };
 }
 
-interface SessionDetail {
-  model: string;
-  calls: number;
-  input_tokens: number;
-  output_tokens: number;
-  cache_read: number;
-  cache_create: number;
-  cost_usd: number;
+function hasDrilldown(context: DrilldownContext): boolean {
+  return Object.values(context).some(Boolean);
 }
 
-const PAGE_SIZE = 20;
-const sessionKey = (source: string, sessionID: string) => JSON.stringify([source, sessionID]);
-const BADGE_COLORS: Record<string, string> = {
-  claude: "bg-blue-500/10 text-blue-500 border-blue-500/20",
-  codex: "bg-green-500/10 text-green-500 border-green-500/20",
-  openclaw: "bg-orange-500/10 text-orange-500 border-orange-500/20",
-  opencode: "bg-purple-500/10 text-purple-500 border-purple-500/20",
-};
+function useMobileLayout(): boolean {
+  const [mobile, setMobile] = useState(() => window.matchMedia(MOBILE_QUERY).matches);
+  useEffect(() => {
+    const media = window.matchMedia(MOBILE_QUERY);
+    const update = () => setMobile(media.matches);
+    media.addEventListener("change", update);
+    update();
+    return () => media.removeEventListener("change", update);
+  }, []);
+  return mobile;
+}
 
-function DetailTable({ details, t }: { details: SessionDetail[]; t: (key: string) => string }) {
-  return (
-    <table className="w-full text-xs">
-      <thead>
-        <tr>
-          <th className="text-left py-2 text-muted-foreground">{t("model")}</th>
-          <th className="text-left py-2 text-muted-foreground">{t("calls")}</th>
-          <th className="text-left py-2 text-muted-foreground">{t("input")}</th>
-          <th className="text-left py-2 text-muted-foreground">{t("output")}</th>
-          <th className="text-left py-2 text-muted-foreground">{t("cacheRead")}</th>
-          <th className="text-left py-2 text-muted-foreground">{t("cacheCreate")}</th>
-          <th className="text-left py-2 text-muted-foreground">{t("cost")}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {details.map((d, i) => (
-          <tr key={i}>
-            <td className="py-1.5">{d.model}</td>
-            <td className="py-1.5">{d.calls}</td>
-            <td className="py-1.5 font-mono">{fmtTokens(d.input_tokens)}</td>
-            <td className="py-1.5 font-mono">{fmtTokens(d.output_tokens)}</td>
-            <td className="py-1.5 font-mono">{fmtTokens(d.cache_read)}</td>
-            <td className="py-1.5 font-mono">{fmtTokens(d.cache_create)}</td>
-            <td className="py-1.5 font-mono text-green-500">{fmtCost(d.cost_usd)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
+function sortSessions(rows: SessionSummary[]): SessionSummary[] {
+  return [...rows].sort((left, right) => right.last_activity.localeCompare(left.last_activity));
+}
+
+function sortEvents(rows: SessionEvent[]): SessionEvent[] {
+  return [...rows].sort((left, right) => left.timestamp.localeCompare(right.timestamp) || left.id - right.id);
 }
 
 export default function Sessions() {
   const { t } = useTranslation();
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [preset, setPreset] = useState<TimePreset>((localStorage.getItem("au-preset") as TimePreset) || "today");
+  const location = useLocation();
+  const navigate = useNavigate();
+  const isMobile = useMobileLayout();
+  const [filters, setFilters] = useState<UsageFilters>(() => getInitialUsageFilters(location.search));
+  const [drilldown, setDrilldown] = useState<DrilldownContext>(() => initialDrilldown(location.search));
   const [granularity, setGranularity] = useState(localStorage.getItem("au-granularity") || "1h");
-  const [source, setSource] = useState(localStorage.getItem("au-source") || "");
-  const [sortKey, setSortKey] = useState("start_time");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-  const [page, setPage] = useState(1);
-  const [filter, setFilter] = useState("");
-  const [expanded, setExpanded] = useState<Record<string, SessionDetail[] | null>>({});
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [selected, setSelected] = useState<SessionSummary | null>(null);
+  const [listLoading, setListLoading] = useState(true);
+  const [listLoadingMore, setListLoadingMore] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
+  const [listHasMore, setListHasMore] = useState(false);
+  const [listRetry, setListRetry] = useState(0);
+  const [events, setEvents] = useState<SessionEvent[]>([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [eventsLoadingMore, setEventsLoadingMore] = useState(false);
+  const [eventsError, setEventsError] = useState<string | null>(null);
+  const [eventsHasMore, setEventsHasMore] = useState(false);
+  const [eventsRetry, setEventsRetry] = useState(0);
+  const [inspectedEvent, setInspectedEvent] = useState<SessionEvent | null>(null);
+  const [rawCache, setRawCache] = useState<Record<number, RawEventResponse>>({});
+  const [rawLoadingID, setRawLoadingID] = useState<number | null>(null);
+  const [rawError, setRawError] = useState<string | null>(null);
+  const [mobileDetailVisible, setMobileDetailVisible] = useState(false);
+  const listController = useRef<AbortController | null>(null);
+  const eventController = useRef<AbortController | null>(null);
+  const rawController = useRef<AbortController | null>(null);
+  const selectedLifecycleKey = useRef<string | null>(null);
 
-  const fetchData = useCallback(async () => {
-    const range = getTimeRange(preset);
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await fetchAPI<Session[]>("sessions", { ...range, granularity, source: source || undefined });
-      setSessions(data || []);
-    } catch (e) {
-      console.error("Sessions fetch error:", e);
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [preset, granularity, source]);
+  useEffect(() => persistUsageFilters(filters), [filters]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useLayoutEffect(() => {
+    const nextKey = selected ? sessionIdentity(selected) : null;
+    if (nextKey === selectedLifecycleKey.current) return;
+    selectedLifecycleKey.current = nextKey;
+    rawController.current?.abort();
+    setRawCache({});
+    setRawError(null);
+    setRawLoadingID(null);
+    setInspectedEvent(null);
+  }, [selected?.source, selected?.session_id]);
 
-  const filtered = sessions.filter((s) =>
-    !filter || (s.project || s.cwd || "").toLowerCase().includes(filter.toLowerCase())
-  );
-  const sorted = [...filtered].sort((a, b) => {
-    const va = (a as any)[sortKey] ?? "";
-    const vb = (b as any)[sortKey] ?? "";
-    const cmp = typeof va === "number" ? va - vb : String(va).localeCompare(String(vb));
-    return sortDir === "asc" ? cmp : -cmp;
-  });
-  const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
-  const paged = sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const sessionParams = useCallback((offset: number) => ({
+    from: filters.from,
+    to: filters.to,
+    source: filters.source || undefined,
+    model: filters.model || undefined,
+    project: filters.project || undefined,
+    q: search.trim() || undefined,
+    limit: SESSION_PAGE_SIZE,
+    offset,
+  }), [filters, search]);
 
-  const toggleSort = (key: string) => {
-    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else { setSortKey(key); setSortDir("desc"); }
-  };
+  useEffect(() => {
+    const controller = new AbortController();
+    listController.current?.abort();
+    listController.current = controller;
+    setListLoading(true);
+    setListError(null);
 
-  const toggleExpand = async (source: string, sid: string) => {
-    const key = sessionKey(source, sid);
-    if (expanded[key] !== undefined) {
-      setExpanded((prev) => { const next = { ...prev }; delete next[key]; return next; });
-    } else {
-      setExpanded((prev) => ({ ...prev, [key]: null }));
+    const run = async () => {
       try {
-        const data = await fetchRaw<SessionDetail[]>(`session-detail?source=${encodeURIComponent(source)}&session_id=${encodeURIComponent(sid)}`);
-        setExpanded((prev) => prev[key] === undefined ? prev : { ...prev, [key]: data });
-      } catch {
-        setExpanded((prev) => {
-          if (prev[key] === undefined) return prev;
-          const next = { ...prev };
-          delete next[key];
-          return next;
+        const rows = await fetchAPI<SessionSummary[]>("sessions", sessionParams(0), { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        const ordered = sortSessions(rows || []);
+        setSessions(ordered);
+        setListHasMore(ordered.length === SESSION_PAGE_SIZE);
+        setSelected((current) => {
+          if (current) {
+            const retained = ordered.find((row) => sessionIdentity(row) === sessionIdentity(current));
+            if (retained) return retained;
+          }
+          return ordered[0] || null;
         });
+      } catch (error) {
+        if (!isAbortError(error)) {
+          setListError(error instanceof Error ? error.message : String(error));
+          setSessions([]);
+          setSelected(null);
+        }
+      } finally {
+        if (!controller.signal.aborted) setListLoading(false);
       }
+    };
+
+    const timer = search.trim() ? window.setTimeout(() => { void run(); }, 250) : null;
+    if (timer === null) void run();
+    return () => {
+      if (timer !== null) window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [sessionParams, listRetry, search]);
+
+  const loadMoreSessions = useCallback(async () => {
+    const controller = new AbortController();
+    listController.current?.abort();
+    listController.current = controller;
+    setListLoadingMore(true);
+    setListError(null);
+    try {
+      const rows = await fetchAPI<SessionSummary[]>("sessions", sessionParams(sessions.length), { signal: controller.signal });
+      if (controller.signal.aborted) return;
+      setSessions((current) => sortSessions([...current, ...(rows || [])]));
+      setListHasMore((rows || []).length === SESSION_PAGE_SIZE);
+    } catch (error) {
+      if (!isAbortError(error)) setListError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (!controller.signal.aborted) setListLoadingMore(false);
     }
+  }, [sessionParams, sessions.length]);
+
+  useEffect(() => {
+    eventController.current?.abort();
+    setEvents([]);
+    setEventsError(null);
+    setEventsHasMore(false);
+    if (!selected) {
+      setEventsLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    eventController.current = controller;
+    setEventsLoading(true);
+    const run = async () => {
+      try {
+        const path = `sessions/${encodeURIComponent(selected.source)}/${encodeURIComponent(selected.session_id)}/events`;
+        const rows = await fetchAPI<SessionEvent[]>(path, { limit: EVENT_PAGE_SIZE, offset: 0 }, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        setEvents(sortEvents(rows || []));
+        setEventsHasMore((rows || []).length === EVENT_PAGE_SIZE);
+      } catch (error) {
+        if (!isAbortError(error)) setEventsError(error instanceof Error ? error.message : String(error));
+      } finally {
+        if (!controller.signal.aborted) setEventsLoading(false);
+      }
+    };
+    void run();
+    return () => controller.abort();
+  }, [selected?.source, selected?.session_id, eventsRetry]);
+
+  const selectSession = useCallback((session: SessionSummary) => {
+    if (!selected || sessionIdentity(selected) !== sessionIdentity(session)) {
+      rawController.current?.abort();
+      setRawCache({});
+      setRawError(null);
+      setRawLoadingID(null);
+      setInspectedEvent(null);
+      setSelected(session);
+    }
+    if (isMobile) setMobileDetailVisible(true);
+  }, [isMobile, selected]);
+
+  const loadMoreEvents = useCallback(async () => {
+    if (!selected) return;
+    const controller = new AbortController();
+    eventController.current?.abort();
+    eventController.current = controller;
+    setEventsLoadingMore(true);
+    setEventsError(null);
+    try {
+      const path = `sessions/${encodeURIComponent(selected.source)}/${encodeURIComponent(selected.session_id)}/events`;
+      const rows = await fetchAPI<SessionEvent[]>(path, { limit: EVENT_PAGE_SIZE, offset: events.length }, { signal: controller.signal });
+      if (controller.signal.aborted) return;
+      setEvents((current) => sortEvents([...current, ...(rows || [])]));
+      setEventsHasMore((rows || []).length === EVENT_PAGE_SIZE);
+    } catch (error) {
+      if (!isAbortError(error)) setEventsError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (!controller.signal.aborted) setEventsLoadingMore(false);
+    }
+  }, [events.length, selected]);
+
+  const loadRaw = useCallback(async () => {
+    if (!selected || !inspectedEvent || rawCache[inspectedEvent.id]) return;
+    rawController.current?.abort();
+    const controller = new AbortController();
+    rawController.current = controller;
+    setRawLoadingID(inspectedEvent.id);
+    setRawError(null);
+    try {
+      const path = `sessions/${encodeURIComponent(selected.source)}/${encodeURIComponent(selected.session_id)}/events/${inspectedEvent.id}/raw`;
+      const raw = await fetchRaw<RawEventResponse>(path, { signal: controller.signal });
+      if (!controller.signal.aborted) setRawCache((current) => ({ ...current, [inspectedEvent.id]: raw }));
+    } catch (error) {
+      if (!isAbortError(error)) setRawError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (!controller.signal.aborted) setRawLoadingID(null);
+    }
+  }, [inspectedEvent, rawCache, selected]);
+
+  const updatePreset = (preset: TimePreset) => setFilters((current) => ({
+    ...current,
+    preset,
+    ...getTimeRange(preset, current.from, current.to),
+  }));
+
+  const clearAllFilters = () => {
+    const range = getTimeRange(DEFAULT_USAGE_FILTERS.preset);
+    setFilters({ ...DEFAULT_USAGE_FILTERS, ...range });
+    setDrilldown({ from: "", to: "", source: "", model: "", project: "" });
+    navigate({ pathname: "/sessions", search: "" }, { replace: true });
   };
+
+  const selectedKey = selected ? sessionIdentity(selected) : null;
+  const contextItems = useMemo(() => Object.entries(drilldown).filter(([, value]) => value), [drilldown]);
+
+  const list = (
+    <SessionList
+      sessions={sessions}
+      selectedKey={selectedKey}
+      search={search}
+      onSearchChange={setSearch}
+      onSelect={selectSession}
+      loading={listLoading}
+      error={listError}
+      onRetry={() => setListRetry((value) => value + 1)}
+      hasMore={listHasMore}
+      loadingMore={listLoadingMore}
+      onLoadMore={() => { void loadMoreSessions(); }}
+      t={t}
+    />
+  );
+
+  const timeline = (
+    <SessionTimeline
+      session={selected}
+      events={events}
+      loading={eventsLoading}
+      loadingMore={eventsLoadingMore}
+      error={eventsError}
+      hasMore={eventsHasMore}
+      isMobile={isMobile}
+      onBack={() => { setMobileDetailVisible(false); setInspectedEvent(null); }}
+      onRetry={() => setEventsRetry((value) => value + 1)}
+      onLoadMore={() => { void loadMoreEvents(); }}
+      onInspect={setInspectedEvent}
+      t={t}
+    />
+  );
+
+  const inspector = inspectedEvent ? (
+    <EventInspector
+      event={inspectedEvent}
+      raw={rawCache[inspectedEvent.id]}
+      rawLoading={rawLoadingID === inspectedEvent.id}
+      rawError={rawError}
+      onLoadRaw={() => { void loadRaw(); }}
+      onClose={() => setInspectedEvent(null)}
+      t={t}
+    />
+  ) : null;
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col gap-3">
-      <TimeRangeSelector preset={preset} onPresetChange={setPreset}
-        granularity={granularity} onGranularityChange={setGranularity}
-        source={source} onSourceChange={setSource} onRefresh={fetchData} />
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+      <TimeRangeSelector
+        preset={filters.preset}
+        onPresetChange={updatePreset}
+        granularity={granularity}
+        onGranularityChange={(value) => { setGranularity(value); localStorage.setItem("au-granularity", value); }}
+        source={filters.source}
+        onSourceChange={(source) => setFilters((current) => ({ ...current, source }))}
+        onRefresh={() => setListRetry((value) => value + 1)}
+        customFrom={filters.from}
+        customTo={filters.to}
+        onCustomFromChange={(from) => setFilters((current) => ({ ...current, preset: "custom", from }))}
+        onCustomToChange={(to) => setFilters((current) => ({ ...current, preset: "custom", to }))}
+      />
 
-      <div className="bg-card border border-border rounded-xl shadow-sm flex-1 min-h-0 flex flex-col overflow-hidden">
-        <div className="p-5 border-b border-border flex items-center justify-between">
-          <h3 className="text-base font-semibold">{t("sessionLog")}</h3>
-          <input type="text" value={filter} onChange={(e) => { setFilter(e.target.value); setPage(1); }}
-            placeholder={t("filterProject")}
-            className="bg-background border border-border rounded-lg px-3 py-2 text-sm w-56" />
-        </div>
-        <div className="overflow-auto flex-1 min-h-0">
-          {loading && sessions.length === 0 ? (
-            <div className="flex items-center justify-center py-20 text-muted-foreground text-sm">
-              {t("loading")}...
-            </div>
-          ) : error ? (
-            <div className="flex flex-col items-center justify-center py-20 gap-3">
-              <p className="text-red-500 text-sm">{error}</p>
-              <button onClick={fetchData} className="px-4 py-2 bg-accent text-white rounded-lg text-sm hover:bg-accent-hover">
-                {t("retry")}
-              </button>
-            </div>
-          ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr>
-                {[
-                  { key: "source", label: "source" },
-                  { key: "project", label: "project" },
-                  { key: "git_branch", label: "branch" },
-                  { key: "start_time", label: "time" },
-                  { key: "prompts", label: "prompts" },
-                  { key: "tokens", label: "tokens" },
-                  { key: "total_cost", label: "cost" },
-                ].map((col) => (
-                  <th key={col.key} onClick={() => toggleSort(col.key)}
-                    className="text-left px-6 py-3 text-muted-foreground font-medium cursor-pointer hover:text-foreground">
-                    {t(col.label)} {sortKey === col.key ? (sortDir === "asc" ? "▲" : "▼") : ""}
-                  </th>
-                ))}
-                <th className="w-10" />
-              </tr>
-            </thead>
-            <tbody>
-              {paged.map((s) => {
-                const key = sessionKey(s.source, s.session_id);
-                return <Fragment key={key}>
-                  <tr className="hover:bg-muted/30 transition-colors">
-                    <td className="px-6 py-3">
-                      <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase border ${BADGE_COLORS[s.source] || ""}`}>
-                        {s.source}
-                      </span>
-                    </td>
-                    <td className="px-6 py-3 max-w-[280px] truncate">{s.project || s.cwd || "-"}</td>
-                    <td className="px-6 py-3">{s.git_branch || "-"}</td>
-                    <td className="px-6 py-3">{relativeTime(s.start_time, t)}</td>
-                    <td className="px-6 py-3">{s.prompts}</td>
-                    <td className="px-6 py-3">{fmtTokens(s.tokens || 0)}</td>
-                    <td className="px-6 py-3 font-medium text-green-500">{fmtCost(s.total_cost || 0)}</td>
-                    <td className="px-6 py-3">
-                      <button onClick={() => toggleExpand(s.source, s.session_id)}
-                        className="w-7 h-7 rounded-md border border-border flex items-center justify-center hover:border-accent">
-                        <span className={`transition-transform ${expanded[key] !== undefined ? "rotate-90" : ""}`}>▶</span>
-                      </button>
-                    </td>
-                  </tr>
-                  {expanded[key] !== undefined && (
-                    <tr>
-                      <td colSpan={8} className="px-6 py-3 bg-muted/20">
-                        {expanded[key] === null ? (
-                          <span className="text-muted-foreground text-xs">Loading...</span>
-                        ) : (
-                          <DetailTable details={expanded[key] || []} t={t} />
-                        )}
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>;
-              })}
-            </tbody>
-          </table>
-          )}
-        </div>
-        <div className="px-6 py-4 flex items-center justify-end gap-2">
-          <span className="text-muted-foreground text-sm mr-auto">
-            {Math.min((page - 1) * PAGE_SIZE + 1, sorted.length)}-{Math.min(page * PAGE_SIZE, sorted.length)} of {sorted.length}
-          </span>
-          <button disabled={page <= 1} onClick={() => setPage(page - 1)}
-            className="px-3 py-1 border border-border rounded-lg text-sm disabled:opacity-50">←</button>
-          <button disabled={page >= totalPages} onClick={() => setPage(page + 1)}
-            className="px-3 py-1 border border-border rounded-lg text-sm disabled:opacity-50">→</button>
-        </div>
-      </div>
+      {hasDrilldown(drilldown) && (
+        <aside data-testid="session-filter-context" className="flex min-w-0 flex-wrap items-center gap-2 border-y border-border px-3 py-2 text-xs">
+          <span className="font-medium text-muted-foreground">{t("inheritedFilters")}</span>
+          {contextItems.map(([key, value]) => (
+            <span key={key} className="max-w-full truncate border-l-2 border-accent px-2">{t(key)}: {value}</span>
+          ))}
+          <button type="button" aria-label={t("clearAllFilters")} onClick={clearAllFilters} className="ml-auto rounded border border-border px-2 py-1 font-medium hover:bg-muted">
+            {t("clearAll")}
+          </button>
+        </aside>
+      )}
+
+      <main
+        data-testid="session-center-grid"
+        data-inspector-open={String(Boolean(inspectedEvent))}
+        className="session-center-grid min-h-0 min-w-0 flex-1 overflow-hidden border-y border-border"
+      >
+        {isMobile ? (
+          mobileDetailVisible ? (inspector || timeline) : list
+        ) : (
+          <>{list}{timeline}{inspector}</>
+        )}
+      </main>
     </div>
   );
 }

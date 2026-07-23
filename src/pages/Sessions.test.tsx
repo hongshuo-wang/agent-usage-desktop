@@ -1,121 +1,330 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import Sessions from "./Sessions";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RawEventResponse, SessionEvent, SessionSummary } from "../lib/types";
 import { fetchAPI, fetchRaw } from "../lib/api";
+import Sessions from "./Sessions";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
 vi.mock("../components/TimeRangeSelector", () => ({
-  default: () => <div data-testid="time-range-selector" />,
+  default: ({ source, onSourceChange }: { source: string; onSourceChange: (source: string) => void }) => (
+    <div data-testid="time-range-selector">
+      <output>{source || "allSources"}</output>
+      <button type="button" onClick={() => onSourceChange("codex")}>chooseCodex</button>
+    </div>
+  ),
 }));
 
-vi.mock("../lib/api", () => ({
-  fetchAPI: vi.fn(),
-  fetchRaw: vi.fn(),
-}));
+vi.mock("../lib/api", () => ({ fetchAPI: vi.fn(), fetchRaw: vi.fn() }));
 
-const sessions = ["claude", "codex"].map((source) => ({
-  session_id: "shared-session",
-  source,
-  project: `${source}-project`,
-  cwd: "",
+const summary = (overrides: Partial<SessionSummary> = {}): SessionSummary => ({
+  source: "claude",
+  session_id: "newest",
+  title: "Newest investigation",
+  project: "console",
+  cwd: "/work/console",
   git_branch: "main",
-  start_time: "2025-01-01T12:00:00Z",
-  prompts: 1,
-  tokens: 10,
-  total_cost: 0.01,
-}));
+  start_time: "2026-07-23T09:00:00Z",
+  last_activity: "2026-07-23T10:00:00Z",
+  models: ["sonnet"],
+  input_tokens: 100,
+  output_tokens: 40,
+  cache_read: 20,
+  cache_create: 5,
+  total_tokens: 165,
+  total_cost: 0.12,
+  prompts: 3,
+  tool_calls: 2,
+  errors: 1,
+  unknown_price: false,
+  coverage_status: "complete",
+  source_status: "available",
+  malformed_lines: 0,
+  ...overrides,
+});
 
-describe("Sessions detail requests", () => {
+const event = (overrides: Partial<SessionEvent> = {}): SessionEvent => ({
+  id: 1,
+  event_type: "assistant_message",
+  source_event_type: "message",
+  timestamp: "2026-07-23T09:01:00Z",
+  role: "assistant",
+  content: "A useful answer",
+  tool_name: "",
+  tool_call_id: "",
+  tool_input: "",
+  tool_output: "",
+  event_status: "",
+  duration_ms: null,
+  has_raw: true,
+  ...overrides,
+});
+
+const events: SessionEvent[] = [
+  event({ id: 1, event_type: "tool_call", tool_name: "shell", tool_input: '{"command":"npm test"}', content: "" }),
+  event({ id: 2, event_type: "tool_result", tool_output: "x".repeat(320), content: "", has_raw: false }),
+  event({ id: 3, event_type: "error", content: "Rate limit exceeded", event_status: "error", has_raw: false }),
+  event({ id: 4, event_type: "assistant_message", content: "A useful answer" }),
+];
+
+function setMobile(mobile: boolean) {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches: query === "(max-width: 899px)" ? mobile : false,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
+}
+
+function renderSessions(entry = "/sessions", mobile = false) {
+  setMobile(mobile);
+  return render(
+    <MemoryRouter initialEntries={[entry]}>
+      <Routes><Route path="/sessions" element={<Sessions />} /></Routes>
+    </MemoryRouter>,
+  );
+}
+
+function mockContracts(sessionRows: SessionSummary[] = [summary()], eventRows: SessionEvent[] = events) {
+  vi.mocked(fetchAPI).mockImplementation(async (path) => {
+    if (path === "sessions") return sessionRows as never;
+    if (path.includes("/events")) return eventRows as never;
+    throw new Error(`unexpected path ${path}`);
+  });
+  vi.mocked(fetchRaw).mockResolvedValue({
+    path: "/tmp/session.jsonl",
+    offset: 0,
+    length: 16,
+    content_type: "json",
+    content: '{"raw":true}',
+  } satisfies RawEventResponse);
+}
+
+describe("session retrospective center", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
-    vi.mocked(fetchAPI).mockResolvedValue(sessions);
-    vi.mocked(fetchRaw).mockResolvedValue([]);
+    mockContracts();
   });
 
-  it("qualifies colliding session ids by source", async () => {
-    const user = userEvent.setup();
-    render(<Sessions />);
+  afterEach(() => { vi.useRealTimers(); });
 
-    const claudeRow = (await screen.findByText("claude")).closest("tr");
-    const codexRow = screen.getByText("codex").closest("tr");
-    if (!claudeRow || !codexRow) throw new Error("session rows not rendered");
+  it("lists newest sessions first, selects the newest, and sends debounced search to q", async () => {
+    vi.useFakeTimers();
+    const older = summary({ session_id: "older", title: "Older session", last_activity: "2026-07-22T10:00:00Z" });
+    mockContracts([older, summary()]);
+    renderSessions();
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
-    await user.click(within(claudeRow).getByRole("button"));
-    await waitFor(() => expect(fetchRaw).toHaveBeenCalledWith(
-      "session-detail?source=claude&session_id=shared-session",
-    ));
+    const items = screen.getAllByTestId("session-list-item");
+    expect(items[0]).toHaveTextContent("Newest investigation");
+    expect(screen.getByTestId("session-timeline")).toHaveTextContent("Newest investigation");
 
-    await user.click(within(codexRow).getByRole("button"));
-    await waitFor(() => expect(fetchRaw).toHaveBeenCalledWith(
-      "session-detail?source=codex&session_id=shared-session",
-    ));
-    expect(fetchRaw).toHaveBeenCalledTimes(2);
+    fireEvent.change(screen.getByRole("searchbox", { name: "searchSessions" }), { target: { value: "needle" } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(249); });
+    expect(fetchAPI).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(fetchAPI).toHaveBeenCalledWith("sessions", expect.objectContaining({
+      q: "needle", limit: 50, offset: 0,
+    }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
   });
 
-  it("does not reopen a collapsed row when a pending request resolves", async () => {
-    const lateDetails = [{
-      model: "late-model",
-      calls: 1,
-      input_tokens: 1,
-      output_tokens: 1,
-      cache_read: 0,
-      cache_create: 0,
-      cost_usd: 0,
-    }];
-    let resolveDetails!: (details: typeof lateDetails) => void;
-    const pendingDetails = new Promise<typeof lateDetails>((resolve) => {
-      resolveDetails = resolve;
-    });
-    vi.mocked(fetchRaw).mockReturnValueOnce(pendingDetails);
+  it("shows inherited Dashboard filters and clears all drill-down context at once", async () => {
     const user = userEvent.setup();
-    render(<Sessions />);
+    renderSessions("/sessions?from=2026-07-01&to=2026-07-03&source=claude&model=sonnet&project=console");
 
-    const claudeRow = (await screen.findByText("claude")).closest("tr");
-    if (!claudeRow) throw new Error("claude session row not rendered");
-    const expandButton = within(claudeRow).getByRole("button");
+    const context = await screen.findByTestId("session-filter-context");
+    for (const value of ["2026-07-01", "2026-07-03", "claude", "sonnet", "console"]) {
+      expect(context).toHaveTextContent(value);
+    }
+    expect(fetchAPI).toHaveBeenCalledWith("sessions", expect.objectContaining({
+      from: "2026-07-01", to: "2026-07-03", source: "claude", model: "sonnet", project: "console",
+    }), expect.anything());
 
-    await user.click(expandButton);
-    expect(await screen.findByText("Loading...")).toBeInTheDocument();
-    await user.click(expandButton);
-    expect(screen.queryByText("Loading...")).not.toBeInTheDocument();
-
-    await act(async () => {
-      resolveDetails(lateDetails);
-      await pendingDetails;
-    });
-    expect(screen.queryByText("late-model")).not.toBeInTheDocument();
+    await user.click(within(context).getByRole("button", { name: "clearAllFilters" }));
+    await waitFor(() => expect(screen.queryByTestId("session-filter-context")).not.toBeInTheDocument());
   });
 
-  it("keeps a collapsed row closed when a pending request rejects", async () => {
-    let rejectDetails!: (reason?: unknown) => void;
-    const pendingDetails = new Promise<never>((_, reject) => {
-      rejectDetails = reject;
-    });
-    vi.mocked(fetchRaw).mockReturnValueOnce(pendingDetails);
+  it("collapses tool calls and long results by default while expanding errors", async () => {
+    renderSessions();
+    const timeline = await screen.findByTestId("session-timeline");
+    await within(timeline).findByText("Rate limit exceeded");
+
+    expect(within(timeline).queryByText('{"command":"npm test"}')).not.toBeInTheDocument();
+    expect(within(timeline).queryByText("x".repeat(320))).not.toBeInTheDocument();
+    expect(within(timeline).getByText("Rate limit exceeded")).toBeVisible();
+  });
+
+  it("opens the inspector on event click and restores center width when closed", async () => {
     const user = userEvent.setup();
-    render(<Sessions />);
+    renderSessions();
+    const answer = await screen.findByText("A useful answer");
 
-    const claudeRow = (await screen.findByText("claude")).closest("tr");
-    if (!claudeRow) throw new Error("claude session row not rendered");
-    const expandButton = within(claudeRow).getByRole("button");
+    await user.click(answer);
+    expect(screen.getByTestId("event-inspector")).toHaveTextContent("A useful answer");
+    expect(screen.getByTestId("session-center-grid")).toHaveAttribute("data-inspector-open", "true");
 
-    await user.click(expandButton);
-    expect(await screen.findByText("Loading...")).toBeInTheDocument();
-    await user.click(expandButton);
+    await user.click(screen.getByRole("button", { name: "closeInspector" }));
+    expect(screen.queryByTestId("event-inspector")).not.toBeInTheDocument();
+    expect(screen.getByTestId("session-center-grid")).toHaveAttribute("data-inspector-open", "false");
+  });
 
-    await act(async () => {
-      rejectDetails(new Error("late failure"));
-      try {
-        await pendingDetails;
-      } catch {
-        // The component handles this rejected detail request.
+  it("does not request raw data until Raw record is explicitly clicked and caches it for the session", async () => {
+    const user = userEvent.setup();
+    renderSessions();
+    await user.click(await screen.findByText("A useful answer"));
+    expect(fetchRaw).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "loadRawRecord" }));
+    expect(await screen.findByText('{"raw":true}')).toBeVisible();
+    expect(fetchRaw).toHaveBeenCalledWith(
+      "sessions/claude/newest/events/4/raw",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    await user.click(screen.getByRole("button", { name: "closeInspector" }));
+    await user.click(screen.getByText("A useful answer"));
+    expect(screen.getByText('{"raw":true}')).toBeVisible();
+    expect(fetchRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears the inspector and raw cache when search switches the selected session", async () => {
+    const older = summary({ session_id: "older", title: "Older matching session", last_activity: "2026-07-22T10:00:00Z" });
+    vi.mocked(fetchAPI).mockImplementation(async (path, params) => {
+      if (path === "sessions") return (params.q ? [older] : [summary()]) as never;
+      return [event({ id: 4, event_type: "assistant_message", content: "A useful answer" })] as never;
+    });
+    const user = userEvent.setup();
+    renderSessions();
+    await user.click(await screen.findByText("A useful answer"));
+    await user.click(screen.getByRole("button", { name: "loadRawRecord" }));
+    expect(await screen.findByText('{"raw":true}')).toBeVisible();
+
+    await user.type(screen.getByRole("searchbox", { name: "searchSessions" }), "older");
+    const timeline = screen.getByTestId("session-timeline");
+    await within(timeline).findByText("Older matching session", {}, { timeout: 1000 });
+    expect(screen.queryByTestId("event-inspector")).not.toBeInTheDocument();
+
+    await user.click(await within(timeline).findByText("A useful answer"));
+    expect(screen.queryByText('{"raw":true}')).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "loadRawRecord" }));
+    await waitFor(() => expect(fetchRaw).toHaveBeenCalledTimes(2));
+    expect(fetchRaw).toHaveBeenLastCalledWith("sessions/claude/older/events/4/raw", expect.anything());
+  });
+
+  it("aborts obsolete list and event requests and qualifies colliding session IDs by source", async () => {
+    const controllers: AbortSignal[] = [];
+    let listCall = 0;
+    vi.mocked(fetchAPI).mockImplementation((path, _params, init) => {
+      if (path === "sessions") {
+        listCall += 1;
+        if (listCall === 1) {
+          controllers.push(init?.signal as AbortSignal);
+          return new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")))) as never;
+        }
+        return Promise.resolve([
+          summary({ source: "claude", session_id: "shared", title: "Claude shared" }),
+          summary({ source: "codex", session_id: "shared", title: "Codex shared" }),
+        ]) as never;
       }
+      controllers.push(init?.signal as AbortSignal);
+      return new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")))) as never;
     });
-    expect(screen.queryByText("Loading...")).not.toBeInTheDocument();
+    const user = userEvent.setup();
+    renderSessions();
+    await user.click(screen.getByRole("button", { name: "chooseCodex" }));
+    await waitFor(() => expect(controllers[0].aborted).toBe(true));
+    await user.click(await screen.findByText("Codex shared"));
+    expect(fetchAPI).toHaveBeenCalledWith(
+      "sessions/codex/shared/events",
+      { limit: 100, offset: 0 },
+      expect.anything(),
+    );
+  });
+
+  it("replaces the list with detail below 900px and restores it with Back", async () => {
+    const user = userEvent.setup();
+    mockContracts([summary(), summary({ session_id: "older", title: "Older session" })]);
+    renderSessions("/sessions", true);
+    expect(await screen.findByTestId("session-list")).toBeVisible();
+
+    await user.click(screen.getByText("Older session"));
+    expect(screen.queryByTestId("session-list")).not.toBeInTheDocument();
+    expect(screen.getByTestId("session-timeline")).toHaveTextContent("Older session");
+    await user.click(screen.getByRole("button", { name: "backToSessions" }));
+    expect(screen.getByTestId("session-list")).toBeVisible();
+  });
+
+  it("distinguishes stats-only, partial, missing, malformed, and unknown-price states", async () => {
+    mockContracts([
+      summary({ session_id: "stats", title: "Stats", coverage_status: "stats_only", source_status: "stats_only" }),
+      summary({ session_id: "partial", title: "Partial", coverage_status: "partial" }),
+      summary({ session_id: "missing", title: "Missing", source_status: "missing_source" }),
+      summary({ session_id: "malformed", title: "Malformed", malformed_lines: 4 }),
+      summary({ session_id: "price", title: "Price", unknown_price: true }),
+    ]);
+    renderSessions();
+
+    await screen.findAllByText("Stats");
+    for (const key of ["sessionStatsOnly", "sessionPartial", "sessionMissingSource", "sessionMalformed", "sessionUnknownPrice"]) {
+      expect(screen.getByText(key)).toBeVisible();
+    }
+  });
+
+  it("renders source-provided fields only and localizes unavailable data", async () => {
+    const user = userEvent.setup();
+    mockContracts([summary()], [event({ id: 8, content: "", role: "assistant", has_raw: false })]);
+    renderSessions();
+    const unavailable = await screen.findByText("sourceDataUnavailable");
+    expect(unavailable).toBeVisible();
+    await user.click(unavailable);
+    const inspector = screen.getByTestId("event-inspector");
+    const contentLabel = within(inspector).getByText("content");
+    expect(contentLabel.parentElement).toHaveTextContent("sourceDataUnavailable");
+    expect(screen.queryByText(/system prompt|request body|tool schema/i)).not.toBeInTheDocument();
+  });
+
+  it("renders loading, empty, and error states", async () => {
+    let resolve!: (rows: SessionSummary[]) => void;
+    vi.mocked(fetchAPI).mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+    const view = renderSessions();
+    expect(screen.getByText("loadingSessions")).toBeVisible();
+    await act(async () => resolve([]));
+    expect(await screen.findByText("noSessionsFound")).toBeVisible();
+
+    view.unmount();
+    vi.mocked(fetchAPI).mockRejectedValueOnce(new Error("offline"));
+    renderSessions();
+    expect(await screen.findByText("offline")).toBeVisible();
+    expect(screen.getByRole("button", { name: "retry" })).toBeVisible();
+  });
+
+  it("loads chronological events in 100-item pages and can load more", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => event({
+      id: index + 1,
+      timestamp: `2026-07-23T09:${String(99 - index).padStart(2, "0")}:00Z`,
+      content: `event-${index + 1}`,
+      has_raw: false,
+    }));
+    vi.mocked(fetchAPI).mockImplementation(async (path, params) => {
+      if (path === "sessions") return [summary()] as never;
+      if (params.offset === 100) return [event({ id: 101, content: "event-101", has_raw: false })] as never;
+      return firstPage as never;
+    });
+    renderSessions();
+    expect(await screen.findByText("event-100")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "loadMoreEvents" }));
+    expect(await screen.findByText("event-101")).toBeVisible();
+    expect(fetchAPI).toHaveBeenCalledWith(expect.stringContaining("/events"), { limit: 100, offset: 100 }, expect.anything());
   });
 });

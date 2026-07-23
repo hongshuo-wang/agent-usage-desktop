@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/hongshuo-wang/agent-usage-desktop/internal/storage"
 )
@@ -105,53 +104,6 @@ func TestConfigManagementRoutesAreNotRegistered(t *testing.T) {
 		handler.ServeHTTP(w, req)
 		if w.Code != http.StatusNotFound {
 			t.Fatalf("GET %s status = %d, want 404", path, w.Code)
-		}
-	}
-}
-
-func TestSessionDetailRequiresCompositeIdentity(t *testing.T) {
-	db := tempDB(t)
-	handler := New(db, "127.0.0.1:0").Handler()
-
-	for _, path := range []string{
-		"/api/session-detail?session_id=shared",
-		"/api/session-detail?source=claude",
-	} {
-		req := httptest.NewRequest(http.MethodGet, path, nil)
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-		if w.Code != http.StatusBadRequest {
-			t.Errorf("GET %s status = %d, want 400", path, w.Code)
-		}
-	}
-}
-
-func TestSessionDetailSeparatesCollidingSourceSessions(t *testing.T) {
-	db := tempDB(t)
-	ts := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
-	for _, record := range []*storage.UsageRecord{
-		{Source: "claude", SessionID: "shared", Model: "same-model", InputTokens: 10, Timestamp: ts},
-		{Source: "codex", SessionID: "shared", Model: "same-model", InputTokens: 20, Timestamp: ts},
-	} {
-		if err := db.InsertUsage(record); err != nil {
-			t.Fatalf("InsertUsage(%s): %v", record.Source, err)
-		}
-	}
-	handler := New(db, "127.0.0.1:0").Handler()
-
-	for source, wantTokens := range map[string]int64{"claude": 10, "codex": 20} {
-		req := httptest.NewRequest(http.MethodGet, "/api/session-detail?source="+source+"&session_id=shared", nil)
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-		if w.Code != http.StatusOK {
-			t.Fatalf("GET detail for %s status = %d, body=%s", source, w.Code, w.Body.String())
-		}
-		var details []storage.SessionDetail
-		if err := json.NewDecoder(w.Body).Decode(&details); err != nil {
-			t.Fatalf("decode %s details: %v", source, err)
-		}
-		if len(details) != 1 || details[0].InputTokens != wantTokens {
-			t.Errorf("%s details mixed sources: %+v", source, details)
 		}
 	}
 }

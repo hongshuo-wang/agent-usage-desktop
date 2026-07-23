@@ -1,0 +1,124 @@
+import { Search } from "lucide-react";
+import type { SessionSummary } from "../../lib/types";
+import { fmtCost, fmtTokens, relativeTime } from "../../lib/utils";
+
+type Translate = (key: string) => string;
+
+interface Props {
+  sessions: SessionSummary[];
+  selectedKey: string | null;
+  search: string;
+  onSearchChange: (value: string) => void;
+  onSelect: (session: SessionSummary) => void;
+  loading: boolean;
+  error: string | null;
+  onRetry: () => void;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
+  t: Translate;
+}
+
+export const sessionIdentity = (session: Pick<SessionSummary, "source" | "session_id">) =>
+  `${session.source}\u0000${session.session_id}`;
+
+function statusLabels(session: SessionSummary): string[] {
+  const labels: string[] = [];
+  if (session.source_status === "stats_only" || session.coverage_status === "stats_only") labels.push("sessionStatsOnly");
+  if (session.coverage_status === "partial") labels.push("sessionPartial");
+  if (session.source_status === "missing_source") labels.push("sessionMissingSource");
+  if (session.source_status === "rebuild_required") labels.push("sessionRebuildRequired");
+  if (session.source_status === "stale_parser") labels.push("sessionStaleParser");
+  if (session.malformed_lines > 0) labels.push("sessionMalformed");
+  if (session.unknown_price) labels.push("sessionUnknownPrice");
+  return labels;
+}
+
+export default function SessionList({
+  sessions, selectedKey, search, onSearchChange, onSelect, loading, error,
+  onRetry, hasMore, loadingMore, onLoadMore, t,
+}: Props) {
+  return (
+    <aside data-testid="session-list" className="flex min-h-0 min-w-0 flex-col border-r border-border bg-card/20">
+      <header className="border-b border-border p-3">
+        <h1 className="mb-2 text-sm font-semibold">{t("sessionRetrospective")}</h1>
+        <label className="flex h-9 min-w-0 items-center gap-2 rounded border border-border bg-background px-2.5 focus-within:border-accent">
+          <Search aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <input
+            type="search"
+            aria-label={t("searchSessions")}
+            value={search}
+            onChange={(event) => onSearchChange(event.target.value)}
+            placeholder={t("searchSessionContent")}
+            className="min-w-0 flex-1 bg-transparent text-sm outline-none"
+          />
+        </label>
+      </header>
+
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {loading && sessions.length === 0 ? (
+          <p className="px-4 py-10 text-center text-sm text-muted-foreground">{t("loadingSessions")}</p>
+        ) : error ? (
+          <div className="px-4 py-10 text-center">
+            <p className="break-words text-sm text-red-500">{error}</p>
+            <button type="button" onClick={onRetry} className="mt-3 rounded bg-accent px-3 py-1.5 text-sm font-medium text-white">
+              {t("retry")}
+            </button>
+          </div>
+        ) : sessions.length === 0 ? (
+          <div className="px-4 py-10 text-center">
+            <p className="text-sm font-medium">{t("noSessionsFound")}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{t("adjustSessionFilters")}</p>
+          </div>
+        ) : (
+          <ol className="divide-y divide-border">
+            {sessions.map((session) => {
+              const key = sessionIdentity(session);
+              const selected = selectedKey === key;
+              return (
+                <li key={key} data-testid="session-list-item">
+                  <button
+                    type="button"
+                    onClick={() => onSelect(session)}
+                    aria-current={selected ? "true" : undefined}
+                    className={`w-full min-w-0 px-3 py-3 text-left transition-colors ${selected ? "bg-accent-dim" : "hover:bg-muted/50"}`}
+                  >
+                    <div className="flex min-w-0 items-start justify-between gap-2">
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium">{session.title}</span>
+                      <time className="shrink-0 text-[10px] text-muted-foreground" dateTime={session.last_activity}>
+                        {relativeTime(session.last_activity, t)}
+                      </time>
+                    </div>
+                    <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+                      <span className="shrink-0 uppercase">{session.source}</span>
+                      <span className="truncate">{session.project || session.cwd || session.session_id}</span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px] text-muted-foreground">
+                      <span>{fmtTokens(session.total_tokens)} {t("tokens")}</span>
+                      <span>{fmtCost(session.total_cost)}</span>
+                      <span>{session.prompts} {t("prompts")}</span>
+                    </div>
+                    {statusLabels(session).length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {statusLabels(session).map((label) => (
+                          <span key={label} className="border-l-2 border-accent px-1.5 text-[10px] text-muted-foreground">{t(label)}</span>
+                        ))}
+                      </div>
+                    )}
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
+        )}
+      </div>
+
+      {hasMore && !error && (
+        <button type="button" onClick={onLoadMore} disabled={loadingMore} className="border-t border-border px-3 py-2 text-xs font-medium hover:bg-muted disabled:opacity-50">
+          {loadingMore ? t("loading") : t("loadMoreSessions")}
+        </button>
+      )}
+    </aside>
+  );
+}
+

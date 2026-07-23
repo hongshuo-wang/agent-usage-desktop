@@ -416,17 +416,20 @@ func TestCodexCollector_IncrementalScanPreservesSessionContext(t *testing.T) {
 		t.Fatalf("expected preserved session_id codex-sess-1, got %s", sessions[0].SessionID)
 	}
 
-	details, err := db.GetSessionDetail("codex", "codex-sess-1")
+	searchResults, err := db.SearchSessions(storage.SessionQuery{
+		From: from, To: to, Source: "codex", Limit: 10,
+	})
 	if err != nil {
-		t.Fatalf("GetSessionDetail: %v", err)
+		t.Fatalf("SearchSessions: %v", err)
 	}
-	if len(details) != 1 {
-		t.Fatalf("expected 1 model detail row, got %d", len(details))
+	if len(searchResults) != 1 || len(searchResults[0].Models) != 1 {
+		t.Fatalf("expected 1 session with 1 model, got %+v", searchResults)
 	}
-	if details[0].Model != "gpt-5.4" {
-		t.Fatalf("expected preserved model gpt-5.4, got %q", details[0].Model)
+	if searchResults[0].Models[0] != "gpt-5.4" {
+		t.Fatalf("expected preserved model gpt-5.4, got %q", searchResults[0].Models[0])
 	}
-	if details[0].Calls != 2 {
-		t.Fatalf("expected 2 calls after incremental scan, got %d", details[0].Calls)
+	stats, err := db.GetDashboardStats(from, to, "codex")
+	if err != nil || stats.TotalCalls != 2 {
+		t.Fatalf("expected 2 calls after incremental scan, got %+v, %v", stats, err)
 	}
 }

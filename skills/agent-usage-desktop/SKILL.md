@@ -50,15 +50,16 @@ Commands:
 | `cost-by-model` | Cost breakdown per model | `--from`, `--to`, `--source` |
 | `cost-over-time` | Cost trend over time | `--from`, `--to`, `--granularity`, `--source` |
 | `tokens-over-time` | Token usage trend | `--from`, `--to`, `--granularity`, `--source` |
-| `sessions` | List all sessions with cost/tokens | `--from`, `--to`, `--source` |
-| `session-detail` | Per-model breakdown for one session | `--session-id` |
+| `sessions` | Search sessions with cost, tokens, and index status | `--from`, `--to`, `--source`, `--model`, `--project`, `--query` |
 
 Options:
 - `--from YYYY-MM-DD` — Start date (default: today)
 - `--to YYYY-MM-DD` — End date (default: today)
 - `--source claude|codex|openclaw|opencode` — Filter by source (default: all)
 - `--granularity 1m|30m|1h|6h|12h|1d|1w|1M` — Time bucket (default: 1d)
-- `--session-id ID` — Session ID for detail query
+- `--model MODEL` — Filter sessions by model
+- `--project PROJECT` — Filter sessions by exact project
+- `--query TEXT` — Search indexed session content
 
 ### Step 2b: Local Mode (fallback)
 
