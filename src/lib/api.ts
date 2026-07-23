@@ -30,18 +30,12 @@ type ApiErrorPayload = {
   details?: unknown;
 };
 
-function buildQuery(params: {
-  from: string;
-  to: string;
-  granularity?: string;
-  source?: string;
-}): string {
+function buildQuery(params: Record<string, string | number | undefined>): string {
   const q = new URLSearchParams();
-  q.set("from", params.from);
-  q.set("to", params.to);
-  if (params.granularity) q.set("granularity", params.granularity);
-  if (params.source) q.set("source", params.source);
-  q.set("tz_offset", String(new Date().getTimezoneOffset()));
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") q.set(key, String(value));
+  }
+  if (!q.has("tz_offset")) q.set("tz_offset", String(new Date().getTimezoneOffset()));
   return q.toString();
 }
 
@@ -111,12 +105,10 @@ async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
   }
 }
 
-export async function fetchAPI<T>(path: string, params: {
-  from: string;
-  to: string;
-  granularity?: string;
-  source?: string;
-}): Promise<T> {
+export async function fetchAPI<T>(
+  path: string,
+  params: Record<string, string | number | undefined>,
+): Promise<T> {
   return requestJSON<T>(`${path}?${buildQuery(params)}`);
 }
 

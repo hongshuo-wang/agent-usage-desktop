@@ -17,6 +17,10 @@ func sourceFilter(source string) (string, []interface{}) {
 type DashboardStats struct {
 	TotalCost     float64 `json:"total_cost"`
 	TotalTokens   int64   `json:"total_tokens"`
+	InputTokens   int64   `json:"input_tokens"`
+	OutputTokens  int64   `json:"output_tokens"`
+	CacheRead     int64   `json:"cache_read"`
+	CacheCreate   int64   `json:"cache_create"`
 	TotalSessions int     `json:"total_sessions"`
 	TotalPrompts  int     `json:"total_prompts"`
 	TotalCalls    int     `json:"total_calls"`
@@ -64,17 +68,19 @@ func (d *DB) GetDashboardStats(from, to time.Time, source string) (*DashboardSta
 	s := &DashboardStats{}
 	sf, sa := sourceFilter(source)
 	args := append([]interface{}{from, to}, sa...)
-	var cacheRead, totalInput int64
 	err := d.db.QueryRow(`SELECT COALESCE(SUM(cost_usd),0),
 		COALESCE(SUM(input_tokens+cache_read_input_tokens+cache_creation_input_tokens+output_tokens),0),
-		COALESCE(SUM(cache_read_input_tokens),0),
-		COALESCE(SUM(input_tokens+cache_read_input_tokens+cache_creation_input_tokens),0)
-		FROM usage_records WHERE timestamp BETWEEN ? AND ?`+sf, args...).Scan(&s.TotalCost, &s.TotalTokens, &cacheRead, &totalInput)
+		COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
+		COALESCE(SUM(cache_read_input_tokens),0), COALESCE(SUM(cache_creation_input_tokens),0)
+		FROM usage_records WHERE timestamp BETWEEN ? AND ?`+sf, args...).Scan(
+		&s.TotalCost, &s.TotalTokens, &s.InputTokens, &s.OutputTokens, &s.CacheRead, &s.CacheCreate,
+	)
 	if err != nil {
 		return nil, err
 	}
+	totalInput := s.InputTokens + s.CacheRead + s.CacheCreate
 	if totalInput > 0 {
-		s.CacheHitRate = float64(cacheRead) / float64(totalInput)
+		s.CacheHitRate = float64(s.CacheRead) / float64(totalInput)
 	}
 	d.db.QueryRow(`SELECT COUNT(*) FROM (
 		SELECT source, session_id FROM usage_records

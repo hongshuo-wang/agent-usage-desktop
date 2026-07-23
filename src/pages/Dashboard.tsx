@@ -1,324 +1,415 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { fetchAPI } from "../lib/api";
-import { fmtCost, fmtTokens, getTimeRange, TimePreset, CHART_COLORS } from "../lib/utils";
-import TimeRangeSelector from "../components/TimeRangeSelector";
+import { useLocation, useNavigate } from "react-router-dom";
 import ChartCard from "../components/ChartCard";
-import Sparkline from "../components/Sparkline";
+import TimeRangeSelector from "../components/TimeRangeSelector";
+import { fetchAPI } from "../lib/api";
+import type {
+  DashboardStats,
+  ThroughputResult,
+  TokensRow,
+  UsageBreakdown,
+  UsageFilters,
+} from "../lib/types";
+import {
+  buildSessionsSearch,
+  getInitialUsageFilters,
+  getUsageRequestParams,
+  persistUsageFilters,
+} from "../lib/usageFilters";
+import { CHART_COLORS, fmtCost, fmtTokens, getTimeRange, type TimePreset } from "../lib/utils";
 
-interface DashboardStats {
-  total_tokens: number;
-  total_cost: number;
-  total_sessions: number;
-  total_prompts: number;
-  total_calls: number;
-  cache_hit_rate: number;
-}
+type DashboardData = {
+  stats: DashboardStats;
+  tokens: TokensRow[];
+  sources: UsageBreakdown[];
+  models: UsageBreakdown[];
+  projects: UsageBreakdown[];
+  throughput: ThroughputResult;
+};
 
-interface TokensRow {
-  date: string;
-  input_tokens: number;
-  output_tokens: number;
-  cache_read: number;
-  cache_create: number;
-}
+const EMPTY_THROUGHPUT: ThroughputResult = {
+  average_active_minute: { rpm: 0, input_tpm: 0, cache_read_tpm: 0, cache_create_tpm: 0, output_tpm: 0, total_tpm: 0 },
+  peak_rolling_60s: { rpm: 0, input_tpm: 0, cache_read_tpm: 0, cache_create_tpm: 0, output_tpm: 0, total_tpm: 0 },
+  p95_rolling_60s: { rpm: 0, input_tpm: 0, cache_read_tpm: 0, cache_create_tpm: 0, output_tpm: 0, total_tpm: 0 },
+  series: [],
+};
 
-interface TokensOverTime {
-  labels: string[];
-  input: number[];
-  output: number[];
-  cache_read: number[];
-  cache_creation: number[];
-}
-
-interface CostRow {
-  date: string;
-  value: number;
-  model: string;
-}
-
-interface CostOverTime {
-  labels: string[];
-  series: { model: string; data: number[] }[];
-}
-
-interface CostByModel {
-  model: string;
-  cost: number;
-}
-
-function transformTokens(rows: TokensRow[]): TokensOverTime {
-  return {
-    labels: rows.map((r) => r.date),
-    input: rows.map((r) => r.input_tokens),
-    output: rows.map((r) => r.output_tokens),
-    cache_read: rows.map((r) => r.cache_read),
-    cache_creation: rows.map((r) => r.cache_create),
-  };
-}
-
-function transformCost(rows: CostRow[]): CostOverTime {
-  const labelSet = [...new Set(rows.map((r) => r.date))];
-  const models = [...new Set(rows.map((r) => r.model))];
-  const lookup = new Map(rows.map((r) => [`${r.date}|${r.model}`, r.value]));
-  return {
-    labels: labelSet,
-    series: models.map((m) => ({
-      model: m,
-      data: labelSet.map((l) => lookup.get(`${l}|${m}`) || 0),
-    })),
-  };
-}
-
-/* ── Skeleton loader ── */
-function Skeleton({ className }: { className?: string }) {
-  return <div className={`animate-pulse rounded bg-muted ${className || ""}`} />;
+function Skeleton({ className = "" }: { className?: string }) {
+  return <div className={`animate-pulse rounded bg-muted ${className}`} />;
 }
 
 function DashboardSkeleton() {
   return (
-    <div className="grid grid-cols-[220px_1fr] gap-4 flex-1 min-h-0 min-w-0 overflow-hidden">
-      <div className="space-y-4 min-h-0 overflow-hidden">
-        <div className="pb-4 border-b border-border space-y-2">
-          <Skeleton className="h-3 w-20" />
-          <Skeleton className="h-10 w-36" />
-          <Skeleton className="h-3 w-24" />
-        </div>
-        {[1, 2, 3].map((i) => (
-          <div key={i} className="py-3 space-y-2">
-            <Skeleton className="h-3 w-16" />
-            <Skeleton className="h-6 w-20" />
-            <Skeleton className="h-1 w-full" />
+    <div className="space-y-4 min-w-0 overflow-hidden" aria-label="loading">
+      {["core", "analysis", "detail"].map((band, index) => (
+        <section key={band} className="border-y border-border px-4 py-4">
+          <Skeleton className="mb-4 h-4 w-32" />
+          <div className={`grid gap-3 ${index === 0 ? "grid-cols-2 lg:grid-cols-5" : "grid-cols-1 lg:grid-cols-3"}`}>
+            {[1, 2, 3, 4, 5].slice(0, index === 0 ? 5 : 3).map((item) => (
+              <Skeleton key={item} className="h-24 min-w-0" />
+            ))}
           </div>
-        ))}
-      </div>
-      <div className="flex flex-col gap-2 min-h-0 min-w-0 overflow-hidden">
-        <Skeleton className="flex-[2] rounded-xl" />
-        <div className="grid grid-cols-[3fr_2fr] gap-2 flex-[1] min-h-0 min-w-0">
-          <Skeleton className="rounded-xl" />
-          <Skeleton className="rounded-xl" />
-        </div>
-      </div>
+        </section>
+      ))}
     </div>
   );
 }
 
-/* ── Metric with sparkline ── */
-function MetricRow({ label, value, color, valueColor, sparkData }: {
-  label: string; value: string; color: string; valueColor?: string; sparkData?: number[];
+function Metric({ label, value, detail }: { label: string; value: string; detail?: string }) {
+  return (
+    <div className="min-w-0 border-l-2 border-border pl-3 first:border-l-0 first:pl-0">
+      <div className="truncate text-xs font-medium text-muted-foreground">{label}</div>
+      <div className="mt-1 truncate font-mono text-2xl font-semibold tabular-nums">{value}</div>
+      {detail && <div className="mt-1 truncate text-[11px] text-muted-foreground">{detail}</div>}
+    </div>
+  );
+}
+
+function BandTitle({ title, detail }: { title: string; detail?: string }) {
+  return (
+    <header className="mb-3 flex min-w-0 items-baseline justify-between gap-3">
+      <h2 className="truncate text-sm font-semibold">{title}</h2>
+      {detail && <p className="truncate text-xs text-muted-foreground">{detail}</p>}
+    </header>
+  );
+}
+
+function BreakdownRows({
+  rows,
+  onSelect,
+  t,
+  compact = false,
+}: {
+  rows: UsageBreakdown[];
+  onSelect: (key: string) => void;
+  t: (key: string) => string;
+  compact?: boolean;
 }) {
+  if (!rows.length) {
+    return <div className="py-8 text-center text-xs text-muted-foreground">{t("noUsageData")}</div>;
+  }
+  const maxTokens = Math.max(...rows.map((row) => row.total_tokens), 1);
   return (
-    <div className="py-2 border-b border-border last:border-b-0">
-      <div className="text-[11px] text-muted-foreground mb-0.5">{label}</div>
-      <div className="text-lg font-bold font-mono" style={valueColor ? { color: valueColor } : undefined}>{value}</div>
-      {sparkData && sparkData.length > 0 && (
-        <div className="mt-1.5">
-          <Sparkline data={sparkData} color={color} height={24} />
-        </div>
-      )}
+    <div className="min-w-0 divide-y divide-border">
+      {rows.slice(0, compact ? 6 : 8).map((row, index) => (
+        <button
+          key={row.key || `${index}`}
+          type="button"
+          aria-label={`${t("viewSessionsFor")} ${row.key || t("unknown")}`}
+          onClick={() => onSelect(row.key)}
+          className="group grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 px-1 py-2 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          <span className="min-w-0">
+            <span className="block truncate text-xs font-medium">{row.key || t("unknown")}</span>
+            <span className="mt-1 block h-1 overflow-hidden rounded bg-muted">
+              <span
+                className="block h-full rounded bg-accent transition-[width] duration-200"
+                style={{ width: `${Math.max(3, (row.total_tokens / maxTokens) * 100)}%` }}
+              />
+            </span>
+          </span>
+          <span className="text-right">
+            <span className="block font-mono text-xs font-semibold tabular-nums">{fmtTokens(row.total_tokens)}</span>
+            <span className="block text-[10px] text-muted-foreground">
+              {row.sessions} {t("sessions")} / {row.calls} {t("calls")}
+            </span>
+          </span>
+        </button>
+      ))}
     </div>
   );
 }
 
-/* ── Auxiliary stat cell ── */
-function AuxCell({ label, value }: { label: string; value: string }) {
+function ModelTable({ rows, onSelect, t }: {
+  rows: UsageBreakdown[];
+  onSelect: (key: string) => void;
+  t: (key: string) => string;
+}) {
+  if (!rows.length) {
+    return <div className="py-8 text-center text-xs text-muted-foreground">{t("noUsageData")}</div>;
+  }
   return (
-    <div className="bg-card border border-border rounded-lg p-2 text-center">
-      <div className="text-[10px] text-muted-foreground">{label}</div>
-      <div className="text-sm font-semibold font-mono">{value}</div>
+    <div className="min-w-0 overflow-x-auto">
+      <table className="w-full min-w-[34rem] text-xs">
+        <thead className="text-left text-[10px] font-medium text-muted-foreground">
+          <tr>
+            <th className="pb-2 pr-3">{t("model")}</th>
+            <th className="pb-2 pr-3 text-right">{t("tokens")}</th>
+            <th className="pb-2 pr-3 text-right">{t("estimatedCost")}</th>
+            <th className="pb-2 pr-3 text-right">{t("sessions")}</th>
+            <th className="pb-2 text-right">{t("cacheHitRate")}</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border">
+          {rows.slice(0, 8).map((row, index) => (
+            <tr key={row.key || `${index}`} className="hover:bg-muted/40">
+              <td className="py-2 pr-3">
+                <button
+                  type="button"
+                  aria-label={`${t("viewSessionsFor")} ${row.key || t("unknown")}`}
+                  onClick={() => onSelect(row.key)}
+                  className="max-w-[16rem] truncate font-medium hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  {row.key || t("unknown")}
+                </button>
+              </td>
+              <td className="py-2 pr-3 text-right font-mono tabular-nums">{fmtTokens(row.total_tokens)}</td>
+              <td className="py-2 pr-3 text-right font-mono tabular-nums">
+                {row.unknown_price ? `${fmtCost(row.total_cost)}*` : fmtCost(row.total_cost)}
+              </td>
+              <td className="py-2 pr-3 text-right font-mono tabular-nums">{row.sessions}</td>
+              <td className="py-2 text-right font-mono tabular-nums">{(row.cache_hit_rate * 100).toFixed(1)}%</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
 
 export default function Dashboard() {
   const { t } = useTranslation();
-  const [preset, setPreset] = useState<TimePreset>(
-    (localStorage.getItem("au-preset") as TimePreset) || "today"
-  );
-  const [granularity, setGranularity] = useState(localStorage.getItem("au-granularity") || "1h");
-  const [source, setSource] = useState(localStorage.getItem("au-source") || "");
-  const [customFrom, setCustomFrom] = useState(localStorage.getItem("au-custom-from") || "");
-  const [customTo, setCustomTo] = useState(localStorage.getItem("au-custom-to") || "");
-  const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [tokensData, setTokensData] = useState<TokensOverTime | null>(null);
-  const [costData, setCostData] = useState<CostOverTime | null>(null);
-  const [pieData, setPieData] = useState<CostByModel[]>([]);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [filters, setFilters] = useState<UsageFilters>(() => getInitialUsageFilters(location.search));
+  const [granularity, setGranularity] = useState(() => localStorage.getItem("au-granularity") || "1h");
+  const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => persistUsageFilters(filters), [filters]);
+
   const fetchData = useCallback(async () => {
-    const range = getTimeRange(preset, customFrom, customTo);
-    const params = { ...range, granularity, source: source || undefined };
+    const request = { ...getUsageRequestParams(filters), granularity };
     setLoading(true);
     setError(null);
     try {
-      const [s, tokRaw, costRaw, pie] = await Promise.all([
-        fetchAPI<DashboardStats>("stats", params),
-        fetchAPI<TokensRow[]>("tokens-over-time", params),
-        fetchAPI<CostRow[]>("cost-over-time", params),
-        fetchAPI<CostByModel[]>("cost-by-model", params),
+      const [stats, tokens, sources, models, projects, throughput] = await Promise.all([
+        fetchAPI<DashboardStats>("stats", request),
+        fetchAPI<TokensRow[]>("tokens-over-time", request),
+        fetchAPI<UsageBreakdown[]>("usage-breakdown", { ...request, dimension: "source" }),
+        fetchAPI<UsageBreakdown[]>("usage-breakdown", { ...request, dimension: "model" }),
+        fetchAPI<UsageBreakdown[]>("usage-breakdown", { ...request, dimension: "project" }),
+        fetchAPI<ThroughputResult>("throughput", request),
       ]);
-      setStats(s);
-      setTokensData(tokRaw?.length ? transformTokens(tokRaw) : null);
-      setCostData(costRaw?.length ? transformCost(costRaw) : null);
-      setPieData(pie || []);
-    } catch (e) {
-      console.error("Dashboard fetch error:", e);
-      setError(e instanceof Error ? e.message : String(e));
+      setData({
+        stats,
+        tokens: tokens || [],
+        sources: sources || [],
+        models: models || [],
+        projects: projects || [],
+        throughput: throughput || EMPTY_THROUGHPUT,
+      });
+    } catch (cause) {
+      console.error("Dashboard fetch error:", cause);
+      setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setLoading(false);
     }
-  }, [preset, granularity, source, customFrom, customTo]);
+  }, [filters.from, filters.to, filters.source, granularity]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => { void fetchData(); }, [fetchData]);
 
-  /* ── Shorten axis labels: "2026-04-15 10" → "04-15 10h" ── */
-  const fmtAxisLabel = (v: string) => {
-    const m = String(v).match(/\d{4}-(\d{2}-\d{2})(?:\s+(\d+))?/);
-    if (m) return m[2] !== undefined ? `${m[1]} ${m[2]}h` : m[1];
-    return v;
-  };
-  /* Auto-calculate label interval to avoid overlap */
-  const calcInterval = (count: number, chartWidth = 800) => {
-    const maxLabels = Math.floor(chartWidth / 70); // ~70px per rotated label
-    return count <= maxLabels ? 0 : Math.ceil(count / maxLabels) - 1;
+  const updatePreset = (preset: TimePreset) => {
+    setFilters((current) => ({
+      ...current,
+      preset,
+      ...getTimeRange(preset, current.from, current.to),
+    }));
   };
 
-  /* ── ECharts options ── */
-  const tokensOption = tokensData?.labels ? {
+  const updateGranularity = (value: string) => {
+    setGranularity(value);
+    localStorage.setItem("au-granularity", value);
+  };
+
+  const clearContext = (key: "model" | "project") => {
+    setFilters((current) => ({ ...current, [key]: "" }));
+    const query = new URLSearchParams(location.search);
+    query.delete(key);
+    navigate({ pathname: location.pathname, search: query.toString() }, { replace: true });
+  };
+
+  const openSessions = (overrides: Partial<UsageFilters>) => {
+    navigate({ pathname: "/sessions", search: buildSessionsSearch(filters, overrides) });
+  };
+
+  const tokenOption = useMemo(() => ({
     tooltip: { trigger: "axis" },
     legend: { type: "scroll", top: 0, left: "center" },
     grid: { left: 8, right: 8, top: 30, bottom: 4, containLabel: true },
-    xAxis: { type: "category", data: tokensData.labels, axisLabel: { hideOverlap: true, rotate: 40, fontSize: 11, formatter: fmtAxisLabel, interval: calcInterval(tokensData.labels.length) } },
+    xAxis: { type: "category", data: data?.tokens.map((row) => row.date) || [], axisLabel: { hideOverlap: true, fontSize: 11 } },
     yAxis: { type: "value" },
     series: [
-      { name: t("input"), type: "bar", stack: "tokens", data: tokensData.input, color: CHART_COLORS[0] },
-      { name: t("output"), type: "bar", stack: "tokens", data: tokensData.output, color: CHART_COLORS[1] },
-      { name: t("cacheRead"), type: "bar", stack: "tokens", data: tokensData.cache_read, color: CHART_COLORS[3] },
-      { name: t("cacheCreate"), type: "bar", stack: "tokens", data: tokensData.cache_creation, color: CHART_COLORS[2] },
+      { name: t("input"), type: "bar", stack: "tokens", data: data?.tokens.map((row) => row.input_tokens) || [], color: CHART_COLORS[0] },
+      { name: t("output"), type: "bar", stack: "tokens", data: data?.tokens.map((row) => row.output_tokens) || [], color: CHART_COLORS[1] },
+      { name: t("cacheRead"), type: "bar", stack: "tokens", data: data?.tokens.map((row) => row.cache_read) || [], color: CHART_COLORS[3] },
+      { name: t("cacheCreate"), type: "bar", stack: "tokens", data: data?.tokens.map((row) => row.cache_create) || [], color: CHART_COLORS[2] },
     ],
-  } : {};
+  }), [data?.tokens, t]);
 
-  const costOption = costData?.series ? {
+  const throughputOption = useMemo(() => ({
     tooltip: { trigger: "axis" },
-    legend: { type: "scroll", top: 0, left: "center" },
-    grid: { left: 8, right: 8, top: 30, bottom: 4, containLabel: true },
-    xAxis: { type: "category", data: costData.labels, axisLabel: { hideOverlap: true, rotate: 40, fontSize: 11, formatter: fmtAxisLabel, interval: calcInterval(costData.labels.length, 500) } },
+    grid: { left: 8, right: 8, top: 8, bottom: 4, containLabel: true },
+    xAxis: { type: "category", data: data?.throughput.series.map((point) => point.minute) || [], axisLabel: { hideOverlap: true, fontSize: 10 } },
     yAxis: { type: "value" },
-    series: costData.series.map((s, i) => ({
-      name: s.model, type: "bar", stack: "cost", data: s.data,
-      color: CHART_COLORS[i % CHART_COLORS.length],
-    })),
-  } : {};
-
-  const pieOption = pieData.length ? {
-    tooltip: { trigger: "item", formatter: "{b}: ${c} ({d}%)" },
-    legend: { type: "scroll", bottom: 0, left: "center" },
     series: [{
-      type: "pie", radius: ["35%", "65%"], center: ["50%", "45%"],
-      data: pieData.map((d, i) => ({
-        name: d.model, value: d.cost,
-        itemStyle: { color: CHART_COLORS[i % CHART_COLORS.length] },
-      })),
-      label: { show: false },
-      emphasis: { label: { show: true, formatter: "{b}\n{d}%", fontSize: 12 } },
+      name: t("totalTPM"),
+      type: "bar",
+      data: data?.throughput.series.map((point) => point.total_tpm) || [],
+      color: CHART_COLORS[5],
     }],
-  } : {};
+  }), [data?.throughput.series, t]);
 
-  /* ── Derived values for left panel ── */
-  const totalInput = stats ? (stats.total_tokens - (stats.total_tokens * 0.25)) : 0; // approximate
-  const cacheRate = stats ? (stats.cache_hit_rate * 100) : 0;
-
-  /* ── Sparkline data derived from existing time-series ── */
-  const tokenSpark = useMemo(() => {
-    if (!tokensData?.labels) return [];
-    return tokensData.input.map((v, i) => v + tokensData.output[i] + tokensData.cache_read[i] + tokensData.cache_creation[i]);
-  }, [tokensData]);
-
-  const cacheSpark = useMemo(() => {
-    if (!tokensData?.labels) return [];
-    return tokensData.input.map((v, i) => {
-      const total = v + tokensData.cache_read[i] + tokensData.cache_creation[i];
-      return total > 0 ? (tokensData.cache_read[i] / total) * 100 : 0;
-    });
-  }, [tokensData]);
+  const stats = data?.stats;
+  const noUsage = Boolean(data && !data.stats.total_calls && !data.stats.total_tokens
+    && !data.sources.length && !data.models.length && !data.projects.length);
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 min-w-0 gap-3">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
       <TimeRangeSelector
-        preset={preset} onPresetChange={setPreset}
-        granularity={granularity} onGranularityChange={setGranularity}
-        source={source} onSourceChange={setSource}
-        onRefresh={fetchData}
-        customFrom={customFrom} customTo={customTo}
-        onCustomFromChange={(v) => { setCustomFrom(v); localStorage.setItem("au-custom-from", v); }}
-        onCustomToChange={(v) => { setCustomTo(v); localStorage.setItem("au-custom-to", v); }}
+        preset={filters.preset}
+        onPresetChange={updatePreset}
+        granularity={granularity}
+        onGranularityChange={updateGranularity}
+        source={filters.source}
+        onSourceChange={(source) => setFilters((current) => ({ ...current, source }))}
+        onRefresh={() => { void fetchData(); }}
+        customFrom={filters.from}
+        customTo={filters.to}
+        onCustomFromChange={(from) => setFilters((current) => ({ ...current, preset: "custom", from }))}
+        onCustomToChange={(to) => setFilters((current) => ({ ...current, preset: "custom", to }))}
       />
-      {loading && !stats ? (
-        <DashboardSkeleton />
-      ) : error ? (
-        <div className="flex flex-col items-center justify-center py-20 gap-3">
-          <p className="text-red-500 text-sm">{error}</p>
-          <button onClick={fetchData} className="px-4 py-2 bg-accent text-white rounded-lg text-sm hover:bg-accent-hover cursor-pointer transition-colors duration-200">
-            {t("retry")}
-          </button>
-        </div>
-      ) : (
-        <div className="grid grid-cols-[220px_1fr] gap-4 flex-1 min-h-0 min-w-0 overflow-hidden">
-          {/* ── Left Panel ── */}
-          <div className="flex flex-col min-h-0 overflow-hidden">
-            {/* Cost Hero */}
-            <div className="mb-2 pb-2 border-b border-border">
-              <div className="text-[11px] text-muted-foreground uppercase tracking-wider">{t("todayCost")}</div>
-              <div className="text-[36px] font-extrabold font-mono leading-none tracking-tight mt-0.5">
-                {fmtCost(stats?.total_cost || 0)}
-              </div>
-            </div>
 
-            {/* Secondary metrics */}
-            <div>
-              <MetricRow
-                label={t("tokenConsumption")}
-                value={fmtTokens(stats?.total_tokens || 0)}
-                color="#f97316"
-                valueColor="#f97316"
-                sparkData={tokenSpark}
-              />
-              <MetricRow
-                label={t("cacheHitRate")}
-                value={cacheRate.toFixed(1) + "%"}
-                color="#22c55e"
-                valueColor="#22c55e"
-                sparkData={cacheSpark}
-              />
-              <MetricRow
-                label={t("apiCalls")}
-                value={fmtTokens(stats?.total_calls || 0)}
-                color="#6366f1"
-                valueColor="#818cf8"
-                sparkData={tokenSpark}
-              />
-            </div>
-
-            {/* Auxiliary 2x2 grid */}
-            <div className="grid grid-cols-2 gap-1.5 mt-auto pt-2">
-              <AuxCell label={t("sessions")} value={String(stats?.total_sessions || 0)} />
-              <AuxCell label={t("prompts")} value={String(stats?.total_prompts || 0)} />
-              <AuxCell label={t("inputTokens")} value={fmtTokens(totalInput)} />
-              <AuxCell label={t("outputTokens")} value={fmtTokens(stats?.total_tokens ? stats.total_tokens * 0.25 : 0)} />
-            </div>
-          </div>
-
-          {/* ── Right Panel ── */}
-          <div className="flex flex-col gap-2 min-w-0 min-h-0 overflow-hidden">
-            <ChartCard title={t("tokenUsage")} option={tokensOption} className="flex-[2] min-h-0" />
-            <div className="grid grid-cols-[3fr_2fr] gap-2 flex-[1] min-h-0 min-w-0">
-              <ChartCard title={t("costTrend")} option={costOption} />
-              <ChartCard title={t("costByModel")} option={pieOption} />
-            </div>
-          </div>
-        </div>
+      {(filters.model || filters.project) && (
+        <aside data-testid="drilldown-context" className="flex min-w-0 flex-wrap items-center gap-2 border-l-2 border-accent px-3 py-1.5 text-xs">
+          <span className="font-medium text-muted-foreground">{t("drillDownContext")}</span>
+          {filters.model && (
+            <span className="inline-flex max-w-full items-center gap-1 rounded border border-border bg-card px-2 py-1">
+              <span className="truncate">{t("modelFilter")}: {filters.model}</span>
+              <button
+                type="button"
+                aria-label={`${t("clearModelFilter")} ${filters.model}`}
+                onClick={() => clearContext("model")}
+                className="h-5 w-5 shrink-0 rounded text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              >x</button>
+            </span>
+          )}
+          {filters.project && (
+            <span className="inline-flex max-w-full items-center gap-1 rounded border border-border bg-card px-2 py-1">
+              <span className="truncate">{t("projectFilter")}: {filters.project}</span>
+              <button
+                type="button"
+                aria-label={`${t("clearProjectFilter")} ${filters.project}`}
+                onClick={() => clearContext("project")}
+                className="h-5 w-5 shrink-0 rounded text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              >x</button>
+            </span>
+          )}
+          <span className="text-muted-foreground">{t("overviewFiltersNote")}</span>
+        </aside>
       )}
+
+      <main className="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto pb-4">
+        {loading && !data ? (
+          <DashboardSkeleton />
+        ) : error ? (
+          <section className="border-y border-red-500/30 px-4 py-12 text-center">
+            <p className="break-words text-sm text-red-500">{error}</p>
+            <button
+              type="button"
+              onClick={() => { void fetchData(); }}
+              className="mt-3 rounded bg-accent px-3 py-1.5 text-sm font-medium text-white hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >{t("retry")}</button>
+          </section>
+        ) : noUsage ? (
+          <section className="border-y border-border px-4 py-16 text-center">
+            <h2 className="text-sm font-semibold">{t("noUsageData")}</h2>
+            <p className="mt-1 text-xs text-muted-foreground">{t("noUsageDataDetail")}</p>
+          </section>
+        ) : data && stats ? (
+          <>
+            <section data-testid="dashboard-band-core" className="border-y border-border bg-card/30 px-4 py-4">
+              <BandTitle title={t("coreMetrics")} detail={`${filters.from} ${t("to")} ${filters.to}`} />
+              <div className="grid grid-cols-2 gap-x-4 gap-y-4 lg:grid-cols-5">
+                <Metric label={t("totalTokens")} value={fmtTokens(stats.total_tokens)} detail={`${stats.total_calls} ${t("apiCalls")}`} />
+                <Metric label={t("estimatedCost")} value={fmtCost(stats.total_cost)} />
+                <Metric label={t("sessions")} value={String(stats.total_sessions)} />
+                <Metric label={t("userMessages")} value={String(stats.total_prompts)} />
+                <Metric label={t("cacheHitRate")} value={`${(stats.cache_hit_rate * 100).toFixed(1)}%`} />
+              </div>
+            </section>
+
+            <section data-testid="dashboard-band-analysis" className="border-y border-border px-4 py-4">
+              <div className="grid min-w-0 grid-cols-1 gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(16rem,1fr)]">
+                <div className="min-w-0">
+                  <BandTitle title={t("tokenTrend")} detail={t("clickDateForSessions")} />
+                  <ChartCard
+                    title={t("tokenUsage")}
+                    option={tokenOption}
+                    className="h-60"
+                    onEvents={{
+                      click: ({ name }) => {
+                        const day = name?.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+                        if (day) openSessions({ from: day, to: day });
+                      },
+                    }}
+                  />
+                  <div data-testid="token-components" className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded border border-border bg-border sm:grid-cols-4">
+                    {[
+                      [t("input"), stats.input_tokens],
+                      [t("output"), stats.output_tokens],
+                      [t("cacheRead"), stats.cache_read],
+                      [t("cacheCreate"), stats.cache_create],
+                    ].map(([label, value]) => (
+                      <div key={String(label)} className="min-w-0 bg-card px-3 py-2">
+                        <div className="truncate text-[10px] text-muted-foreground">{label}</div>
+                        <div className="truncate font-mono text-sm font-semibold tabular-nums">{fmtTokens(Number(value))}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="min-w-0 border-t border-border pt-4 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
+                  <BandTitle title={t("agentComposition")} detail={t("tokens")} />
+                  <BreakdownRows
+                    rows={data.sources}
+                    onSelect={(source) => openSessions({ source })}
+                    t={t}
+                  />
+                </div>
+              </div>
+            </section>
+
+            <section data-testid="dashboard-band-detail" className="border-y border-border bg-card/20 px-4 py-4">
+              <div className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(14rem,0.8fr)_minmax(16rem,1fr)]">
+                <div className="min-w-0">
+                  <BandTitle title={t("modelUsage")} detail={t("unknownPriceFootnote")} />
+                  <ModelTable rows={data.models} onSelect={(model) => openSessions({ model })} t={t} />
+                </div>
+                <div className="min-w-0 border-t border-border pt-4 xl:border-l xl:border-t-0 xl:pl-5 xl:pt-0">
+                  <BandTitle title={t("projectRanking")} detail={t("tokens")} />
+                  <BreakdownRows
+                    rows={data.projects}
+                    onSelect={(project) => openSessions({ project })}
+                    t={t}
+                    compact
+                  />
+                </div>
+                <div className="min-w-0 border-t border-border pt-4 xl:border-l xl:border-t-0 xl:pl-5 xl:pt-0">
+                  <BandTitle title={t("localObservedThroughput")} detail={t("notProviderQuota")} />
+                  <div className="grid grid-cols-3 gap-2">
+                    <Metric label={t("peakRPM")} value={data.throughput.peak_rolling_60s.rpm.toFixed(0)} />
+                    <Metric label={t("peakTPM")} value={fmtTokens(data.throughput.peak_rolling_60s.total_tpm)} />
+                    <Metric label={t("p95TPM")} value={fmtTokens(data.throughput.p95_rolling_60s.total_tpm)} />
+                  </div>
+                  <ChartCard title={t("observedTPMTrend")} option={throughputOption} className="mt-3 h-40" />
+                </div>
+              </div>
+            </section>
+          </>
+        ) : null}
+      </main>
     </div>
   );
 }

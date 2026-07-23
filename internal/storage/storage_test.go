@@ -2,12 +2,43 @@ package storage
 
 import (
 	"database/sql"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
+
+func TestDashboardStatsExposeExactTokenComponents(t *testing.T) {
+	db := tempDB(t)
+	timestamp := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	if err := db.InsertUsage(&UsageRecord{
+		Source: "claude", SessionID: "components", Model: "model-a", Timestamp: timestamp,
+		InputTokens: 11, OutputTokens: 22, CacheReadInputTokens: 33, CacheCreationInputTokens: 44,
+	}); err != nil {
+		t.Fatalf("InsertUsage: %v", err)
+	}
+	stats, err := db.GetDashboardStats(timestamp.Add(-time.Minute), timestamp.Add(time.Minute), "")
+	if err != nil {
+		t.Fatalf("GetDashboardStats: %v", err)
+	}
+	payload, err := json.Marshal(stats)
+	if err != nil {
+		t.Fatalf("marshal stats: %v", err)
+	}
+	var fields map[string]interface{}
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		t.Fatalf("decode stats: %v", err)
+	}
+	for key, want := range map[string]float64{
+		"input_tokens": 11, "output_tokens": 22, "cache_read": 33, "cache_create": 44,
+	} {
+		if got, ok := fields[key]; !ok || got != want {
+			t.Errorf("stats[%q] = %v (exists %t), want %.0f", key, got, ok, want)
+		}
+	}
+}
 
 func tempDB(t *testing.T) *DB {
 	t.Helper()

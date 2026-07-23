@@ -61,6 +61,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/cost-over-time", s.handleCostOverTime)
 	mux.HandleFunc("/api/tokens-over-time", s.handleTokensOverTime)
 	mux.HandleFunc("GET /api/throughput", s.handleThroughput)
+	mux.HandleFunc("GET /api/usage-breakdown", s.handleUsageBreakdown)
 	mux.HandleFunc("GET /api/sessions", s.handleSessionSearch)
 	mux.HandleFunc("GET /api/sessions/{source}/{session_id}/events", s.handleSessionEventsRoute)
 	mux.HandleFunc("GET /api/sessions/{source}/{session_id}/events/{event_id}/raw", s.handleSessionRawRoute)
@@ -158,6 +159,27 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, stats)
+}
+
+func (s *Server) handleUsageBreakdown(w http.ResponseWriter, r *http.Request) {
+	dimension := r.URL.Query().Get("dimension")
+	switch dimension {
+	case "source", "model", "project":
+	default:
+		badRequest(w, fmt.Errorf("dimension must be source, model, or project"))
+		return
+	}
+	from, to, _, err := s.parseTimeRange(r)
+	if err != nil {
+		badRequest(w, err)
+		return
+	}
+	data, err := s.db.GetUsageBreakdown(from, to, r.URL.Query().Get("source"), dimension)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	writeJSON(w, data)
 }
 
 func (s *Server) handleCostByModel(w http.ResponseWriter, r *http.Request) {

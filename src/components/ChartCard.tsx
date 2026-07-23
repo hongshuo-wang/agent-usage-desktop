@@ -10,6 +10,7 @@ interface ChartCardProps {
   title: string;
   option: object;
   className?: string;
+  onEvents?: Record<string, (params: { name?: string }) => void>;
 }
 
 function useIsDark() {
@@ -26,7 +27,7 @@ function useIsDark() {
   return dark;
 }
 
-export default function ChartCard({ title, option, className }: ChartCardProps) {
+export default function ChartCard({ title, option, className, onEvents }: ChartCardProps) {
   const isDark = useIsDark();
 
   const themed = useCallback(() => {
@@ -62,6 +63,21 @@ export default function ChartCard({ title, option, className }: ChartCardProps) 
   useEffect(() => {
     chartRef.current?.setOption(themed(), true);
   }, [themed]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !onEvents) return;
+    const listeners = Object.entries(onEvents).map(([event, handler]) => {
+      const listener = (...args: unknown[]) => handler((args[0] || {}) as { name?: string });
+      chart.on(event, listener);
+      return { event, listener };
+    });
+    return () => {
+      for (const { event, listener } of listeners) {
+        chart.off(event, listener);
+      }
+    };
+  }, [onEvents]);
 
   useEffect(() => {
     const container = containerRef.current;
