@@ -31,9 +31,9 @@ type CostByModel struct {
 
 // TimeSeriesPoint represents a single data point in a daily cost time series.
 type TimeSeriesPoint struct {
-	Date   string  `json:"date"`
-	Value  float64 `json:"value"`
-	Model  string  `json:"model,omitempty"`
+	Date  string  `json:"date"`
+	Value float64 `json:"value"`
+	Model string  `json:"model,omitempty"`
 }
 
 // TokenTimeSeriesPoint represents daily token usage broken down by category.
@@ -235,9 +235,15 @@ func (d *DB) GetSessionDetail(source, sessionID string) ([]SessionDetail, error)
 func (d *DB) GetSessions(from, to time.Time, source string) ([]SessionInfo, error) {
 	sf, sa := sourceFilter(source)
 	baseArgs := append([]interface{}{from, to}, sa...)
-	// We need the time range args three times: for usage_records, prompt_events, and the final WHERE
+	// The range is applied to usage, prompts, and session metadata independently.
 	args := append([]interface{}{}, baseArgs...)
 	args = append(args, baseArgs...)
+	args = append(args, from, to)
+	sessionSourceFilter := ""
+	if source != "" {
+		sessionSourceFilter = " AND s.source=?"
+		args = append(args, source)
+	}
 	rows, err := d.db.Query(`SELECT s.session_id, s.source, s.project, s.cwd, s.git_branch,
 		COALESCE(s.start_time,''), COALESCE(p.prompts,0),
 		COALESCE(u.cost,0), COALESCE(u.tokens,0)
@@ -248,7 +254,7 @@ func (d *DB) GetSessions(from, to time.Time, source string) ([]SessionInfo, erro
 		LEFT JOIN (SELECT source, session_id, COUNT(*) as prompts
 			FROM prompt_events WHERE timestamp BETWEEN ? AND ?`+sf+` GROUP BY source, session_id) p
 		ON s.source = p.source AND s.session_id = p.session_id
-		WHERE u.session_id IS NOT NULL
+		WHERE s.start_time BETWEEN ? AND ?`+sessionSourceFilter+`
 		ORDER BY s.start_time DESC`, args...)
 	if err != nil {
 		return nil, err

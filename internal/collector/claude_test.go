@@ -36,11 +36,11 @@ func writeClaudeSessionFile(t *testing.T, root, project, name, content string) s
 	return path
 }
 
-func openClaudeSnapshotForTest(t *testing.T, path string) *claudeJSONLSnapshot {
+func openClaudeSnapshotForTest(t *testing.T, path string) *jsonlSnapshot {
 	t.Helper()
-	snapshot, err := openClaudeJSONLSnapshot(path)
+	snapshot, err := openJSONLSnapshot(path)
 	if err != nil {
-		t.Fatalf("openClaudeJSONLSnapshot: %v", err)
+		t.Fatalf("openJSONLSnapshot: %v", err)
 	}
 	t.Cleanup(func() { snapshot.file.Close() })
 	return snapshot
@@ -164,7 +164,7 @@ func TestClaudeJSONLSnapshotDefersConcurrentAppend(t *testing.T) {
 	snapshot := openClaudeSnapshotForTest(t, path)
 
 	var records []JSONLRecord
-	indexedOffset, observedSize, _, err := readClaudeJSONLSnapshot(path, snapshot, 0, func(record JSONLRecord) error {
+	indexedOffset, observedSize, _, err := readJSONLSnapshot(path, snapshot, 0, func(record JSONLRecord) error {
 		records = append(records, record)
 		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
@@ -177,7 +177,7 @@ func TestClaudeJSONLSnapshotDefersConcurrentAppend(t *testing.T) {
 		return f.Close()
 	})
 	if err != nil {
-		t.Fatalf("readClaudeJSONLSnapshot: %v", err)
+		t.Fatalf("readJSONLSnapshot: %v", err)
 	}
 	if len(records) != 1 || string(records[0].Data) != strings.TrimSuffix(first, "\n") {
 		t.Fatalf("snapshot records = %+v, want only initial record", records)
@@ -238,7 +238,7 @@ func TestClaudeJSONLSnapshotRejectsSourceChangeDuringVisit(t *testing.T) {
 			snapshot := openClaudeSnapshotForTest(t, path)
 
 			var visited []JSONLRecord
-			_, _, _, err = readClaudeJSONLSnapshot(path, snapshot, 0, func(record JSONLRecord) error {
+			_, _, _, err = readJSONLSnapshot(path, snapshot, 0, func(record JSONLRecord) error {
 				visited = append(visited, record)
 				test.replace(t, path, replacement)
 				return nil
@@ -278,7 +278,7 @@ func TestClaudeCollectorIndexesDeferredSnapshotDataOnNextScan(t *testing.T) {
 	path := writeClaudeSessionFile(t, root, "proj", "session.jsonl", first)
 	snapshot := openClaudeSnapshotForTest(t, path)
 
-	indexedOffset, observedSize, headHash, err := readClaudeJSONLSnapshot(path, snapshot, 0, func(JSONLRecord) error {
+	indexedOffset, observedSize, headHash, err := readJSONLSnapshot(path, snapshot, 0, func(JSONLRecord) error {
 		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
 			return err
@@ -290,7 +290,7 @@ func TestClaudeCollectorIndexesDeferredSnapshotDataOnNextScan(t *testing.T) {
 		return f.Close()
 	})
 	if err != nil {
-		t.Fatalf("readClaudeJSONLSnapshot: %v", err)
+		t.Fatalf("readJSONLSnapshot: %v", err)
 	}
 	if _, err := db.UpsertSessionSource(&storage.SessionSource{
 		Source:         "claude",
@@ -618,7 +618,13 @@ func TestClaudeCollectorSourceMissingAndRestored(t *testing.T) {
 	from, to := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 	stats, _ := db.GetDashboardStats(from, to, "claude")
 	sessions, _ := db.GetSessions(from, to, "claude")
-	if stats.TotalTokens != 15 || len(sessions) != 1 || sessions[0].SessionID != "sess-missing" {
+	seenMissing := false
+	for _, session := range sessions {
+		if session.SessionID == "sess-missing" {
+			seenMissing = true
+		}
+	}
+	if stats.TotalTokens != 15 || !seenMissing {
 		t.Fatalf("historical data removed: stats=%+v sessions=%+v", stats, sessions)
 	}
 
