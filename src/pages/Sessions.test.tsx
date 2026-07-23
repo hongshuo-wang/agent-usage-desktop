@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RawEventResponse, SessionEvent, SessionSummary } from "../lib/types";
 import { fetchAPI, fetchRaw } from "../lib/api";
+import sessionLayoutCSS from "../styles/globals.css?raw";
 import Sessions from "./Sessions";
 
 type Exact<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
@@ -76,6 +77,29 @@ const events: SessionEvent[] = [
   event({ id: 4, event_type: "assistant_message", content: "A useful answer" }),
 ];
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
+
+function fullSessionPage(prefix: string): SessionSummary[] {
+  return Array.from({ length: 50 }, (_, index) => summary({
+    source: prefix === "codex" ? "codex" : "claude",
+    session_id: `${prefix}-${index}`,
+    title: `${prefix} session ${index}`,
+  }));
+}
+
+function fullEventPage(prefix: string): SessionEvent[] {
+  return Array.from({ length: 100 }, (_, index) => event({
+    id: index + 1,
+    content: `${prefix} event ${index}`,
+    has_raw: false,
+  }));
+}
+
 function setMobile(mobile: boolean) {
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
@@ -143,6 +167,32 @@ describe("session retrospective center", () => {
     expect(fetchAPI).toHaveBeenCalledWith("sessions", expect.objectContaining({
       q: "needle", limit: 50, offset: 0,
     }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
+  });
+
+  it("aborts list load-more when a filter starts a new full first page and restores the button", async () => {
+    const pendingMore = deferred<SessionSummary[]>();
+    let firstPageCalls = 0;
+    let loadMoreSignal: AbortSignal | undefined;
+    vi.mocked(fetchAPI).mockImplementation((path, params, init) => {
+      if (path.includes("/events")) return Promise.resolve([]) as never;
+      if (params.offset === 50) {
+        loadMoreSignal = init?.signal ?? undefined;
+        return pendingMore.promise as never;
+      }
+      firstPageCalls += 1;
+      return Promise.resolve(fullSessionPage(firstPageCalls === 1 ? "claude" : "codex")) as never;
+    });
+    const user = userEvent.setup();
+    renderSessions();
+    await user.click(await screen.findByRole("button", { name: "loadMoreSessions" }));
+    expect(loadMoreSignal?.aborted).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: "chooseCodex" }));
+    await waitFor(() => expect(loadMoreSignal?.aborted).toBe(true));
+    await screen.findAllByText("codex session 0");
+    const restored = screen.getByRole("button", { name: "loadMoreSessions" });
+    expect(restored).toBeEnabled();
+    expect(restored).toHaveTextContent("loadMoreSessions");
   });
 
   it("shows inherited Dashboard filters and clears all drill-down context at once", async () => {
@@ -233,11 +283,35 @@ describe("session retrospective center", () => {
 
     await user.click(answer);
     expect(screen.getByTestId("event-inspector")).toHaveTextContent("A useful answer");
+    expect(screen.getByTestId("event-inspector")).toHaveClass("session-event-inspector");
     expect(screen.getByTestId("session-center-grid")).toHaveAttribute("data-inspector-open", "true");
 
     await user.click(screen.getByRole("button", { name: "closeInspector" }));
     expect(screen.queryByTestId("event-inspector")).not.toBeInTheDocument();
     expect(screen.getByTestId("session-center-grid")).toHaveAttribute("data-inspector-open", "false");
+  });
+
+  it("uses a two-column inspector overlay from 900px to 1099px and three columns from 1100px", () => {
+    expect(sessionLayoutCSS).toContain("position: relative");
+    expect(sessionLayoutCSS).toContain("@media (min-width: 900px) and (max-width: 1099px)");
+    expect(sessionLayoutCSS).toContain("@media (min-width: 1100px)");
+    expect(sessionLayoutCSS).toContain(".session-event-inspector");
+  });
+
+  it("does not inspect an event when Enter or Space originates on its collapse button", async () => {
+    renderSessions();
+    const expand = (await screen.findAllByRole("button", { name: "expandEvent" }))[0];
+    fireEvent.keyDown(expand, { key: "Enter" });
+    fireEvent.keyDown(expand, { key: " " });
+    expect(screen.queryByTestId("event-inspector")).not.toBeInTheDocument();
+  });
+
+  it("shows the localized fallback for an invalid event timestamp", async () => {
+    mockContracts([summary()], [event({ id: 22, timestamp: "not-a-timestamp", has_raw: false })]);
+    renderSessions();
+    const card = await screen.findByTestId("event-card-22");
+    expect(within(card).getByText("sourceDataUnavailable")).toBeVisible();
+    expect(within(card).queryByText("Invalid Date")).not.toBeInTheDocument();
   });
 
   it("shows every normalized event field with labels and exact source values", async () => {
@@ -318,6 +392,43 @@ describe("session retrospective center", () => {
     await user.click(screen.getByRole("button", { name: "loadRawRecord" }));
     await waitFor(() => expect(fetchRaw).toHaveBeenCalledTimes(2));
     expect(fetchRaw).toHaveBeenLastCalledWith("sessions/claude/older/events/4/raw", expect.anything());
+  });
+
+  it.each(["resolve", "reject"] as const)("isolates raw event B when aborted event A later %s", async (outcome) => {
+    const rawA = deferred<RawEventResponse>();
+    const rawB = deferred<RawEventResponse>();
+    const rawSignals: AbortSignal[] = [];
+    vi.mocked(fetchRaw).mockReset();
+    vi.mocked(fetchRaw)
+      .mockImplementationOnce((_path, init) => { rawSignals.push(init?.signal as AbortSignal); return rawA.promise; })
+      .mockImplementationOnce((_path, init) => { rawSignals.push(init?.signal as AbortSignal); return rawB.promise; });
+    mockContracts([summary()], [
+      event({ id: 31, content: "Raw event A" }),
+      event({ id: 32, content: "Raw event B" }),
+    ]);
+    const user = userEvent.setup();
+    renderSessions();
+    await user.click(await screen.findByText("Raw event A"));
+    await user.click(screen.getByRole("button", { name: "loadRawRecord" }));
+    await user.click(screen.getByText("Raw event B"));
+    expect(rawSignals[0].aborted).toBe(true);
+    expect(screen.getByRole("button", { name: "loadRawRecord" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "loadRawRecord" }));
+    expect(screen.getByRole("button", { name: "loadRawRecord" })).toBeDisabled();
+    await act(async () => {
+      if (outcome === "resolve") {
+        rawA.resolve({ path: "/a", offset: 0, length: 1, content_type: "text", content: "late A" });
+      } else {
+        rawA.reject(new Error("late A failure"));
+      }
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/late A/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "loadRawRecord" })).toBeDisabled();
+
+    await act(async () => rawB.resolve({ path: "/b", offset: 0, length: 1, content_type: "text", content: "raw B payload" }));
+    expect(await screen.findByText("raw B payload")).toBeVisible();
   });
 
   it("aborts obsolete list and event requests and qualifies colliding session IDs by source", async () => {
@@ -426,5 +537,31 @@ describe("session retrospective center", () => {
     fireEvent.click(screen.getByRole("button", { name: "loadMoreEvents" }));
     expect(await screen.findByText("event-101")).toBeVisible();
     expect(fetchAPI).toHaveBeenCalledWith(expect.stringContaining("/events"), { limit: 100, offset: 100 }, expect.anything());
+  });
+
+  it("aborts event load-more when selection starts a new full first page and restores the button", async () => {
+    const pendingMore = deferred<SessionEvent[]>();
+    let loadMoreSignal: AbortSignal | undefined;
+    vi.mocked(fetchAPI).mockImplementation((path, params, init) => {
+      if (path === "sessions") return Promise.resolve([
+        summary(),
+        summary({ session_id: "older", title: "Older session" }),
+      ]) as never;
+      if (params.offset === 100) {
+        loadMoreSignal = init?.signal ?? undefined;
+        return pendingMore.promise as never;
+      }
+      return Promise.resolve(fullEventPage(path.includes("/older/") ? "older" : "newest")) as never;
+    });
+    const user = userEvent.setup();
+    renderSessions();
+    await user.click(await screen.findByRole("button", { name: "loadMoreEvents" }));
+    expect(loadMoreSignal?.aborted).toBe(false);
+
+    await user.click(screen.getByText("Older session"));
+    await waitFor(() => expect(loadMoreSignal?.aborted).toBe(true));
+    const timeline = screen.getByTestId("session-timeline");
+    await within(timeline).findByText("older event 0");
+    expect(within(timeline).getByRole("button", { name: "loadMoreEvents" })).toBeEnabled();
   });
 });

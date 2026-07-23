@@ -19,6 +19,12 @@ function initiallyExpanded(event: SessionEvent): boolean {
   return true;
 }
 
+function formatEventTime(timestamp: string, fallback: string): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return fallback;
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
 function EventIcon({ event }: { event: SessionEvent }) {
   if (event.event_type === "error") return <AlertCircle aria-hidden="true" className="h-4 w-4 text-red-500" />;
   if (event.event_type === "tool_call" || event.event_type === "tool_result") return <Terminal aria-hidden="true" className="h-4 w-4 text-accent" />;
@@ -38,7 +44,9 @@ export default function EventCard({ event, onInspect, t }: { event: SessionEvent
       tabIndex={0}
       onClick={() => onInspect(event)}
       onKeyDown={(keyEvent) => {
-        if (keyEvent.key === "Enter" || keyEvent.key === " ") onInspect(event);
+        if (keyEvent.target === keyEvent.currentTarget && (keyEvent.key === "Enter" || keyEvent.key === " ")) {
+          onInspect(event);
+        }
       }}
       className={`rounded border px-3 py-2.5 outline-none transition-colors hover:border-accent focus-visible:ring-2 focus-visible:ring-accent ${event.event_type === "error" ? "border-red-500/40 bg-red-500/5" : "border-border bg-card"}`}
     >
@@ -49,7 +57,7 @@ export default function EventCard({ event, onInspect, t }: { event: SessionEvent
         </span>
         {event.duration_ms !== null && <span className="font-mono text-[10px] text-muted-foreground">{event.duration_ms}ms</span>}
         <time dateTime={event.timestamp} className="shrink-0 font-mono text-[10px] text-muted-foreground">
-          {new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+          {formatEventTime(event.timestamp, t("sourceDataUnavailable"))}
         </time>
         {canCollapse && (
           <button

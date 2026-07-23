@@ -26,7 +26,7 @@ export default function EventInspector({ event, raw, rawLoading, rawError, onLoa
   const fallback = t("sourceDataUnavailable");
 
   return (
-    <aside data-testid="event-inspector" className="flex min-h-0 min-w-0 flex-col border-l border-border bg-card/30">
+    <aside data-testid="event-inspector" className="session-event-inspector flex min-h-0 min-w-0 flex-col border-l border-border bg-card/30">
       <header className="flex min-w-0 items-center gap-2 border-b border-border px-3 py-3">
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-sm font-semibold">{t("eventInspector")}</h2>

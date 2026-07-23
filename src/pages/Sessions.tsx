@@ -86,18 +86,23 @@ export default function Sessions() {
   const rawController = useRef<AbortController | null>(null);
   const selectedLifecycleKey = useRef<string | null>(null);
 
+  const resetRawRequest = useCallback(() => {
+    rawController.current?.abort();
+    rawController.current = null;
+    setRawLoadingID(null);
+    setRawError(null);
+  }, []);
+
   useEffect(() => persistUsageFilters(filters), [filters]);
 
   useLayoutEffect(() => {
     const nextKey = selected ? sessionIdentity(selected) : null;
     if (nextKey === selectedLifecycleKey.current) return;
     selectedLifecycleKey.current = nextKey;
-    rawController.current?.abort();
+    resetRawRequest();
     setRawCache({});
-    setRawError(null);
-    setRawLoadingID(null);
     setInspectedEvent(null);
-  }, [selected?.source, selected?.session_id]);
+  }, [resetRawRequest, selected?.source, selected?.session_id]);
 
   const sessionParams = useCallback((offset: number) => ({
     from: filters.from,
@@ -115,12 +120,14 @@ export default function Sessions() {
     listController.current?.abort();
     listController.current = controller;
     setListLoading(true);
+    setListLoadingMore(false);
     setListError(null);
+    setListHasMore(false);
 
     const run = async () => {
       try {
         const rows = await fetchAPI<SessionSummary[]>("sessions", sessionParams(0), { signal: controller.signal });
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || listController.current !== controller) return;
         const ordered = sortSessions(rows || []);
         setSessions(ordered);
         setListHasMore(ordered.length === SESSION_PAGE_SIZE);
@@ -132,13 +139,13 @@ export default function Sessions() {
           return ordered[0] || null;
         });
       } catch (error) {
-        if (!isAbortError(error)) {
+        if (!controller.signal.aborted && listController.current === controller && !isAbortError(error)) {
           setListError(error instanceof Error ? error.message : String(error));
           setSessions([]);
           setSelected(null);
         }
       } finally {
-        if (!controller.signal.aborted) setListLoading(false);
+        if (!controller.signal.aborted && listController.current === controller) setListLoading(false);
       }
     };
 
@@ -158,13 +165,15 @@ export default function Sessions() {
     setListError(null);
     try {
       const rows = await fetchAPI<SessionSummary[]>("sessions", sessionParams(sessions.length), { signal: controller.signal });
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || listController.current !== controller) return;
       setSessions((current) => sortSessions([...current, ...(rows || [])]));
       setListHasMore((rows || []).length === SESSION_PAGE_SIZE);
     } catch (error) {
-      if (!isAbortError(error)) setListError(error instanceof Error ? error.message : String(error));
+      if (!controller.signal.aborted && listController.current === controller && !isAbortError(error)) {
+        setListError(error instanceof Error ? error.message : String(error));
+      }
     } finally {
-      if (!controller.signal.aborted) setListLoadingMore(false);
+      if (!controller.signal.aborted && listController.current === controller) setListLoadingMore(false);
     }
   }, [sessionParams, sessions.length]);
 
@@ -173,6 +182,7 @@ export default function Sessions() {
     setEvents([]);
     setEventsError(null);
     setEventsHasMore(false);
+    setEventsLoadingMore(false);
     if (!selected) {
       setEventsLoading(false);
       return;
@@ -185,13 +195,15 @@ export default function Sessions() {
       try {
         const path = `sessions/${encodeURIComponent(selected.source)}/${encodeURIComponent(selected.session_id)}/events`;
         const rows = await fetchAPI<SessionEvent[]>(path, { limit: EVENT_PAGE_SIZE, offset: 0 }, { signal: controller.signal });
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || eventController.current !== controller) return;
         setEvents(sortEvents(rows || []));
         setEventsHasMore((rows || []).length === EVENT_PAGE_SIZE);
       } catch (error) {
-        if (!isAbortError(error)) setEventsError(error instanceof Error ? error.message : String(error));
+        if (!controller.signal.aborted && eventController.current === controller && !isAbortError(error)) {
+          setEventsError(error instanceof Error ? error.message : String(error));
+        }
       } finally {
-        if (!controller.signal.aborted) setEventsLoading(false);
+        if (!controller.signal.aborted && eventController.current === controller) setEventsLoading(false);
       }
     };
     void run();
@@ -200,15 +212,13 @@ export default function Sessions() {
 
   const selectSession = useCallback((session: SessionSummary) => {
     if (!selected || sessionIdentity(selected) !== sessionIdentity(session)) {
-      rawController.current?.abort();
+      resetRawRequest();
       setRawCache({});
-      setRawError(null);
-      setRawLoadingID(null);
       setInspectedEvent(null);
       setSelected(session);
     }
     if (isMobile) setMobileDetailVisible(true);
-  }, [isMobile, selected]);
+  }, [isMobile, resetRawRequest, selected]);
 
   const loadMoreEvents = useCallback(async () => {
     if (!selected) return;
@@ -220,15 +230,27 @@ export default function Sessions() {
     try {
       const path = `sessions/${encodeURIComponent(selected.source)}/${encodeURIComponent(selected.session_id)}/events`;
       const rows = await fetchAPI<SessionEvent[]>(path, { limit: EVENT_PAGE_SIZE, offset: events.length }, { signal: controller.signal });
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || eventController.current !== controller) return;
       setEvents((current) => sortEvents([...current, ...(rows || [])]));
       setEventsHasMore((rows || []).length === EVENT_PAGE_SIZE);
     } catch (error) {
-      if (!isAbortError(error)) setEventsError(error instanceof Error ? error.message : String(error));
+      if (!controller.signal.aborted && eventController.current === controller && !isAbortError(error)) {
+        setEventsError(error instanceof Error ? error.message : String(error));
+      }
     } finally {
-      if (!controller.signal.aborted) setEventsLoadingMore(false);
+      if (!controller.signal.aborted && eventController.current === controller) setEventsLoadingMore(false);
     }
   }, [events.length, selected]);
+
+  const inspectEvent = useCallback((event: SessionEvent) => {
+    if (inspectedEvent?.id !== event.id) resetRawRequest();
+    setInspectedEvent(event);
+  }, [inspectedEvent?.id, resetRawRequest]);
+
+  const closeInspector = useCallback(() => {
+    resetRawRequest();
+    setInspectedEvent(null);
+  }, [resetRawRequest]);
 
   const loadRaw = useCallback(async () => {
     if (!selected || !inspectedEvent || rawCache[inspectedEvent.id]) return;
@@ -240,11 +262,18 @@ export default function Sessions() {
     try {
       const path = `sessions/${encodeURIComponent(selected.source)}/${encodeURIComponent(selected.session_id)}/events/${inspectedEvent.id}/raw`;
       const raw = await fetchRaw<RawEventResponse>(path, { signal: controller.signal });
-      if (!controller.signal.aborted) setRawCache((current) => ({ ...current, [inspectedEvent.id]: raw }));
+      if (!controller.signal.aborted && rawController.current === controller) {
+        setRawCache((current) => ({ ...current, [inspectedEvent.id]: raw }));
+      }
     } catch (error) {
-      if (!isAbortError(error)) setRawError(error instanceof Error ? error.message : String(error));
+      if (!controller.signal.aborted && rawController.current === controller && !isAbortError(error)) {
+        setRawError(error instanceof Error ? error.message : String(error));
+      }
     } finally {
-      if (!controller.signal.aborted) setRawLoadingID(null);
+      if (!controller.signal.aborted && rawController.current === controller) {
+        rawController.current = null;
+        setRawLoadingID(null);
+      }
     }
   }, [inspectedEvent, rawCache, selected]);
 
@@ -290,10 +319,10 @@ export default function Sessions() {
       error={eventsError}
       hasMore={eventsHasMore}
       isMobile={isMobile}
-      onBack={() => { setMobileDetailVisible(false); setInspectedEvent(null); }}
+      onBack={() => { setMobileDetailVisible(false); closeInspector(); }}
       onRetry={() => setEventsRetry((value) => value + 1)}
       onLoadMore={() => { void loadMoreEvents(); }}
-      onInspect={setInspectedEvent}
+      onInspect={inspectEvent}
       t={t}
     />
   );
@@ -305,7 +334,7 @@ export default function Sessions() {
       rawLoading={rawLoadingID === inspectedEvent.id}
       rawError={rawError}
       onLoadRaw={() => { void loadRaw(); }}
-      onClose={() => setInspectedEvent(null)}
+      onClose={closeInspector}
       t={t}
     />
   ) : null;
