@@ -3,6 +3,7 @@ package collector
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,11 +13,21 @@ import (
 	"github.com/hongshuo-wang/agent-usage-desktop/internal/storage"
 )
 
+var errClaudeSourceChanged = errors.New("claude source changed during scan")
+
+type claudeJSONLSnapshot struct {
+	file     *os.File
+	info     os.FileInfo
+	headHash string
+}
+
 func (c *ClaudeCollector) processFile(path, project string) error {
-	info, err := os.Stat(path)
+	snapshot, err := openClaudeJSONLSnapshot(path)
 	if err != nil {
 		return err
 	}
+	defer snapshot.file.Close()
+	info := snapshot.info
 	stateSize, lastOffset, scanContext, err := c.db.GetFileState(path)
 	if err != nil {
 		return err
@@ -33,7 +44,7 @@ func (c *ClaudeCollector) processFile(path, project string) error {
 			existingSource.ParserVersion != adapter.ParserVersion() ||
 			info.Size() < existingSource.FileSize || info.Size() < lastOffset
 		if existingSource.HeadHash != "" && info.Size() >= existingSource.FileSize {
-			previousHeadHash, err := claudeSourceHeadHash(path, existingSource.FileSize)
+			previousHeadHash, err := claudeSourceHeadHash(snapshot.file, existingSource.FileSize)
 			if err != nil {
 				return err
 			}
@@ -43,11 +54,6 @@ func (c *ClaudeCollector) processFile(path, project string) error {
 		}
 	}
 	if rebuild {
-		if existingSource != nil {
-			if err := c.db.DeleteSourceIndex(path); err != nil {
-				return fmt.Errorf("clear claude event index: %w", err)
-			}
-		}
 		lastOffset = 0
 		scanContext = nil
 	}
@@ -73,7 +79,7 @@ func (c *ClaudeCollector) processFile(path, project string) error {
 	malformedLines := 0
 	lastError := ""
 
-	indexedOffset, observedSize, err := readClaudeJSONLSnapshot(path, lastOffset, info.Size(), func(record JSONLRecord) error {
+	indexedOffset, observedSize, headHash, err := readClaudeJSONLSnapshot(path, snapshot, lastOffset, func(record JSONLRecord) error {
 		completeRecords++
 		line := record.Data
 		events, parseErr := adapter.Parse(line, &context)
@@ -175,9 +181,10 @@ func (c *ClaudeCollector) processFile(path, project string) error {
 	if err != nil {
 		return fmt.Errorf("read claude jsonl: %w", err)
 	}
-	headHash, err := claudeSourceHeadHash(path, observedSize)
-	if err != nil {
-		return err
+	if rebuild && existingSource != nil {
+		if err := c.db.DeleteSourceIndex(path); err != nil {
+			return fmt.Errorf("clear claude event index: %w", err)
+		}
 	}
 
 	if context.SessionID == "" {
@@ -285,44 +292,87 @@ func (c *ClaudeCollector) processFile(path, project string) error {
 	})
 }
 
-func readClaudeJSONLSnapshot(path string, startOffset, snapshotSize int64, visit func(JSONLRecord) error) (int64, int64, error) {
-	if snapshotSize < startOffset {
-		return startOffset, 0, fmt.Errorf("claude snapshot size %d precedes offset %d", snapshotSize, startOffset)
-	}
+func openClaudeJSONLSnapshot(path string) (*claudeJSONLSnapshot, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return startOffset, 0, err
+		return nil, err
 	}
-	defer f.Close()
-	if startOffset > 0 {
-		if _, err := f.Seek(startOffset, io.SeekStart); err != nil {
-			return startOffset, 0, err
-		}
-	}
-
-	indexedOffset, err := ReadJSONL(io.LimitReader(f, snapshotSize-startOffset), startOffset, visit)
+	info, err := f.Stat()
 	if err != nil {
-		return indexedOffset, 0, err
+		f.Close()
+		return nil, err
 	}
-	info, err := os.Stat(path)
+	headHash, err := claudeSourceHeadHash(f, info.Size())
 	if err != nil {
-		return indexedOffset, 0, err
+		f.Close()
+		return nil, err
 	}
-	return indexedOffset, info.Size(), nil
+	pathInfo, err := os.Stat(path)
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if !os.SameFile(info, pathInfo) {
+		f.Close()
+		return nil, fmt.Errorf("%w: path replaced while opening", errClaudeSourceChanged)
+	}
+	return &claudeJSONLSnapshot{file: f, info: info, headHash: headHash}, nil
 }
 
-func claudeSourceHeadHash(path string, size int64) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
+func readClaudeJSONLSnapshot(path string, snapshot *claudeJSONLSnapshot, startOffset int64, visit func(JSONLRecord) error) (int64, int64, string, error) {
+	snapshotSize := snapshot.info.Size()
+	if snapshotSize < startOffset {
+		return startOffset, 0, "", fmt.Errorf("claude snapshot size %d precedes offset %d", snapshotSize, startOffset)
 	}
-	defer f.Close()
+
+	reader := io.NewSectionReader(snapshot.file, startOffset, snapshotSize-startOffset)
+	indexedOffset, err := ReadJSONL(reader, startOffset, visit)
+	if err != nil {
+		return indexedOffset, 0, "", err
+	}
+	finalFile, err := os.Open(path)
+	if err != nil {
+		return indexedOffset, 0, "", err
+	}
+	defer finalFile.Close()
+	finalInfo, err := finalFile.Stat()
+	if err != nil {
+		return indexedOffset, 0, "", err
+	}
+	if !os.SameFile(snapshot.info, finalInfo) {
+		return indexedOffset, 0, "", fmt.Errorf("%w: path identity changed", errClaudeSourceChanged)
+	}
+	if finalInfo.Size() < snapshotSize {
+		return indexedOffset, 0, "", fmt.Errorf("%w: size shrank from %d to %d", errClaudeSourceChanged, snapshotSize, finalInfo.Size())
+	}
+	finalHeadHash, err := claudeSourceHeadHash(finalFile, finalInfo.Size())
+	if err != nil {
+		return indexedOffset, 0, "", err
+	}
+	initialPrefixHash, err := claudeSourceHeadHash(finalFile, snapshotSize)
+	if err != nil {
+		return indexedOffset, 0, "", err
+	}
+	if initialPrefixHash != snapshot.headHash {
+		return indexedOffset, 0, "", fmt.Errorf("%w: initial prefix changed", errClaudeSourceChanged)
+	}
+	pathInfo, err := os.Stat(path)
+	if err != nil {
+		return indexedOffset, 0, "", err
+	}
+	if !os.SameFile(finalInfo, pathInfo) {
+		return indexedOffset, 0, "", fmt.Errorf("%w: path replaced while fingerprinting", errClaudeSourceChanged)
+	}
+	return indexedOffset, finalInfo.Size(), finalHeadHash, nil
+}
+
+func claudeSourceHeadHash(f *os.File, size int64) (string, error) {
 	limit := size
 	if limit > 4096 {
 		limit = 4096
 	}
 	hash := sha256.New()
-	if _, err := io.CopyN(hash, f, limit); err != nil {
+	if _, err := io.CopyN(hash, io.NewSectionReader(f, 0, limit), limit); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("%x", hash.Sum(nil)), nil

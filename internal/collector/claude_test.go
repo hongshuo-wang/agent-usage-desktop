@@ -36,6 +36,16 @@ func writeClaudeSessionFile(t *testing.T, root, project, name, content string) s
 	return path
 }
 
+func openClaudeSnapshotForTest(t *testing.T, path string) *claudeJSONLSnapshot {
+	t.Helper()
+	snapshot, err := openClaudeJSONLSnapshot(path)
+	if err != nil {
+		t.Fatalf("openClaudeJSONLSnapshot: %v", err)
+	}
+	t.Cleanup(func() { snapshot.file.Close() })
+	return snapshot
+}
+
 func claudeVisibleLine(sessionID, timestamp, text string) string {
 	return fmt.Sprintf(`{"type":"user","timestamp":%q,"sessionId":%q,"cwd":"/work","version":"1.0","message":{"role":"user","content":%q}}`, timestamp, sessionID, text)
 }
@@ -151,9 +161,10 @@ func TestClaudeJSONLSnapshotDefersConcurrentAppend(t *testing.T) {
 	second := claudeVisibleLine("sess-snapshot", "2026-01-02T03:04:06Z", "second") + "\n"
 	partial := claudeVisibleLine("sess-snapshot", "2026-01-02T03:04:07Z", "partial")
 	path := writeClaudeSessionFile(t, root, "proj", "session.jsonl", first)
+	snapshot := openClaudeSnapshotForTest(t, path)
 
 	var records []JSONLRecord
-	indexedOffset, observedSize, err := readClaudeJSONLSnapshot(path, 0, int64(len(first)), func(record JSONLRecord) error {
+	indexedOffset, observedSize, _, err := readClaudeJSONLSnapshot(path, snapshot, 0, func(record JSONLRecord) error {
 		records = append(records, record)
 		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
@@ -179,6 +190,85 @@ func TestClaudeJSONLSnapshotDefersConcurrentAppend(t *testing.T) {
 	}
 }
 
+func TestClaudeJSONLSnapshotRejectsSourceChangeDuringVisit(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		replace func(t *testing.T, path string, replacement []byte)
+	}{
+		{
+			name: "same inode rewrite",
+			replace: func(t *testing.T, path string, replacement []byte) {
+				t.Helper()
+				if err := os.WriteFile(path, replacement, 0o644); err != nil {
+					t.Fatalf("rewrite source: %v", err)
+				}
+			},
+		},
+		{
+			name: "atomic rename replacement",
+			replace: func(t *testing.T, path string, replacement []byte) {
+				t.Helper()
+				tmp := filepath.Join(filepath.Dir(path), "replacement.jsonl")
+				if err := os.WriteFile(tmp, replacement, 0o644); err != nil {
+					t.Fatalf("write replacement: %v", err)
+				}
+				if err := os.Rename(tmp, path); err != nil {
+					t.Fatalf("replace source: %v", err)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db := tempDB(t)
+			root := t.TempDir()
+			original := []byte(claudeVisibleLine("sess-source-change", "2026-01-02T03:04:05Z", "old") + "\n")
+			replacement := []byte(claudeVisibleLine("sess-source-change", "2026-01-02T03:04:05Z", "new") + "\n")
+			if len(replacement) != len(original) {
+				t.Fatalf("replacement size = %d, want %d", len(replacement), len(original))
+			}
+			path := writeClaudeSessionFile(t, root, "proj", "session.jsonl", string(original))
+			collector := NewClaudeCollector(db, []string{root})
+			if err := collector.Scan(); err != nil {
+				t.Fatalf("seed Scan: %v", err)
+			}
+			initialSource, err := db.GetSessionSourceByPath(path)
+			if err != nil || initialSource == nil {
+				t.Fatalf("initial source = %+v, %v", initialSource, err)
+			}
+			snapshot := openClaudeSnapshotForTest(t, path)
+
+			var visited []JSONLRecord
+			_, _, _, err = readClaudeJSONLSnapshot(path, snapshot, 0, func(record JSONLRecord) error {
+				visited = append(visited, record)
+				test.replace(t, path, replacement)
+				return nil
+			})
+			if err == nil || !strings.Contains(err.Error(), "source changed during scan") {
+				t.Fatalf("error = %v, want source-changed error", err)
+			}
+			if len(visited) != 1 || string(visited[0].Data) != strings.TrimSuffix(string(original), "\n") {
+				t.Fatalf("visited records = %+v, want original snapshot record", visited)
+			}
+			source, err := db.GetSessionSourceByPath(path)
+			if err != nil || source == nil || source.HeadHash != initialSource.HeadHash {
+				t.Fatalf("source changed after rejected snapshot = %+v, %v", source, err)
+			}
+			events, err := db.ListSessionEvents("claude", "sess-source-change", 10, 0)
+			if err != nil || len(events) != 1 || events[0].Content != "old" {
+				t.Fatalf("events after rejected snapshot = %+v, %v", events, err)
+			}
+
+			if err := collector.Scan(); err != nil {
+				t.Fatalf("replacement Scan: %v", err)
+			}
+			events, err = db.ListSessionEvents("claude", "sess-source-change", 10, 0)
+			if err != nil || len(events) != 1 || events[0].Content != "new" {
+				t.Fatalf("replacement events = %+v, %v", events, err)
+			}
+		})
+	}
+}
+
 func TestClaudeCollectorIndexesDeferredSnapshotDataOnNextScan(t *testing.T) {
 	db := tempDB(t)
 	root := t.TempDir()
@@ -186,8 +276,9 @@ func TestClaudeCollectorIndexesDeferredSnapshotDataOnNextScan(t *testing.T) {
 	second := claudeVisibleLine("sess-snapshot-next", "2026-01-02T03:04:06Z", "second") + "\n"
 	partial := claudeVisibleLine("sess-snapshot-next", "2026-01-02T03:04:07Z", "partial")
 	path := writeClaudeSessionFile(t, root, "proj", "session.jsonl", first)
+	snapshot := openClaudeSnapshotForTest(t, path)
 
-	indexedOffset, observedSize, err := readClaudeJSONLSnapshot(path, 0, int64(len(first)), func(JSONLRecord) error {
+	indexedOffset, observedSize, headHash, err := readClaudeJSONLSnapshot(path, snapshot, 0, func(JSONLRecord) error {
 		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
 			return err
@@ -200,10 +291,6 @@ func TestClaudeCollectorIndexesDeferredSnapshotDataOnNextScan(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("readClaudeJSONLSnapshot: %v", err)
-	}
-	headHash, err := claudeSourceHeadHash(path, observedSize)
-	if err != nil {
-		t.Fatalf("claudeSourceHeadHash: %v", err)
 	}
 	if _, err := db.UpsertSessionSource(&storage.SessionSource{
 		Source:         "claude",
