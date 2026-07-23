@@ -7,20 +7,18 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/hongshuo-wang/agent-usage-desktop/internal/configmanager"
 	"github.com/hongshuo-wang/agent-usage-desktop/internal/storage"
 )
 
 // Server serves the REST API.
 type Server struct {
 	db   *storage.DB
-	mgr  *configmanager.Manager
 	addr string
 }
 
 // New creates a Server that will listen on the given address (host:port).
-func New(db *storage.DB, mgr *configmanager.Manager, addr string) *Server {
-	return &Server{db: db, mgr: mgr, addr: addr}
+func New(db *storage.DB, addr string) *Server {
+	return &Server{db: db, addr: addr}
 }
 
 var allowedCORSOrigins = map[string]bool{
@@ -63,48 +61,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tokens-over-time", s.handleTokensOverTime)
 	mux.HandleFunc("/api/sessions", s.handleSessions)
 	mux.HandleFunc("/api/session-detail", s.handleSessionDetail)
-	mux.HandleFunc("GET /api/config/profiles", s.handleListProfiles)
-	mux.HandleFunc("POST /api/config/profiles", s.handleCreateProfile)
-	mux.HandleFunc("PUT /api/config/profiles/{id}", s.handleUpdateProfile)
-	mux.HandleFunc("DELETE /api/config/profiles/{id}", s.handleDeleteProfile)
-	mux.HandleFunc("POST /api/config/profiles/{id}/activate", s.handleActivateProfile)
-	mux.HandleFunc("GET /api/config/mcp", s.handleListMCPServers)
-	mux.HandleFunc("POST /api/config/mcp", s.handleCreateMCPServer)
-	mux.HandleFunc("PUT /api/config/mcp/{id}", s.handleUpdateMCPServer)
-	mux.HandleFunc("DELETE /api/config/mcp/{id}", s.handleDeleteMCPServer)
-	mux.HandleFunc("PUT /api/config/mcp/{id}/targets", s.handleSetMCPTargets)
-	mux.HandleFunc("GET /api/config/skills", s.handleListSkills)
-	mux.HandleFunc("GET /api/config/skills/dashboard", s.handleSkillsDashboard)
-	mux.HandleFunc("GET /api/config/skills/discover", s.handleSkillsDiscover)
-	mux.HandleFunc("GET /api/config/skills/overview", s.handleSkillsOverview)
-	mux.HandleFunc("GET /api/config/skills/cli/{tool}", s.handleSkillsCLIOverview)
-	mux.HandleFunc("GET /api/config/skills/inventory", s.handleSkillsInventory)
-	mux.HandleFunc("GET /api/config/skills/sources/repos", s.handleListSkillRepoSources)
-	mux.HandleFunc("POST /api/config/skills/sources/repos", s.handleCreateSkillRepoSource)
-	mux.HandleFunc("DELETE /api/config/skills/sources/repos/{id}", s.handleDeleteSkillRepoSource)
-	mux.HandleFunc("POST /api/config/skills/sources/refresh", s.handleRefreshSkillRepoSources)
-	mux.HandleFunc("POST /api/config/skills/agent-usage/install", s.handleInstallAgentUsageSkill)
-	mux.HandleFunc("POST /api/config/skills/agent-usage/uninstall", s.handleUninstallAgentUsageSkill)
-	mux.HandleFunc("POST /api/config/skills/import", s.handleImportSkills)
-	mux.HandleFunc("POST /api/config/skills/import-existing", s.handleImportExistingSkills)
-	mux.HandleFunc("POST /api/config/skills/import-managed", s.handleImportManagedSkill)
-	mux.HandleFunc("POST /api/config/skills/sync-all", s.handleSyncAllSkills)
-	mux.HandleFunc("POST /api/config/skills/repair", s.handleRepairSkills)
-	mux.HandleFunc("POST /api/config/skills/delete-path", s.handleDeleteSkillPath)
-	mux.HandleFunc("POST /api/config/skills/conflicts/resolve", s.handleResolveSkillConflict)
-	mux.HandleFunc("POST /api/config/skills", s.handleCreateSkill)
-	mux.HandleFunc("PUT /api/config/skills/{id}", s.handleUpdateSkill)
-	mux.HandleFunc("DELETE /api/config/skills/{id}", s.handleDeleteSkill)
-	mux.HandleFunc("PUT /api/config/skills/{id}/targets", s.handleSetSkillTargets)
-	mux.HandleFunc("PUT /api/config/skills/{id}/bindings/{tool}", s.handleSetSkillBinding)
-	mux.HandleFunc("POST /api/config/skills/{id}/current-variant", s.handleSetSkillCurrentVariant)
-	mux.HandleFunc("POST /api/config/sync", s.handleTriggerSync)
-	mux.HandleFunc("GET /api/config/sync/status", s.handleSyncStatus)
-	mux.HandleFunc("POST /api/config/sync/resolve", s.handleResolveConflict)
-	mux.HandleFunc("GET /api/config/backups", s.handleListBackups)
-	mux.HandleFunc("POST /api/config/backups", s.handleManualBackup)
-	mux.HandleFunc("POST /api/config/backups/{id}/restore", s.handleRestoreBackup)
-	mux.HandleFunc("GET /api/config/files", s.handleListConfigFiles)
 
 	return corsMiddleware(mux)
 }
