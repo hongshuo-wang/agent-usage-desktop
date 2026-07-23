@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -88,6 +89,49 @@ func TestSessionSourceAndEventInsertDedup(t *testing.T) {
 	}
 	if gotEvent == nil || gotEvent.RawOffset != 10 || gotEvent.ToolCallID != "tool-1" {
 		t.Fatalf("unexpected event: %+v", gotEvent)
+	}
+}
+
+func TestUpsertSessionSourceWithEventsRollsBackAtomically(t *testing.T) {
+	db := tempDB(t)
+	source := testSessionSource("/sessions/atomic.jsonl", "atomic-session")
+	source.CoverageStatus = "partial"
+	source.FileSize = 1024
+	source.IndexedOffset = 512
+	sourceID, err := db.UpsertSessionSource(source)
+	if err != nil {
+		t.Fatalf("seed source: %v", err)
+	}
+	if _, err := db.db.Exec(`CREATE TRIGGER fail_session_event_insert
+		BEFORE INSERT ON session_events BEGIN
+			SELECT RAISE(ABORT, 'injected session event failure');
+		END`); err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+
+	source.CoverageStatus = "complete"
+	source.FileSize = 2048
+	source.IndexedOffset = 2048
+	_, err = db.UpsertSessionSourceWithEvents(source, []SessionEventRecord{
+		testSessionEvent(sourceID, source.SessionID, 512),
+	})
+	if err == nil || !strings.Contains(err.Error(), "injected session event failure") {
+		t.Fatalf("error = %v, want injected insert failure", err)
+	}
+
+	got, err := db.GetSessionSourceByPath(source.Path)
+	if err != nil {
+		t.Fatalf("GetSessionSourceByPath: %v", err)
+	}
+	if got == nil || got.CoverageStatus != "partial" || got.FileSize != 1024 || got.IndexedOffset != 512 {
+		t.Fatalf("source metadata committed despite event failure: %+v", got)
+	}
+	events, err := db.ListSessionEvents(source.Source, source.SessionID, 10, 0)
+	if err != nil {
+		t.Fatalf("ListSessionEvents: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events committed despite batch failure: %+v", events)
 	}
 }
 

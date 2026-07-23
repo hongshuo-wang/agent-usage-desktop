@@ -55,7 +55,17 @@ func (d *DB) UpsertSessionSource(source *SessionSource) (int64, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
+	id, err := upsertSessionSourceTx(tx, source)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
 
+func upsertSessionSourceTx(tx *sql.Tx, source *SessionSource) (int64, error) {
 	sourceKind := source.SourceKind
 	if sourceKind == "" {
 		sourceKind = "jsonl"
@@ -70,7 +80,7 @@ func (d *DB) UpsertSessionSource(source *SessionSource) (int64, error) {
 	}
 	var existingID int64
 	var existingSource, existingSessionID string
-	err = tx.QueryRow(`SELECT id, source, session_id FROM session_sources WHERE path=?`, source.Path).
+	err := tx.QueryRow(`SELECT id, source, session_id FROM session_sources WHERE path=?`, source.Path).
 		Scan(&existingID, &existingSource, &existingSessionID)
 	if err != nil && err != sql.ErrNoRows {
 		return 0, err
@@ -109,10 +119,34 @@ func (d *DB) UpsertSessionSource(source *SessionSource) (int64, error) {
 	if err := tx.QueryRow(`SELECT id FROM session_sources WHERE path=?`, source.Path).Scan(&id); err != nil {
 		return 0, err
 	}
+	return id, nil
+}
+
+// UpsertSessionSourceWithEvents commits source metadata and its event batch atomically.
+func (d *DB) UpsertSessionSourceWithEvents(source *SessionSource, events []SessionEventRecord) (int64, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	sourceID, err := upsertSessionSourceTx(tx, source)
+	if err != nil {
+		return 0, err
+	}
+	for i := range events {
+		events[i].SessionSourceID = sourceID
+	}
+	if err := insertSessionEventsTx(tx, events); err != nil {
+		return 0, err
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
-	return id, nil
+	return sourceID, nil
 }
 
 // InsertSessionEvents inserts normalized events and ignores duplicate raw locators.
@@ -128,6 +162,13 @@ func (d *DB) InsertSessionEvents(events []SessionEventRecord) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := insertSessionEventsTx(tx, events); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func insertSessionEventsTx(tx *sql.Tx, events []SessionEventRecord) error {
 	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO session_events(
 		session_source_id, source, session_id, event_type, source_event_type,
 		timestamp, role, content, tool_name, tool_call_id, tool_input, tool_output,
@@ -148,7 +189,7 @@ func (d *DB) InsertSessionEvents(events []SessionEventRecord) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 // DeleteSourceIndex removes index metadata and events for a path, never source files.

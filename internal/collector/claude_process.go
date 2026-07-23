@@ -21,10 +21,6 @@ func (c *ClaudeCollector) processFile(path, project string) error {
 	if err != nil {
 		return err
 	}
-	headHash, err := claudeSourceHeadHash(path, info.Size())
-	if err != nil {
-		return err
-	}
 	adapter := claudeEventAdapter{}
 	existingSource, err := c.db.GetSessionSourceByPath(path)
 	if err != nil {
@@ -60,18 +56,6 @@ func (c *ClaudeCollector) processFile(path, project string) error {
 		rebuild = true
 	}
 
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	if lastOffset > 0 {
-		if _, err := f.Seek(lastOffset, io.SeekStart); err != nil {
-			return err
-		}
-	}
-
 	context := EventContext{Source: "claude"}
 	if scanContext != nil {
 		context.SessionID = scanContext.SessionID
@@ -89,7 +73,7 @@ func (c *ClaudeCollector) processFile(path, project string) error {
 	malformedLines := 0
 	lastError := ""
 
-	indexedOffset, err := ReadJSONL(f, lastOffset, func(record JSONLRecord) error {
+	indexedOffset, observedSize, err := readClaudeJSONLSnapshot(path, lastOffset, info.Size(), func(record JSONLRecord) error {
 		completeRecords++
 		line := record.Data
 		events, parseErr := adapter.Parse(line, &context)
@@ -191,6 +175,10 @@ func (c *ClaudeCollector) processFile(path, project string) error {
 	if err != nil {
 		return fmt.Errorf("read claude jsonl: %w", err)
 	}
+	headHash, err := claudeSourceHeadHash(path, observedSize)
+	if err != nil {
+		return err
+	}
 
 	if context.SessionID == "" {
 		context.SessionID = filepath.Base(path)
@@ -241,18 +229,18 @@ func (c *ClaudeCollector) processFile(path, project string) error {
 	}
 
 	if completeRecords == 0 && existingSource != nil && !rebuild {
-		existingSource.FileSize = info.Size()
+		existingSource.FileSize = observedSize
 		existingSource.IndexedOffset = indexedOffset
 		existingSource.HeadHash = headHash
 		existingSource.CoverageStatus = "partial"
-		if existingSource.MalformedLines == 0 && indexedOffset == info.Size() {
+		if existingSource.MalformedLines == 0 && indexedOffset == observedSize {
 			existingSource.CoverageStatus = "complete"
 		}
 		existingSource.SourceStatus = "available"
 		if _, err := c.db.UpsertSessionSource(existingSource); err != nil {
 			return fmt.Errorf("update claude source: %w", err)
 		}
-		return c.db.SetFileState(path, info.Size(), indexedOffset, scanContext)
+		return c.db.SetFileState(path, observedSize, indexedOffset, scanContext)
 	}
 
 	totalMalformed := malformedLines
@@ -263,7 +251,7 @@ func (c *ClaudeCollector) processFile(path, project string) error {
 		}
 	}
 	coverage := "partial"
-	if totalMalformed == 0 && indexedOffset == info.Size() {
+	if totalMalformed == 0 && indexedOffset == observedSize {
 		coverage = "complete"
 	}
 	source := &storage.SessionSource{
@@ -273,7 +261,7 @@ func (c *ClaudeCollector) processFile(path, project string) error {
 		Path:           path,
 		ParserVersion:  adapter.ParserVersion(),
 		HeadHash:       headHash,
-		FileSize:       info.Size(),
+		FileSize:       observedSize,
 		IndexedOffset:  indexedOffset,
 		CoverageStatus: coverage,
 		SourceStatus:   "available",
@@ -281,25 +269,46 @@ func (c *ClaudeCollector) processFile(path, project string) error {
 		LastError:      lastError,
 		LastIndexedAt:  time.Now().UTC(),
 	}
-	sourceID, err := c.db.UpsertSessionSource(source)
-	if err != nil {
-		return fmt.Errorf("upsert claude source: %w", err)
-	}
 	for i := range eventRecords {
-		eventRecords[i].SessionSourceID = sourceID
 		eventRecords[i].Source = "claude"
 		eventRecords[i].SessionID = context.SessionID
 	}
-	if err := c.db.InsertSessionEvents(eventRecords); err != nil {
-		return fmt.Errorf("insert claude events: %w", err)
+	if _, err := c.db.UpsertSessionSourceWithEvents(source, eventRecords); err != nil {
+		return fmt.Errorf("upsert claude source and events: %w", err)
 	}
 
-	return c.db.SetFileState(path, info.Size(), indexedOffset, &storage.FileScanContext{
+	return c.db.SetFileState(path, observedSize, indexedOffset, &storage.FileScanContext{
 		SessionID: context.SessionID,
 		CWD:       context.CWD,
 		Version:   context.Version,
 		Model:     context.Model,
 	})
+}
+
+func readClaudeJSONLSnapshot(path string, startOffset, snapshotSize int64, visit func(JSONLRecord) error) (int64, int64, error) {
+	if snapshotSize < startOffset {
+		return startOffset, 0, fmt.Errorf("claude snapshot size %d precedes offset %d", snapshotSize, startOffset)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return startOffset, 0, err
+	}
+	defer f.Close()
+	if startOffset > 0 {
+		if _, err := f.Seek(startOffset, io.SeekStart); err != nil {
+			return startOffset, 0, err
+		}
+	}
+
+	indexedOffset, err := ReadJSONL(io.LimitReader(f, snapshotSize-startOffset), startOffset, visit)
+	if err != nil {
+		return indexedOffset, 0, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return indexedOffset, 0, err
+	}
+	return indexedOffset, info.Size(), nil
 }
 
 func claudeSourceHeadHash(path string, size int64) (string, error) {

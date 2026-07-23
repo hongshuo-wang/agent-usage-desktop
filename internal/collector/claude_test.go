@@ -145,6 +145,130 @@ func TestClaudeCollectorSmallFileAppendPreservesSourceIndex(t *testing.T) {
 	}
 }
 
+func TestClaudeJSONLSnapshotDefersConcurrentAppend(t *testing.T) {
+	root := t.TempDir()
+	first := claudeVisibleLine("sess-snapshot", "2026-01-02T03:04:05Z", "first") + "\n"
+	second := claudeVisibleLine("sess-snapshot", "2026-01-02T03:04:06Z", "second") + "\n"
+	partial := claudeVisibleLine("sess-snapshot", "2026-01-02T03:04:07Z", "partial")
+	path := writeClaudeSessionFile(t, root, "proj", "session.jsonl", first)
+
+	var records []JSONLRecord
+	indexedOffset, observedSize, err := readClaudeJSONLSnapshot(path, 0, int64(len(first)), func(record JSONLRecord) error {
+		records = append(records, record)
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return err
+		}
+		if _, err := f.WriteString(second + partial); err != nil {
+			f.Close()
+			return err
+		}
+		return f.Close()
+	})
+	if err != nil {
+		t.Fatalf("readClaudeJSONLSnapshot: %v", err)
+	}
+	if len(records) != 1 || string(records[0].Data) != strings.TrimSuffix(first, "\n") {
+		t.Fatalf("snapshot records = %+v, want only initial record", records)
+	}
+	if indexedOffset != int64(len(first)) {
+		t.Fatalf("indexed offset = %d, want %d", indexedOffset, len(first))
+	}
+	if observedSize != int64(len(first)+len(second)+len(partial)) {
+		t.Fatalf("observed size = %d, want %d", observedSize, len(first)+len(second)+len(partial))
+	}
+}
+
+func TestClaudeCollectorIndexesDeferredSnapshotDataOnNextScan(t *testing.T) {
+	db := tempDB(t)
+	root := t.TempDir()
+	first := claudeVisibleLine("sess-snapshot-next", "2026-01-02T03:04:05Z", "first") + "\n"
+	second := claudeVisibleLine("sess-snapshot-next", "2026-01-02T03:04:06Z", "second") + "\n"
+	partial := claudeVisibleLine("sess-snapshot-next", "2026-01-02T03:04:07Z", "partial")
+	path := writeClaudeSessionFile(t, root, "proj", "session.jsonl", first)
+
+	indexedOffset, observedSize, err := readClaudeJSONLSnapshot(path, 0, int64(len(first)), func(JSONLRecord) error {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return err
+		}
+		if _, err := f.WriteString(second + partial); err != nil {
+			f.Close()
+			return err
+		}
+		return f.Close()
+	})
+	if err != nil {
+		t.Fatalf("readClaudeJSONLSnapshot: %v", err)
+	}
+	headHash, err := claudeSourceHeadHash(path, observedSize)
+	if err != nil {
+		t.Fatalf("claudeSourceHeadHash: %v", err)
+	}
+	if _, err := db.UpsertSessionSource(&storage.SessionSource{
+		Source:         "claude",
+		SessionID:      "sess-snapshot-next",
+		SourceKind:     "jsonl",
+		Path:           path,
+		ParserVersion:  claudeEventAdapter{}.ParserVersion(),
+		HeadHash:       headHash,
+		FileSize:       observedSize,
+		IndexedOffset:  indexedOffset,
+		CoverageStatus: "partial",
+		SourceStatus:   "available",
+	}); err != nil {
+		t.Fatalf("seed source: %v", err)
+	}
+	if err := db.SetFileState(path, observedSize, indexedOffset, &storage.FileScanContext{
+		SessionID: "sess-snapshot-next",
+		CWD:       "/work",
+		Version:   "1.0",
+	}); err != nil {
+		t.Fatalf("seed file state: %v", err)
+	}
+
+	collector := NewClaudeCollector(db, []string{root})
+	if err := collector.Scan(); err != nil {
+		t.Fatalf("Scan deferred data: %v", err)
+	}
+	events, err := db.ListSessionEvents("claude", "sess-snapshot-next", 10, 0)
+	if err != nil {
+		t.Fatalf("ListSessionEvents: %v", err)
+	}
+	if len(events) != 1 || events[0].Content != "second" {
+		t.Fatalf("deferred events = %+v, want only complete second record", events)
+	}
+	source, err := db.GetSessionSourceByPath(path)
+	if err != nil || source == nil {
+		t.Fatalf("source after deferred scan = %+v, %v", source, err)
+	}
+	if source.CoverageStatus != "partial" || source.IndexedOffset != int64(len(first)+len(second)) {
+		t.Fatalf("source after deferred scan = %+v", source)
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	if _, err := f.WriteString("\n"); err != nil {
+		f.Close()
+		t.Fatalf("complete partial record: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if err := collector.Scan(); err != nil {
+		t.Fatalf("Scan completed tail: %v", err)
+	}
+	events, err = db.ListSessionEvents("claude", "sess-snapshot-next", 10, 0)
+	if err != nil {
+		t.Fatalf("ListSessionEvents completed: %v", err)
+	}
+	if len(events) != 2 || events[1].Content != "partial" {
+		t.Fatalf("completed events = %+v", events)
+	}
+}
+
 func TestClaudeCollectorPartialLineWaitsForNewline(t *testing.T) {
 	db := tempDB(t)
 	root := t.TempDir()
