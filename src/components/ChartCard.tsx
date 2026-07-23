@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import * as echarts from "echarts/core";
-import { BarChart, PieChart } from "echarts/charts";
+import { BarChart, LineChart, PieChart } from "echarts/charts";
 import { GridComponent, LegendComponent, TooltipComponent } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 
-echarts.use([BarChart, PieChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer]);
+echarts.use([BarChart, LineChart, PieChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer]);
 
 interface ChartCardProps {
   title: string;
@@ -35,14 +35,22 @@ export default function ChartCard({ title, option, className, onEvents }: ChartC
     const axisLine = isDark ? "#2e2e2e" : "#e5e5e5";
     const base = option as Record<string, unknown>;
     const baseXAxis = (base.xAxis as Record<string, unknown>) || {};
-    const baseYAxis = (base.yAxis as Record<string, unknown>) || {};
+    const themeYAxis = (axis: Record<string, unknown>) => ({
+      ...axis,
+      axisLine: { show: false },
+      axisLabel: { ...(axis.axisLabel as object || {}), color: textColor, fontSize: 11 },
+      splitLine: { ...(axis.splitLine as object || {}), lineStyle: { color: axisLine, type: "dashed" as const } },
+    });
+    const baseYAxis = base.yAxis;
     return {
       ...base,
       backgroundColor: "transparent",
       tooltip: { ...(base.tooltip as object || {}), backgroundColor: isDark ? "#1a1a1a" : "#fff", borderColor: axisLine, textStyle: { color: isDark ? "#ededed" : "#171717", fontSize: 12 } },
       legend: { ...(base.legend as object || {}), textStyle: { color: textColor, fontSize: 11 } },
       xAxis: { ...baseXAxis, axisLine: { lineStyle: { color: axisLine } }, axisLabel: { ...(baseXAxis.axisLabel as object || {}), color: textColor, fontSize: 11 }, splitLine: { lineStyle: { color: axisLine, type: "dashed" as const } } },
-      yAxis: { ...baseYAxis, axisLine: { show: false }, axisLabel: { ...(baseYAxis.axisLabel as object || {}), color: textColor, fontSize: 11 }, splitLine: { lineStyle: { color: axisLine, type: "dashed" as const } } },
+      yAxis: Array.isArray(baseYAxis)
+        ? baseYAxis.map((axis) => themeYAxis((axis as Record<string, unknown>) || {}))
+        : themeYAxis((baseYAxis as Record<string, unknown>) || {}),
     };
   }, [option, isDark]);
 

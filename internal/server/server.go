@@ -62,6 +62,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tokens-over-time", s.handleTokensOverTime)
 	mux.HandleFunc("GET /api/throughput", s.handleThroughput)
 	mux.HandleFunc("GET /api/usage-breakdown", s.handleUsageBreakdown)
+	mux.HandleFunc("GET /api/collection-index-status", s.handleCollectionIndexStatus)
 	mux.HandleFunc("GET /api/sessions", s.handleSessionSearch)
 	mux.HandleFunc("GET /api/sessions/{source}/{session_id}/events", s.handleSessionEventsRoute)
 	mux.HandleFunc("GET /api/sessions/{source}/{session_id}/events/{event_id}/raw", s.handleSessionRawRoute)

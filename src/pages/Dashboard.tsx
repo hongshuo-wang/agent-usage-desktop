@@ -5,6 +5,7 @@ import ChartCard from "../components/ChartCard";
 import TimeRangeSelector from "../components/TimeRangeSelector";
 import { fetchAPI } from "../lib/api";
 import type {
+  CollectionIndexStatus,
   DashboardStats,
   ThroughputResult,
   TokensRow,
@@ -25,7 +26,7 @@ type DashboardData = {
   sources: UsageBreakdown[];
   models: UsageBreakdown[];
   projects: UsageBreakdown[];
-  throughput: ThroughputResult;
+  collectionStatus: CollectionIndexStatus;
 };
 
 const EMPTY_THROUGHPUT: ThroughputResult = {
@@ -80,45 +81,120 @@ function BreakdownRows({
   onSelect,
   t,
   compact = false,
+  composition = false,
 }: {
   rows: UsageBreakdown[];
   onSelect: (key: string) => void;
   t: (key: string) => string;
   compact?: boolean;
+  composition?: boolean;
 }) {
   if (!rows.length) {
     return <div className="py-8 text-center text-xs text-muted-foreground">{t("noUsageData")}</div>;
   }
   const maxTokens = Math.max(...rows.map((row) => row.total_tokens), 1);
+  const totalTokens = rows.reduce((sum, row) => sum + row.total_tokens, 0);
   return (
     <div className="min-w-0 divide-y divide-border">
-      {rows.slice(0, compact ? 6 : 8).map((row, index) => (
-        <button
-          key={row.key || `${index}`}
-          type="button"
-          aria-label={`${t("viewSessionsFor")} ${row.key || t("unknown")}`}
-          onClick={() => onSelect(row.key)}
-          className="group grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 px-1 py-2 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-        >
-          <span className="min-w-0">
-            <span className="block truncate text-xs font-medium">{row.key || t("unknown")}</span>
-            <span className="mt-1 block h-1 overflow-hidden rounded bg-muted">
-              <span
-                className="block h-full rounded bg-accent transition-[width] duration-200"
-                style={{ width: `${Math.max(3, (row.total_tokens / maxTokens) * 100)}%` }}
-              />
+      {rows.slice(0, compact ? 6 : 8).map((row, index) => {
+        const share = totalTokens > 0 ? (row.total_tokens / totalTokens) * 100 : 0;
+        const barWidth = composition ? share : (row.total_tokens / maxTokens) * 100;
+        return (
+          <button
+            key={row.key || `${index}`}
+            type="button"
+            aria-label={`${t("viewSessionsFor")} ${row.key || t("unknown")}`}
+            onClick={() => onSelect(row.key)}
+            className="group grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 px-1 py-2 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <span className="min-w-0">
+              <span className="block truncate text-xs font-medium">{row.key || t("unknown")}</span>
+              <span className="mt-1 block h-1 overflow-hidden rounded bg-muted">
+                <span
+                  data-testid={composition ? "composition-share" : undefined}
+                  className="block h-full rounded bg-accent transition-[width] duration-200"
+                  style={{ width: `${composition ? barWidth : Math.max(3, barWidth)}%` }}
+                />
+              </span>
             </span>
-          </span>
-          <span className="text-right">
-            <span className="block font-mono text-xs font-semibold tabular-nums">{fmtTokens(row.total_tokens)}</span>
-            <span className="block text-[10px] text-muted-foreground">
-              {row.sessions} {t("sessions")} / {row.calls} {t("calls")}
+            <span className="text-right">
+              <span className="block font-mono text-xs font-semibold tabular-nums">{fmtTokens(row.total_tokens)}</span>
+              {composition ? (
+                <>
+                  <span className="block font-mono text-[10px] tabular-nums text-muted-foreground">{fmtCost(row.total_cost)}</span>
+                  <span className="block font-mono text-[10px] tabular-nums text-muted-foreground">{share.toFixed(1)}%</span>
+                  <span className="block text-[10px] text-muted-foreground">{row.sessions} {t("sessions")}</span>
+                </>
+              ) : (
+                <span className="block text-[10px] text-muted-foreground">
+                  {row.sessions} {t("sessions")} / {row.calls} {t("calls")}
+                </span>
+              )}
             </span>
-          </span>
-        </button>
-      ))}
+          </button>
+        );
+      })}
     </div>
   );
+}
+
+function formatThroughput(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function ThroughputMatrix({ throughput, t }: {
+  throughput: ThroughputResult;
+  t: (key: string) => string;
+}) {
+  const rows = [
+    ["throughput-average", t("averageActiveMinute"), throughput.average_active_minute],
+    ["throughput-peak", t("peakRolling60s"), throughput.peak_rolling_60s],
+    ["throughput-p95", t("p95Rolling60s"), throughput.p95_rolling_60s],
+  ] as const;
+  return (
+    <div data-testid="throughput-matrix" className="min-w-0 overflow-x-auto">
+      <table className="w-full min-w-[32rem] text-[10px]">
+        <thead className="text-left text-muted-foreground">
+          <tr>
+            <th className="pb-1.5 pr-2">{t("window")}</th>
+            <th className="pb-1.5 pr-2 text-right">{t("rpm")}</th>
+            <th className="pb-1.5 pr-2 text-right">{t("totalTPM")}</th>
+            <th className="pb-1.5 pr-2 text-right">{t("input")}</th>
+            <th className="pb-1.5 pr-2 text-right">{t("cacheRead")}</th>
+            <th className="pb-1.5 pr-2 text-right">{t("cacheCreate")}</th>
+            <th className="pb-1.5 text-right">{t("output")}</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border font-mono tabular-nums">
+          {rows.map(([testID, label, values]) => (
+            <tr key={testID} data-testid={testID}>
+              <th className="py-1.5 pr-2 text-left font-sans font-medium">{label}</th>
+              <td className="py-1.5 pr-2 text-right">{formatThroughput(values.rpm)}</td>
+              <td className="py-1.5 pr-2 text-right font-semibold">{formatThroughput(values.total_tpm)}</td>
+              <td className="py-1.5 pr-2 text-right">{formatThroughput(values.input_tpm)}</td>
+              <td className="py-1.5 pr-2 text-right">{formatThroughput(values.cache_read_tpm)}</td>
+              <td className="py-1.5 pr-2 text-right">{formatThroughput(values.cache_create_tpm)}</td>
+              <td className="py-1.5 text-right">{formatThroughput(values.output_tpm)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+const COLLECTION_STATUS_KEYS: Record<CollectionIndexStatus["status"], string> = {
+  empty: "collectionStatusEmpty",
+  stats_only: "collectionStatusStatsOnly",
+  missing_source: "collectionStatusMissing",
+  rebuild_required: "collectionStatusRebuild",
+  stale_parser: "collectionStatusStale",
+  partial: "collectionStatusPartial",
+  available: "collectionStatusAvailable",
+};
+
+function formatLastIndexed(value: string | null): string {
+  return value ? value.slice(0, 16).replace("T", " ") : "";
 }
 
 function ModelTable({ rows, onSelect, t }: {
@@ -175,8 +251,11 @@ export default function Dashboard() {
   const [filters, setFilters] = useState<UsageFilters>(() => getInitialUsageFilters(location.search));
   const [granularity, setGranularity] = useState(() => localStorage.getItem("au-granularity") || "1h");
   const [data, setData] = useState<DashboardData | null>(null);
+  const [throughput, setThroughput] = useState<ThroughputResult>(EMPTY_THROUGHPUT);
+  const [throughputModel, setThroughputModel] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [throughputError, setThroughputError] = useState<string | null>(null);
 
   useEffect(() => persistUsageFilters(filters), [filters]);
 
@@ -185,13 +264,13 @@ export default function Dashboard() {
     setLoading(true);
     setError(null);
     try {
-      const [stats, tokens, sources, models, projects, throughput] = await Promise.all([
+      const [stats, tokens, sources, models, projects, collectionStatus] = await Promise.all([
         fetchAPI<DashboardStats>("stats", request),
         fetchAPI<TokensRow[]>("tokens-over-time", request),
         fetchAPI<UsageBreakdown[]>("usage-breakdown", { ...request, dimension: "source" }),
         fetchAPI<UsageBreakdown[]>("usage-breakdown", { ...request, dimension: "model" }),
         fetchAPI<UsageBreakdown[]>("usage-breakdown", { ...request, dimension: "project" }),
-        fetchAPI<ThroughputResult>("throughput", request),
+        fetchAPI<CollectionIndexStatus>("collection-index-status", {}),
       ]);
       setData({
         stats,
@@ -199,7 +278,7 @@ export default function Dashboard() {
         sources: sources || [],
         models: models || [],
         projects: projects || [],
-        throughput: throughput || EMPTY_THROUGHPUT,
+        collectionStatus,
       });
     } catch (cause) {
       console.error("Dashboard fetch error:", cause);
@@ -210,6 +289,23 @@ export default function Dashboard() {
   }, [filters.from, filters.to, filters.source, granularity]);
 
   useEffect(() => { void fetchData(); }, [fetchData]);
+
+  const fetchThroughput = useCallback(async () => {
+    setThroughputError(null);
+    try {
+      const request = {
+        ...getUsageRequestParams(filters),
+        ...(throughputModel ? { model: throughputModel } : {}),
+      };
+      const result = await fetchAPI<ThroughputResult>("throughput", request);
+      setThroughput(result || EMPTY_THROUGHPUT);
+    } catch (cause) {
+      console.error("Throughput fetch error:", cause);
+      setThroughputError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [filters.from, filters.to, filters.source, throughputModel]);
+
+  useEffect(() => { void fetchThroughput(); }, [fetchThroughput]);
 
   const updatePreset = (preset: TimePreset) => {
     setFilters((current) => ({
@@ -251,16 +347,21 @@ export default function Dashboard() {
 
   const throughputOption = useMemo(() => ({
     tooltip: { trigger: "axis" },
-    grid: { left: 8, right: 8, top: 8, bottom: 4, containLabel: true },
-    xAxis: { type: "category", data: data?.throughput.series.map((point) => point.minute) || [], axisLabel: { hideOverlap: true, fontSize: 10 } },
-    yAxis: { type: "value" },
-    series: [{
-      name: t("totalTPM"),
-      type: "bar",
-      data: data?.throughput.series.map((point) => point.total_tpm) || [],
-      color: CHART_COLORS[5],
-    }],
-  }), [data?.throughput.series, t]);
+    legend: { type: "scroll", top: 0, left: "center" },
+    grid: { left: 8, right: 8, top: 30, bottom: 4, containLabel: true },
+    xAxis: { type: "category", data: throughput.series.map((point) => point.minute), axisLabel: { hideOverlap: true, fontSize: 10 } },
+    yAxis: [
+      { type: "value", name: "TPM" },
+      { type: "value", name: "RPM", position: "right", splitLine: { show: false } },
+    ],
+    series: [
+      { name: t("input"), type: "bar", stack: "tpm", yAxisIndex: 0, data: throughput.series.map((point) => point.input_tpm), color: CHART_COLORS[0] },
+      { name: t("cacheRead"), type: "bar", stack: "tpm", yAxisIndex: 0, data: throughput.series.map((point) => point.cache_read_tpm), color: CHART_COLORS[3] },
+      { name: t("cacheCreate"), type: "bar", stack: "tpm", yAxisIndex: 0, data: throughput.series.map((point) => point.cache_create_tpm), color: CHART_COLORS[2] },
+      { name: t("output"), type: "bar", stack: "tpm", yAxisIndex: 0, data: throughput.series.map((point) => point.output_tpm), color: CHART_COLORS[1] },
+      { name: t("rpm"), type: "line", yAxisIndex: 1, data: throughput.series.map((point) => point.rpm), color: CHART_COLORS[5], smooth: true },
+    ],
+  }), [throughput, t]);
 
   const stats = data?.stats;
   const noUsage = Boolean(data && !data.stats.total_calls && !data.stats.total_tokens
@@ -275,12 +376,33 @@ export default function Dashboard() {
         onGranularityChange={updateGranularity}
         source={filters.source}
         onSourceChange={(source) => setFilters((current) => ({ ...current, source }))}
-        onRefresh={() => { void fetchData(); }}
+        onRefresh={() => { void fetchData(); void fetchThroughput(); }}
         customFrom={filters.from}
         customTo={filters.to}
         onCustomFromChange={(from) => setFilters((current) => ({ ...current, preset: "custom", from }))}
         onCustomToChange={(to) => setFilters((current) => ({ ...current, preset: "custom", to }))}
       />
+
+      {data?.collectionStatus && (
+        <aside
+          data-testid="collection-index-status"
+          className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-y border-border bg-card/30 px-3 py-2 text-xs"
+        >
+          <span className="font-medium">{t("collectionIndexStatus")}</span>
+          <span className="font-medium text-accent">{t(COLLECTION_STATUS_KEYS[data.collectionStatus.status])}</span>
+          <span className="text-muted-foreground">{t("lastIndexUpdate")}</span>
+          {data.collectionStatus.last_indexed_at ? (
+            <time dateTime={data.collectionStatus.last_indexed_at} className="font-mono tabular-nums">
+              {formatLastIndexed(data.collectionStatus.last_indexed_at)}
+            </time>
+          ) : (
+            <span className="text-muted-foreground">{t("notAvailable")}</span>
+          )}
+          <span className="ml-auto text-muted-foreground">
+            {data.collectionStatus.source_count} {t("indexedSources")} / {data.collectionStatus.file_count} {t("indexedFiles")} / {data.collectionStatus.malformed_lines} {t("malformedLines")}
+          </span>
+        </aside>
+      )}
 
       {(filters.model || filters.project) && (
         <aside data-testid="drilldown-context" className="flex min-w-0 flex-wrap items-center gap-2 border-l-2 border-accent px-3 py-1.5 text-xs">
@@ -376,6 +498,7 @@ export default function Dashboard() {
                     rows={data.sources}
                     onSelect={(source) => openSessions({ source })}
                     t={t}
+                    composition
                   />
                 </div>
               </div>
@@ -397,12 +520,30 @@ export default function Dashboard() {
                   />
                 </div>
                 <div className="min-w-0 border-t border-border pt-4 xl:border-l xl:border-t-0 xl:pl-5 xl:pt-0">
-                  <BandTitle title={t("localObservedThroughput")} detail={t("notProviderQuota")} />
-                  <div className="grid grid-cols-3 gap-2">
-                    <Metric label={t("peakRPM")} value={data.throughput.peak_rolling_60s.rpm.toFixed(0)} />
-                    <Metric label={t("peakTPM")} value={fmtTokens(data.throughput.peak_rolling_60s.total_tpm)} />
-                    <Metric label={t("p95TPM")} value={fmtTokens(data.throughput.p95_rolling_60s.total_tpm)} />
-                  </div>
+                  <header className="mb-3 flex min-w-0 flex-wrap items-end justify-between gap-2">
+                    <div className="min-w-0">
+                      <h2 className="truncate text-sm font-semibold">{t("localObservedThroughput")}</h2>
+                      <p className="truncate text-xs text-muted-foreground">{t("notProviderQuota")}</p>
+                    </div>
+                    <label className="flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground">
+                      <span>{t("throughputModel")}</span>
+                      <select
+                        aria-label={t("throughputModel")}
+                        value={throughputModel}
+                        onChange={(event) => setThroughputModel(event.target.value)}
+                        className="max-w-36 rounded border border-border bg-card px-2 py-1 text-xs text-foreground"
+                      >
+                        <option value="">{t("allModels")}</option>
+                        {data.models.filter((row) => row.key).map((row) => (
+                          <option key={row.key} value={row.key}>{row.key}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </header>
+                  <ThroughputMatrix throughput={throughput} t={t} />
+                  {throughputError && (
+                    <p className="mt-2 break-words text-xs text-red-500">{throughputError}</p>
+                  )}
                   <ChartCard title={t("observedTPMTrend")} option={throughputOption} className="mt-3 h-40" />
                 </div>
               </div>

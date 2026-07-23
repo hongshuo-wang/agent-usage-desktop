@@ -59,3 +59,16 @@ export interface ThroughputResult {
   p95_rolling_60s: ThroughputValues;
   series: ThroughputPoint[];
 }
+
+export interface CollectionIndexStatus {
+  status: "empty" | "stats_only" | "missing_source" | "rebuild_required" | "stale_parser" | "partial" | "available";
+  last_indexed_at: string | null;
+  source_count: number;
+  file_count: number;
+  complete_files: number;
+  partial_files: number;
+  missing_files: number;
+  rebuild_required_files: number;
+  stale_parser_files: number;
+  malformed_lines: number;
+}
