@@ -303,6 +303,45 @@ func TestSessionEventsAreChronologicalPagedAndSourceBound(t *testing.T) {
 	}
 }
 
+func TestSessionEventResponseJSONContract(t *testing.T) {
+	db := tempDB(t)
+	timestamp := time.Date(2025, 7, 24, 1, 10, 11, 123456789, time.UTC)
+	_, err := db.UpsertSessionSourceWithEvents(&storage.SessionSource{
+		Source: "claude", SessionID: "response-contract", Path: "/sessions/response-contract.jsonl",
+		ParserVersion: "v1", CoverageStatus: "complete", SourceStatus: "available",
+	}, []storage.SessionEventRecord{{
+		Source: "claude", SessionID: "response-contract", EventType: "user_message",
+		Timestamp: timestamp, Role: "user", Content: "contract event",
+	}})
+	if err != nil {
+		t.Fatalf("seed response contract event: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/claude/response-contract/events", nil)
+	w := httptest.NewRecorder()
+	New(db, "127.0.0.1:0").Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var events []map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&events); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1: %+v", len(events), events)
+	}
+	gotTimestamp, ok := events[0]["timestamp"].(string)
+	if !ok {
+		t.Fatalf("timestamp = %T(%v), want JSON string", events[0]["timestamp"], events[0]["timestamp"])
+	}
+	if want := timestamp.UTC().Format(time.RFC3339Nano); gotTimestamp != want {
+		t.Errorf("timestamp = %q, want %q", gotTimestamp, want)
+	}
+	if duration, exists := events[0]["duration_ms"]; !exists || duration != nil {
+		t.Errorf("duration_ms = %v (exists %t), want explicit JSON null", duration, exists)
+	}
+}
+
 func TestSessionEventsRejectInvalidInputAndMethods(t *testing.T) {
 	fx := seedSessionAPI(t)
 	base := "/api/sessions/claude/shared/events"

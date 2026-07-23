@@ -24,19 +24,19 @@ const (
 
 // SessionEventResponse adds raw-record availability to a normalized event.
 type SessionEventResponse struct {
-	ID              int64     `json:"id"`
-	EventType       string    `json:"event_type"`
-	SourceEventType string    `json:"source_event_type"`
-	Timestamp       time.Time `json:"timestamp,omitempty"`
-	Role            string    `json:"role"`
-	Content         string    `json:"content"`
-	ToolName        string    `json:"tool_name"`
-	ToolCallID      string    `json:"tool_call_id"`
-	ToolInput       string    `json:"tool_input"`
-	ToolOutput      string    `json:"tool_output"`
-	EventStatus     string    `json:"event_status"`
-	DurationMS      *int64    `json:"duration_ms,omitempty"`
-	HasRaw          bool      `json:"has_raw"`
+	ID              int64  `json:"id"`
+	EventType       string `json:"event_type"`
+	SourceEventType string `json:"source_event_type"`
+	Timestamp       string `json:"timestamp"`
+	Role            string `json:"role"`
+	Content         string `json:"content"`
+	ToolName        string `json:"tool_name"`
+	ToolCallID      string `json:"tool_call_id"`
+	ToolInput       string `json:"tool_input"`
+	ToolOutput      string `json:"tool_output"`
+	EventStatus     string `json:"event_status"`
+	DurationMS      *int64 `json:"duration_ms"`
+	HasRaw          bool   `json:"has_raw"`
 }
 
 // RawEventResponse returns the exact bytes addressed by an event locator.
@@ -117,7 +117,7 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request, sou
 	for _, event := range events {
 		item := SessionEventResponse{
 			ID: event.ID, EventType: event.EventType, SourceEventType: event.SourceEventType,
-			Timestamp: event.Timestamp, Role: event.Role, Content: event.Content,
+			Timestamp: event.Timestamp.UTC().Format(time.RFC3339Nano), Role: event.Role, Content: event.Content,
 			ToolName: event.ToolName, ToolCallID: event.ToolCallID, ToolInput: event.ToolInput,
 			ToolOutput: event.ToolOutput, EventStatus: event.EventStatus, DurationMS: event.DurationMS,
 		}

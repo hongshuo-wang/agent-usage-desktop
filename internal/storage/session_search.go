@@ -230,17 +230,15 @@ func (d *DB) loadSessionSummary(query SessionQuery, identity sessionIdentity) (S
 	}
 
 	var sourceCount, partialCount, missingCount, rebuildCount, staleCount, otherUnavailableCount int
-	var otherUnavailableStatus sql.NullString
 	if err := d.db.QueryRow(`SELECT COUNT(*),
 		COALESCE(SUM(CASE WHEN coverage_status!='complete' THEN 1 ELSE 0 END),0),
 		COALESCE(SUM(CASE WHEN source_status='missing_source' THEN 1 ELSE 0 END),0),
 		COALESCE(SUM(CASE WHEN source_status='rebuild_required' THEN 1 ELSE 0 END),0),
 		COALESCE(SUM(CASE WHEN source_status='stale_parser' THEN 1 ELSE 0 END),0),
 		COALESCE(SUM(CASE WHEN source_status NOT IN ('available','missing_source','rebuild_required','stale_parser') THEN 1 ELSE 0 END),0),
-		MAX(CASE WHEN source_status NOT IN ('available','missing_source','rebuild_required','stale_parser') THEN source_status ELSE NULL END),
 		COALESCE(SUM(malformed_lines),0)
 		FROM session_sources WHERE source=? AND session_id=?`, identity.source, identity.sessionID).
-		Scan(&sourceCount, &partialCount, &missingCount, &rebuildCount, &staleCount, &otherUnavailableCount, &otherUnavailableStatus, &summary.MalformedLines); err != nil {
+		Scan(&sourceCount, &partialCount, &missingCount, &rebuildCount, &staleCount, &otherUnavailableCount, &summary.MalformedLines); err != nil {
 		return SessionSummary{}, err
 	}
 	if sourceCount > 0 {
@@ -257,8 +255,8 @@ func (d *DB) loadSessionSummary(query SessionQuery, identity sessionIdentity) (S
 		summary.SourceStatus = "rebuild_required"
 	case staleCount > 0:
 		summary.SourceStatus = "stale_parser"
-	case otherUnavailableCount > 0 && otherUnavailableStatus.Valid:
-		summary.SourceStatus = otherUnavailableStatus.String
+	case otherUnavailableCount > 0:
+		summary.SourceStatus = "unavailable"
 	}
 	return summary, nil
 }
