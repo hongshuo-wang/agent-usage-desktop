@@ -34,10 +34,5 @@
       "icons/icon.ico"
     ],
     "externalBin": ["binaries/agent-usage"]
-  },
-  "plugins": {
-    "shell": {
-      "open": true
-    }
   }
 }

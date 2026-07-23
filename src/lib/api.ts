@@ -124,18 +124,6 @@ export async function fetchRaw<T>(path: string): Promise<T> {
   return requestJSON<T>(path);
 }
 
-export async function mutateAPI<T>(
-  method: "POST" | "PUT" | "DELETE",
-  path: string,
-  body?: unknown
-): Promise<T> {
-  return requestJSON<T>(path, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
-}
-
 export class ApiError extends Error {
   constructor(
     public code: string,

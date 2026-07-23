@@ -26,5 +26,10 @@ describe("Layout", () => {
     expect(screen.getByRole("link", { name: "sessionLog" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "settings" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "config" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("link").map((link) => link.getAttribute("href"))).toEqual([
+      "/",
+      "/sessions",
+      "/settings",
+    ]);
   });
 });

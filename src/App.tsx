@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Navigate, Routes, Route } from "react-router-dom";
 import { Suspense, lazy } from "react";
 import Layout from "./components/Layout";
 
@@ -15,6 +15,7 @@ function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/sessions" element={<Sessions />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>
       </Layout>
