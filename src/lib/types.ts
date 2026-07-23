@@ -131,3 +131,26 @@ export interface RawEventResponse {
   content_type: string;
   content: string;
 }
+
+export type CollectorName = "claude" | "codex" | "openclaw" | "opencode";
+
+export interface CollectorSetting {
+  name: CollectorName;
+  enabled: boolean;
+  paths: string[];
+  scan_interval: string;
+}
+
+export interface CollectorSettings {
+  collectors: CollectorSetting[];
+  pricing_sync_interval: string;
+}
+
+export interface SettingsUpdateResponse {
+  restart_required: boolean;
+}
+
+export interface SessionIndexRebuildResponse {
+  status: string;
+  sources: number;
+}

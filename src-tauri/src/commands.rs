@@ -50,3 +50,16 @@ pub fn set_notifications_enabled(app: tauri::AppHandle, enabled: bool) -> Result
     settings["notifications_enabled"] = serde_json::json!(enabled);
     write_settings(&app, &settings)
 }
+
+#[tauri::command]
+pub async fn restart_sidecar(app: tauri::AppHandle) -> Result<u16, String> {
+    crate::sidecar::restart_sidecar(&app).await
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn restart_sidecar_command_is_exposed() {
+        let _ = super::restart_sidecar;
+    }
+}

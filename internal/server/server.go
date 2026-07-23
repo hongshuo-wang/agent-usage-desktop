@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/hongshuo-wang/agent-usage-desktop/internal/storage"
@@ -13,13 +14,29 @@ import (
 
 // Server serves the REST API.
 type Server struct {
-	db   *storage.DB
-	addr string
+	db         *storage.DB
+	addr       string
+	configPath string
+	configMu   sync.Mutex
+}
+
+// Option configures optional server features.
+type Option func(*Server)
+
+// WithConfigPath enables app-settings reads and atomic mutations at path.
+func WithConfigPath(path string) Option {
+	return func(server *Server) {
+		server.configPath = path
+	}
 }
 
 // New creates a Server that will listen on the given address (host:port).
-func New(db *storage.DB, addr string) *Server {
-	return &Server{db: db, addr: addr}
+func New(db *storage.DB, addr string, options ...Option) *Server {
+	server := &Server{db: db, addr: addr}
+	for _, option := range options {
+		option(server)
+	}
+	return server
 }
 
 var allowedCORSOrigins = map[string]bool{
@@ -63,6 +80,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/throughput", s.handleThroughput)
 	mux.HandleFunc("GET /api/usage-breakdown", s.handleUsageBreakdown)
 	mux.HandleFunc("GET /api/collection-index-status", s.handleCollectionIndexStatus)
+	mux.HandleFunc("GET /api/settings/collectors", s.handleCollectorSettingsGet)
+	mux.HandleFunc("PUT /api/settings/collectors", s.handleCollectorSettingsPut)
 	mux.HandleFunc("GET /api/sessions", s.handleSessionSearch)
 	mux.HandleFunc("GET /api/sessions/{source}/{session_id}/events", s.handleSessionEventsRoute)
 	mux.HandleFunc("GET /api/sessions/{source}/{session_id}/events/{event_id}/raw", s.handleSessionRawRoute)

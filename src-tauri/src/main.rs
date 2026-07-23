@@ -126,6 +126,7 @@ fn main() {
             commands::set_cost_threshold,
             commands::get_notifications_enabled,
             commands::set_notifications_enabled,
+            commands::restart_sidecar,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

@@ -11,10 +11,10 @@ import (
 
 // Config holds the top-level application configuration.
 type Config struct {
-	Server  ServerConfig  `yaml:"server"`
+	Server     ServerConfig     `yaml:"server"`
 	Collectors CollectorConfigs `yaml:"collectors"`
-	Storage StorageConfig `yaml:"storage"`
-	Pricing PricingConfig `yaml:"pricing"`
+	Storage    StorageConfig    `yaml:"storage"`
+	Pricing    PricingConfig    `yaml:"pricing"`
 }
 
 // ServerConfig holds HTTP server settings.
@@ -127,4 +127,34 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.Storage.Path = expandPath(cfg.Storage.Path)
 	return cfg, nil
+}
+
+// Save atomically writes configuration with owner-only permissions.
+func Save(path string, cfg *Config) error {
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".agent-usage-config-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }

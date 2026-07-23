@@ -1,0 +1,175 @@
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
+import { fetchAPI } from "../lib/api";
+import Settings from "./Settings";
+
+const changeLanguage = vi.fn();
+
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({
+    t: (key: string) => key,
+    i18n: { language: "en", changeLanguage },
+  }),
+}));
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("../lib/api", () => ({ fetchAPI: vi.fn() }));
+
+const settings = {
+  collectors: [
+    { name: "claude", enabled: true, paths: ["/claude/a", "/claude/b"], scan_interval: "1m0s" },
+    { name: "codex", enabled: true, paths: ["/codex"], scan_interval: "1m0s" },
+    { name: "openclaw", enabled: true, paths: ["/openclaw"], scan_interval: "2m0s" },
+    { name: "opencode", enabled: false, paths: ["/opencode.db"], scan_interval: "5m0s" },
+  ],
+  pricing_sync_interval: "1h0m0s",
+};
+
+function mockDesktopSettings() {
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "get_cost_threshold") return 10;
+    if (command === "plugin:autostart|is_enabled") return false;
+    if (command === "get_notifications_enabled") return true;
+    if (command === "restart_sidecar") return 9900;
+    return undefined;
+  });
+}
+
+describe("application settings", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    document.documentElement.classList.remove("dark");
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn().mockReturnValue({ matches: false }),
+    });
+    mockDesktopSettings();
+    vi.mocked(fetchAPI).mockImplementation(async (path, _params, init) => {
+      if (path === "settings/collectors" && init?.method === "PUT") return { restart_required: true } as never;
+      if (path === "settings/collectors") return settings as never;
+      if (path === "session-index/rebuild") return { status: "rebuild_required", sources: 4 } as never;
+      throw new Error(`unexpected path ${path}`);
+    });
+  });
+
+  it("renders only app settings with collector capabilities and multi-path values", async () => {
+    render(<Settings />);
+    expect(screen.getByText("loadingSettings")).toBeVisible();
+
+    expect(await screen.findByRole("switch", { name: "collectorEnabled claudeCode" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "collectorEnabled codex" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "collectorEnabled openClaw" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "collectorEnabled openCode" })).not.toBeChecked();
+    expect(screen.getAllByText("fullRetrospective")).toHaveLength(2);
+    expect(screen.getAllByText("statisticsOnly")).toHaveLength(2);
+    expect(screen.getByRole("textbox", { name: "collectorPaths claudeCode" })).toHaveValue("/claude/a\n/claude/b");
+    expect(screen.getByRole("textbox", { name: "pricingSyncInterval" })).toHaveValue("1h0m0s");
+    expect(screen.getByRole("switch", { name: "notification" })).toBeChecked();
+    expect(screen.getByRole("spinbutton", { name: "dailyCostThreshold" })).toHaveValue(10);
+
+    expect(screen.queryByText(/hermes|provider|mcp|skills|backup|account|team/i)).not.toBeInTheDocument();
+  });
+
+  it("saves edited collector settings and restarts only after the PUT succeeds", async () => {
+    const user = userEvent.setup();
+    render(<Settings />);
+    const claudeToggle = await screen.findByRole("switch", { name: "collectorEnabled claudeCode" });
+    await user.click(claudeToggle);
+    fireEvent.change(screen.getByRole("textbox", { name: "collectorPaths claudeCode" }), {
+      target: { value: "/new/one\n/new/two" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "scanInterval claudeCode" }), {
+      target: { value: "30s" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "pricingSyncInterval" }), {
+      target: { value: "2h" },
+    });
+    await user.click(screen.getByRole("button", { name: "saveCollectorSettings" }));
+
+    await waitFor(() => expect(screen.getByText("settingsSavedAndRestarted")).toBeVisible());
+    const put = vi.mocked(fetchAPI).mock.calls.find(([path, , init]) => path === "settings/collectors" && init?.method === "PUT");
+    expect(put).toBeDefined();
+    const body = JSON.parse(String(put?.[2]?.body));
+    expect(body.collectors[0]).toEqual({
+      name: "claude", enabled: false, paths: ["/new/one", "/new/two"], scan_interval: "30s",
+    });
+    expect(body.pricing_sync_interval).toBe("2h");
+    expect(invoke).toHaveBeenCalledWith("restart_sidecar");
+  });
+
+  it("shows save errors and does not restart after a failed PUT", async () => {
+    vi.mocked(fetchAPI).mockImplementation(async (path, _params, init) => {
+      if (path === "settings/collectors" && init?.method === "PUT") throw new Error("save rejected");
+      if (path === "settings/collectors") return settings as never;
+      throw new Error(`unexpected path ${path}`);
+    });
+    render(<Settings />);
+    await screen.findByRole("button", { name: "saveCollectorSettings" });
+    fireEvent.click(screen.getByRole("button", { name: "saveCollectorSettings" }));
+
+    expect(await screen.findByText("save rejected")).toBeVisible();
+    expect(invoke).not.toHaveBeenCalledWith("restart_sidecar");
+  });
+
+  it.each([
+    ["success", false],
+    ["failure", true],
+  ])("requires rebuild confirmation and handles %s without premature restart", async (_name, fail) => {
+    if (fail) {
+      vi.mocked(fetchAPI).mockImplementation(async (path) => {
+        if (path === "settings/collectors") return settings as never;
+        if (path === "session-index/rebuild") throw new Error("rebuild rejected");
+        throw new Error(`unexpected path ${path}`);
+      });
+    }
+    const user = userEvent.setup();
+    render(<Settings />);
+    await screen.findByRole("button", { name: "rebuildSessionIndex" });
+    await user.click(screen.getByRole("button", { name: "rebuildSessionIndex" }));
+    const dialog = screen.getByRole("dialog", { name: "confirmRebuildTitle" });
+    expect(fetchAPI).not.toHaveBeenCalledWith("session-index/rebuild", expect.anything(), expect.anything());
+
+    await user.click(within(dialog).getByRole("button", { name: "confirmRebuild" }));
+    if (fail) {
+      expect(await screen.findByText("rebuild rejected")).toBeVisible();
+      expect(invoke).not.toHaveBeenCalledWith("restart_sidecar");
+    } else {
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("restart_sidecar"));
+      expect(screen.getByText("rebuildStartedAndRestarted")).toBeVisible();
+    }
+  });
+
+  it("supports segmented language/theme controls and app notification settings", async () => {
+    const user = userEvent.setup();
+    render(<Settings />);
+    await screen.findByRole("button", { name: "dark" });
+    await user.click(screen.getByRole("button", { name: "dark" }));
+    expect(screen.getByRole("button", { name: "dark" })).toHaveAttribute("aria-pressed", "true");
+    expect(document.documentElement).toHaveClass("dark");
+    await user.click(screen.getByRole("button", { name: "中文" }));
+    expect(changeLanguage).toHaveBeenCalledWith("zh");
+
+    await user.click(screen.getByRole("switch", { name: "notification" }));
+    expect(invoke).toHaveBeenCalledWith("set_notifications_enabled", { enabled: false });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "dailyCostThreshold" }), { target: { value: "25" } });
+    expect(invoke).toHaveBeenCalledWith("set_cost_threshold", { threshold: 25 });
+  });
+
+  it("renders a retryable collector settings error", async () => {
+    let calls = 0;
+    vi.mocked(fetchAPI).mockImplementation(async (path) => {
+      if (path !== "settings/collectors") throw new Error(`unexpected path ${path}`);
+      calls += 1;
+      if (calls === 1) throw new Error("settings offline");
+      return settings as never;
+    });
+    const user = userEvent.setup();
+    render(<Settings />);
+    expect(await screen.findByText("settings offline")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "retry" }));
+    expect(await screen.findByRole("switch", { name: "collectorEnabled claudeCode" })).toBeVisible();
+  });
+});

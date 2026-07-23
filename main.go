@@ -30,7 +30,8 @@ func main() {
 	portFlag := flag.Int("port", 0, "override server port")
 	flag.Parse()
 
-	cfg, err := config.Load(config.ResolveConfigPath(*configPath))
+	resolvedConfigPath := config.ResolveConfigPath(*configPath)
+	cfg, err := config.Load(resolvedConfigPath)
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
@@ -59,7 +60,7 @@ func main() {
 	// Start web server first so health check is immediately available.
 	// Data initialization (pricing sync, collector scan) runs in the background.
 	addr := fmt.Sprintf("%s:%d", cfg.Server.BindAddress, cfg.Server.Port)
-	srv := server.New(db, addr)
+	srv := server.New(db, addr, server.WithConfigPath(resolvedConfigPath))
 	go func() {
 		log.Fatal(srv.Start())
 	}()
