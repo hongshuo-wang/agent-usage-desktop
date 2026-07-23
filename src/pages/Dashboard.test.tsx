@@ -1,7 +1,7 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Dashboard from "./Dashboard";
 import { fetchAPI } from "../lib/api";
 
@@ -10,8 +10,23 @@ vi.mock("react-i18next", () => ({
 }));
 
 vi.mock("../components/TimeRangeSelector", () => ({
-  default: ({ preset }: { preset: string }) => (
-    <div data-testid="time-range-selector">{preset}</div>
+  default: ({
+    preset,
+    onSourceChange,
+    onGranularityChange,
+    onRefresh,
+  }: {
+    preset: string;
+    onSourceChange: (source: string) => void;
+    onGranularityChange: (granularity: string) => void;
+    onRefresh: () => void;
+  }) => (
+    <div data-testid="time-range-selector">
+      {preset}
+      <button type="button" onClick={() => onSourceChange("codex")}>change-overview-source</button>
+      <button type="button" onClick={() => onGranularityChange("1d")}>change-granularity</button>
+      <button type="button" onClick={onRefresh}>refresh-overview</button>
+    </div>
   ),
 }));
 
@@ -84,6 +99,27 @@ const collectionStatus = {
   malformed_lines: 0,
 };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function defaultAPIResponse(path: string, params: Record<string, string | number | undefined> = {}) {
+  if (path === "stats") return stats;
+  if (path === "tokens-over-time") return tokenRows;
+  if (path === "throughput") return throughput;
+  if (path === "collection-index-status") return collectionStatus;
+  if (path === "usage-breakdown") {
+    return breakdowns[params.dimension as keyof typeof breakdowns];
+  }
+  throw new Error(`Unexpected API path: ${path}`);
+}
+
 function LocationProbe() {
   const location = useLocation();
   return <output data-testid="location">{location.pathname}{location.search}</output>;
@@ -104,17 +140,10 @@ describe("Dashboard overview", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
-    vi.mocked(fetchAPI).mockImplementation(async (path, params) => {
-      if (path === "stats") return stats;
-      if (path === "tokens-over-time") return tokenRows;
-      if (path === "throughput") return throughput;
-      if (path === "collection-index-status") return collectionStatus;
-      if (path === "usage-breakdown") {
-        return breakdowns[String(params.dimension) as keyof typeof breakdowns];
-      }
-      throw new Error(`Unexpected API path: ${path}`);
-    });
+    vi.mocked(fetchAPI).mockImplementation(async (path, params) => defaultAPIResponse(path, params));
   });
+
+  afterEach(() => vi.restoreAllMocks());
 
   it("renders the three full-width bands in order with exact token components", async () => {
     renderDashboard();
@@ -244,5 +273,157 @@ describe("Dashboard overview", () => {
     expect(within(status).getByText("lastIndexUpdate")).toBeInTheDocument();
     expect(within(status).getByText("2025-01-02 03:04")).toBeInTheDocument();
     expect(within(status).queryByText(/collector ready/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps newer overview data when an older request succeeds later", async () => {
+    const oldStats = deferred<typeof stats>();
+    const latestStats = { ...stats, total_tokens: 902 };
+    let statsCalls = 0;
+    vi.mocked(fetchAPI).mockImplementation(async (path, params) => {
+      if (path === "stats") {
+        statsCalls += 1;
+        return statsCalls === 1 ? oldStats.promise : latestStats;
+      }
+      return defaultAPIResponse(path, params);
+    });
+
+    renderDashboard();
+    await waitFor(() => expect(statsCalls).toBe(1));
+    await userEvent.setup().click(screen.getByRole("button", { name: "change-overview-source" }));
+    expect(await screen.findByText("902")).toBeInTheDocument();
+
+    await act(async () => oldStats.resolve({ ...stats, total_tokens: 101 }));
+
+    expect(screen.getByText("902")).toBeInTheDocument();
+    expect(screen.queryByText("101")).not.toBeInTheDocument();
+  });
+
+  it("ignores an older overview failure and finally while the current request is loading", async () => {
+    const oldStats = deferred<typeof stats>();
+    const currentStats = deferred<typeof stats>();
+    const latestStats = { ...stats, total_tokens: 902 };
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let statsCalls = 0;
+    vi.mocked(fetchAPI).mockImplementation(async (path, params) => {
+      if (path === "stats") {
+        statsCalls += 1;
+        if (statsCalls === 1) return oldStats.promise;
+        if (statsCalls === 2) return latestStats;
+        return currentStats.promise;
+      }
+      return defaultAPIResponse(path, params);
+    });
+
+    renderDashboard();
+    await waitFor(() => expect(statsCalls).toBe(1));
+    await userEvent.setup().click(screen.getByRole("button", { name: "change-overview-source" }));
+    expect(await screen.findByText("902")).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: "change-granularity" }));
+    await waitFor(() => expect(statsCalls).toBe(3));
+
+    await act(async () => oldStats.reject(new Error("stale overview error")));
+
+    expect(screen.getByRole("main")).toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByText("stale overview error")).not.toBeInTheDocument();
+    expect(consoleError).not.toHaveBeenCalled();
+
+    await act(async () => currentStats.resolve({ ...stats, total_tokens: 903 }));
+    await waitFor(() => expect(screen.getByRole("main")).toHaveAttribute("aria-busy", "false"));
+  });
+
+  it("keeps newer throughput data when an older request succeeds later", async () => {
+    const oldThroughput = deferred<typeof throughput>();
+    const latestThroughput = {
+      ...throughput,
+      average_active_minute: { ...throughput.average_active_minute, total_tpm: 902 },
+    };
+    let throughputCalls = 0;
+    vi.mocked(fetchAPI).mockImplementation(async (path, params) => {
+      if (path === "throughput") {
+        throughputCalls += 1;
+        return throughputCalls === 1 ? oldThroughput.promise : latestThroughput;
+      }
+      return defaultAPIResponse(path, params);
+    });
+
+    renderDashboard();
+    const selector = await screen.findByRole("combobox", { name: "throughputModel" });
+    await waitFor(() => expect(throughputCalls).toBe(1));
+    await userEvent.setup().selectOptions(selector, "sonnet");
+    expect(await within(screen.getByTestId("throughput-average")).findByText("902")).toBeInTheDocument();
+
+    await act(async () => oldThroughput.resolve({
+      ...throughput,
+      average_active_minute: { ...throughput.average_active_minute, total_tpm: 101 },
+    }));
+
+    expect(within(screen.getByTestId("throughput-average")).getByText("902")).toBeInTheDocument();
+    expect(within(screen.getByTestId("throughput-average")).queryByText("101")).not.toBeInTheDocument();
+  });
+
+  it("ignores an older throughput failure and finally while the current request is loading", async () => {
+    const oldThroughput = deferred<typeof throughput>();
+    const currentThroughput = deferred<typeof throughput>();
+    const latestThroughput = {
+      ...throughput,
+      average_active_minute: { ...throughput.average_active_minute, total_tpm: 902 },
+    };
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let throughputCalls = 0;
+    vi.mocked(fetchAPI).mockImplementation(async (path, params) => {
+      if (path === "throughput") {
+        throughputCalls += 1;
+        if (throughputCalls === 1) return oldThroughput.promise;
+        if (throughputCalls === 2) return latestThroughput;
+        return currentThroughput.promise;
+      }
+      return defaultAPIResponse(path, params);
+    });
+
+    renderDashboard();
+    const selector = await screen.findByRole("combobox", { name: "throughputModel" });
+    await waitFor(() => expect(throughputCalls).toBe(1));
+    await userEvent.setup().selectOptions(selector, "sonnet");
+    expect(await within(screen.getByTestId("throughput-average")).findByText("902")).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: "refresh-overview" }));
+    await waitFor(() => expect(throughputCalls).toBe(3));
+    await waitFor(() => expect(screen.getByText("localObservedThroughput").closest("[aria-busy]"))
+      .toHaveAttribute("aria-busy", "true"));
+
+    await act(async () => oldThroughput.reject(new Error("stale throughput error")));
+
+    expect(screen.getByText("localObservedThroughput").closest("[aria-busy]"))
+      .toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByText("stale throughput error")).not.toBeInTheDocument();
+    expect(consoleError).not.toHaveBeenCalled();
+
+    await act(async () => currentThroughput.resolve(throughput));
+    await waitFor(() => expect(screen.getByText("localObservedThroughput").closest("[aria-busy]"))
+      .toHaveAttribute("aria-busy", "false"));
+  });
+
+  it("ignores overview and throughput settlements after unmount", async () => {
+    const pendingStats = deferred<typeof stats>();
+    const pendingThroughput = deferred<typeof throughput>();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.mocked(fetchAPI).mockImplementation(async (path, params) => {
+      if (path === "stats") return pendingStats.promise;
+      if (path === "throughput") return pendingThroughput.promise;
+      return defaultAPIResponse(path, params);
+    });
+
+    const view = renderDashboard();
+    await waitFor(() => {
+      expect(fetchAPI).toHaveBeenCalledWith("stats", expect.any(Object));
+      expect(fetchAPI).toHaveBeenCalledWith("throughput", expect.any(Object));
+    });
+    view.unmount();
+
+    await act(async () => {
+      pendingStats.reject(new Error("unmounted overview error"));
+      pendingThroughput.reject(new Error("unmounted throughput error"));
+    });
+
+    expect(consoleError).not.toHaveBeenCalled();
   });
 });

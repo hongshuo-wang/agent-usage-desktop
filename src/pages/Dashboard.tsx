@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 import ChartCard from "../components/ChartCard";
@@ -254,12 +254,24 @@ export default function Dashboard() {
   const [throughput, setThroughput] = useState<ThroughputResult>(EMPTY_THROUGHPUT);
   const [throughputModel, setThroughputModel] = useState("");
   const [loading, setLoading] = useState(true);
+  const [throughputLoading, setThroughputLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [throughputError, setThroughputError] = useState<string | null>(null);
+  const overviewGenerationRef = useRef(0);
+  const throughputGenerationRef = useRef(0);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => persistUsageFilters(filters), [filters]);
 
   const fetchData = useCallback(async () => {
+    const generation = ++overviewGenerationRef.current;
     const request = { ...getUsageRequestParams(filters), granularity };
     setLoading(true);
     setError(null);
@@ -272,25 +284,33 @@ export default function Dashboard() {
         fetchAPI<UsageBreakdown[]>("usage-breakdown", { ...request, dimension: "project" }),
         fetchAPI<CollectionIndexStatus>("collection-index-status", {}),
       ]);
-      setData({
-        stats,
-        tokens: tokens || [],
-        sources: sources || [],
-        models: models || [],
-        projects: projects || [],
-        collectionStatus,
-      });
+      if (mountedRef.current && generation === overviewGenerationRef.current) {
+        setData({
+          stats,
+          tokens: tokens || [],
+          sources: sources || [],
+          models: models || [],
+          projects: projects || [],
+          collectionStatus,
+        });
+      }
     } catch (cause) {
-      console.error("Dashboard fetch error:", cause);
-      setError(cause instanceof Error ? cause.message : String(cause));
+      if (mountedRef.current && generation === overviewGenerationRef.current) {
+        console.error("Dashboard fetch error:", cause);
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
     } finally {
-      setLoading(false);
+      if (mountedRef.current && generation === overviewGenerationRef.current) {
+        setLoading(false);
+      }
     }
   }, [filters.from, filters.to, filters.source, granularity]);
 
   useEffect(() => { void fetchData(); }, [fetchData]);
 
   const fetchThroughput = useCallback(async () => {
+    const generation = ++throughputGenerationRef.current;
+    setThroughputLoading(true);
     setThroughputError(null);
     try {
       const request = {
@@ -298,10 +318,18 @@ export default function Dashboard() {
         ...(throughputModel ? { model: throughputModel } : {}),
       };
       const result = await fetchAPI<ThroughputResult>("throughput", request);
-      setThroughput(result || EMPTY_THROUGHPUT);
+      if (mountedRef.current && generation === throughputGenerationRef.current) {
+        setThroughput(result || EMPTY_THROUGHPUT);
+      }
     } catch (cause) {
-      console.error("Throughput fetch error:", cause);
-      setThroughputError(cause instanceof Error ? cause.message : String(cause));
+      if (mountedRef.current && generation === throughputGenerationRef.current) {
+        console.error("Throughput fetch error:", cause);
+        setThroughputError(cause instanceof Error ? cause.message : String(cause));
+      }
+    } finally {
+      if (mountedRef.current && generation === throughputGenerationRef.current) {
+        setThroughputLoading(false);
+      }
     }
   }, [filters.from, filters.to, filters.source, throughputModel]);
 
@@ -433,7 +461,7 @@ export default function Dashboard() {
         </aside>
       )}
 
-      <main className="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto pb-4">
+      <main aria-busy={loading} className="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto pb-4">
         {loading && !data ? (
           <DashboardSkeleton />
         ) : error ? (
@@ -519,7 +547,10 @@ export default function Dashboard() {
                     compact
                   />
                 </div>
-                <div className="min-w-0 border-t border-border pt-4 xl:border-l xl:border-t-0 xl:pl-5 xl:pt-0">
+                <div
+                  aria-busy={throughputLoading}
+                  className="min-w-0 border-t border-border pt-4 xl:border-l xl:border-t-0 xl:pl-5 xl:pt-0"
+                >
                   <header className="mb-3 flex min-w-0 flex-wrap items-end justify-between gap-2">
                     <div className="min-w-0">
                       <h2 className="truncate text-sm font-semibold">{t("localObservedThroughput")}</h2>
