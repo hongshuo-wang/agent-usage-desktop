@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -113,6 +114,21 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request, sou
 		serverError(w, err)
 		return
 	}
+	writeJSON(w, buildSessionEventResponses(events, rawSnapshotAvailable))
+}
+
+type rawSnapshotValidator func(*storage.RawEventLocator) (int64, bool)
+
+func buildSessionEventResponses(events []storage.SessionEventRecord, validate rawSnapshotValidator) []SessionEventResponse {
+	type snapshotKey struct {
+		path, status, headHash string
+		fileSize               int64
+	}
+	type snapshotState struct {
+		size      int64
+		available bool
+	}
+	cache := make(map[snapshotKey]snapshotState)
 	response := make([]SessionEventResponse, 0, len(events))
 	for _, event := range events {
 		item := SessionEventResponse{
@@ -121,17 +137,19 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request, sou
 			ToolName: event.ToolName, ToolCallID: event.ToolCallID, ToolInput: event.ToolInput,
 			ToolOutput: event.ToolOutput, EventStatus: event.EventStatus, DurationMS: event.DurationMS,
 		}
-		if event.RawOffset >= 0 && event.RawLength > 0 && event.RawLength <= sessionRawMaxBytes {
-			locator, err := s.db.GetRawEventLocator(source, sessionID, event.ID)
-			if err != nil {
-				serverError(w, err)
-				return
+		locator := event.RawLocator
+		if rawLocatorRangeValid(locator) {
+			key := snapshotKey{locator.Path, locator.SourceStatus, locator.HeadHash, locator.FileSize}
+			state, ok := cache[key]
+			if !ok {
+				state.size, state.available = validate(locator)
+				cache[key] = state
 			}
-			item.HasRaw = rawLocatorAvailable(locator)
+			item.HasRaw = state.available && locator.RawOffset+locator.RawLength <= state.size
 		}
 		response = append(response, item)
 	}
-	writeJSON(w, response)
+	return response
 }
 
 func (s *Server) handleSessionRaw(w http.ResponseWriter, r *http.Request, source, sessionID string, eventID int64) {
@@ -174,6 +192,11 @@ func (s *Server) handleSessionRaw(w http.ResponseWriter, r *http.Request, source
 		return
 	}
 	defer file.Close()
+	fileSize, available := validateOpenRawSnapshot(file, locator)
+	if !available || locator.RawOffset+locator.RawLength > fileSize {
+		http.Error(w, "source unavailable", http.StatusGone)
+		return
+	}
 	content := make([]byte, int(locator.RawLength))
 	read, err := file.ReadAt(content, locator.RawOffset)
 	if err != nil && err != io.EOF {
@@ -181,6 +204,11 @@ func (s *Server) handleSessionRaw(w http.ResponseWriter, r *http.Request, source
 		return
 	}
 	if int64(read) != locator.RawLength {
+		http.Error(w, "source unavailable", http.StatusGone)
+		return
+	}
+	fileSize, available = validateOpenRawSnapshot(file, locator)
+	if !available || locator.RawOffset+locator.RawLength > fileSize {
 		http.Error(w, "source unavailable", http.StatusGone)
 		return
 	}
@@ -194,14 +222,44 @@ func (s *Server) handleSessionRaw(w http.ResponseWriter, r *http.Request, source
 	})
 }
 
-func rawLocatorAvailable(locator *storage.RawEventLocator) bool {
-	if locator == nil || locator.SourceStatus != "available" || locator.Path == "" ||
-		locator.RawOffset < 0 || locator.RawLength <= 0 || locator.RawLength > sessionRawMaxBytes ||
-		locator.RawOffset > math.MaxInt64-locator.RawLength {
-		return false
+func rawLocatorRangeValid(locator *storage.RawEventLocator) bool {
+	return locator != nil && locator.SourceStatus == "available" && locator.Path != "" &&
+		locator.RawOffset >= 0 && locator.RawLength > 0 && locator.RawLength <= sessionRawMaxBytes &&
+		locator.RawOffset <= math.MaxInt64-locator.RawLength
+}
+
+func rawSnapshotAvailable(locator *storage.RawEventLocator) (int64, bool) {
+	if !rawLocatorRangeValid(locator) {
+		return 0, false
 	}
-	info, err := os.Stat(locator.Path)
-	return err == nil && !info.IsDir() && locator.RawOffset+locator.RawLength <= info.Size()
+	file, err := os.Open(locator.Path)
+	if err != nil {
+		return 0, false
+	}
+	defer file.Close()
+	return validateOpenRawSnapshot(file, locator)
+}
+
+func validateOpenRawSnapshot(file *os.File, locator *storage.RawEventLocator) (int64, bool) {
+	if locator.FileSize < 0 || locator.HeadHash == "" {
+		return 0, false
+	}
+	info, err := file.Stat()
+	if err != nil || info.IsDir() || info.Size() < locator.FileSize {
+		return 0, false
+	}
+	prefixSize := locator.FileSize
+	if prefixSize > 4096 {
+		prefixSize = 4096
+	}
+	hash := sha256.New()
+	if _, err := io.CopyN(hash, io.NewSectionReader(file, 0, prefixSize), prefixSize); err != nil {
+		return 0, false
+	}
+	if fmt.Sprintf("%x", hash.Sum(nil)) != locator.HeadHash {
+		return 0, false
+	}
+	return info.Size(), true
 }
 
 func (s *Server) handleSessionIndexRebuild(w http.ResponseWriter, r *http.Request) {

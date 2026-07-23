@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -78,6 +79,7 @@ func seedSessionAPI(t *testing.T) *sessionAPIFixture {
 
 	claudeSource := &storage.SessionSource{
 		Source: "claude", SessionID: "shared", Path: rawPath, ParserVersion: "v1",
+		HeadHash: indexedHeadHash(rawBytes),
 		FileSize: int64(len(rawBytes)), IndexedOffset: int64(len(rawBytes)),
 		CoverageStatus: "complete", SourceStatus: "available",
 	}
@@ -105,6 +107,7 @@ func seedSessionAPI(t *testing.T) *sessionAPIFixture {
 	}
 	codexID, err := db.UpsertSessionSourceWithEvents(&storage.SessionSource{
 		Source: "codex", SessionID: "shared", Path: codexPath, ParserVersion: "v1",
+		HeadHash: indexedHeadHash([]byte("codex")),
 		FileSize: 5, IndexedOffset: 5, CoverageStatus: "complete", SourceStatus: "available",
 	}, []storage.SessionEventRecord{
 		{Source: "codex", SessionID: "shared", EventType: "user_message", Timestamp: day.Add(time.Minute), Role: "user", Content: "Codex title", RawOffset: 0, RawLength: 5, RawIndex: 0},
@@ -119,6 +122,7 @@ func seedSessionAPI(t *testing.T) *sessionAPIFixture {
 	}
 	openclawID, err := db.UpsertSessionSourceWithEvents(&storage.SessionSource{
 		Source: "openclaw", SessionID: "events-only", Path: openclawPath, ParserVersion: "v1",
+		HeadHash: indexedHeadHash([]byte("event")),
 		FileSize: 5, IndexedOffset: 5, CoverageStatus: "complete", SourceStatus: "available",
 	}, []storage.SessionEventRecord{
 		{Source: "openclaw", SessionID: "events-only", EventType: "user_message", Timestamp: day.Add(5 * time.Minute), Role: "user", Content: "Event only title", RawOffset: 0, RawLength: 5, RawIndex: 0},
@@ -144,6 +148,14 @@ func seedSessionAPI(t *testing.T) *sessionAPIFixture {
 		rawBytes: rawBytes, eventIDs: eventIDs,
 		sourceIDs: map[string]int64{"claude": claudeID, "codex": codexID, "openclaw": openclawID}, day: day,
 	}
+}
+
+func indexedHeadHash(content []byte) string {
+	if len(content) > 4096 {
+		content = content[:4096]
+	}
+	sum := sha256.Sum256(content)
+	return fmt.Sprintf("%x", sum)
 }
 
 func requestJSON(t *testing.T, handler http.Handler, method, target string, response interface{}) int {
@@ -376,6 +388,43 @@ func TestSessionRawReturnsExactJSONAndTextRecords(t *testing.T) {
 		if raw.Length != int64(len(tc.content)) || string(fx.rawBytes[raw.Offset:raw.Offset+raw.Length]) != tc.content {
 			t.Errorf("%s locator is not exact: %+v", tc.key, raw)
 		}
+	}
+}
+
+func TestSessionRawRejectsRewrittenIndexedSnapshot(t *testing.T) {
+	fx := seedSessionAPI(t)
+	rewritten := append([]byte(nil), fx.rawBytes...)
+	rewritten[0] ^= 0xff
+	if err := os.WriteFile(fx.rawPath, rewritten, 0o600); err != nil {
+		t.Fatalf("rewrite source: %v", err)
+	}
+	target := fmt.Sprintf("/api/sessions/claude/shared/events/%d/raw", fx.eventIDs["claude:user_message"])
+	if status := requestJSON(t, fx.handler, http.MethodGet, target, nil); status != http.StatusGone {
+		t.Errorf("rewritten snapshot status = %d, want 410", status)
+	}
+}
+
+func TestSessionRawAllowsAppendOnlyGrowth(t *testing.T) {
+	fx := seedSessionAPI(t)
+	file, err := os.OpenFile(fx.rawPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open source for append: %v", err)
+	}
+	if _, err := file.WriteString("appended record\n"); err != nil {
+		file.Close()
+		t.Fatalf("append source: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close appended source: %v", err)
+	}
+
+	var raw RawEventResponse
+	target := fmt.Sprintf("/api/sessions/claude/shared/events/%d/raw", fx.eventIDs["claude:user_message"])
+	if status := requestJSON(t, fx.handler, http.MethodGet, target, &raw); status != http.StatusOK {
+		t.Fatalf("appended snapshot status = %d, want 200", status)
+	}
+	if raw.Content != `{"kind":"json","value":42}` {
+		t.Errorf("raw content after append = %q", raw.Content)
 	}
 }
 

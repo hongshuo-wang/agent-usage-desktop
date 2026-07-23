@@ -92,6 +92,34 @@ func TestSessionSourceAndEventInsertDedup(t *testing.T) {
 	}
 }
 
+func TestRawEventLocatorIncludesIndexedSnapshot(t *testing.T) {
+	db := tempDB(t)
+	source := testSessionSource("/sessions/raw-snapshot.jsonl", "raw-snapshot")
+	sourceID, err := db.UpsertSessionSource(source)
+	if err != nil {
+		t.Fatalf("UpsertSessionSource: %v", err)
+	}
+	event := testSessionEvent(sourceID, source.SessionID, 10)
+	if err := db.InsertSessionEvents([]SessionEventRecord{event}); err != nil {
+		t.Fatalf("InsertSessionEvents: %v", err)
+	}
+	events, err := db.ListSessionEvents(source.Source, source.SessionID, 10, 0)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("ListSessionEvents: events=%+v err=%v", events, err)
+	}
+	if events[0].RawLocator == nil || events[0].RawLocator.FileSize != source.FileSize || events[0].RawLocator.HeadHash != source.HeadHash {
+		t.Fatalf("listed event snapshot = %+v, want size %d hash %q", events[0].RawLocator, source.FileSize, source.HeadHash)
+	}
+	locator, err := db.GetRawEventLocator(source.Source, source.SessionID, events[0].ID)
+	if err != nil || locator == nil {
+		t.Fatalf("GetRawEventLocator: locator=%+v err=%v", locator, err)
+	}
+	if locator.FileSize != source.FileSize || locator.HeadHash != source.HeadHash {
+		t.Errorf("raw locator snapshot = size %d hash %q, want size %d hash %q",
+			locator.FileSize, locator.HeadHash, source.FileSize, source.HeadHash)
+	}
+}
+
 func TestUpsertSessionSourceWithEventsRollsBackAtomically(t *testing.T) {
 	db := tempDB(t)
 	source := testSessionSource("/sessions/atomic.jsonl", "atomic-session")

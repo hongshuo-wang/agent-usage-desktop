@@ -52,8 +52,21 @@ type sessionIdentity struct {
 	lastActivity  string
 }
 
+type sessionKey struct {
+	source    string
+	sessionID string
+}
+
+type sessionQueryer interface {
+	Query(query string, args ...interface{}) (*sql.Rows, error)
+}
+
 // SearchSessions returns source-qualified summaries ordered by recent activity.
 func (d *DB) SearchSessions(query SessionQuery) ([]SessionSummary, error) {
+	return searchSessions(d.db, query)
+}
+
+func searchSessions(db sessionQueryer, query SessionQuery) ([]SessionSummary, error) {
 	clauses := []string{"1=1"}
 	args := []interface{}{query.From, query.To, query.From, query.To, query.From, query.To}
 	if query.Source != "" {
@@ -84,7 +97,7 @@ func (d *DB) SearchSessions(query SessionQuery) ([]SessionSummary, error) {
 	}
 	args = append(args, query.Limit, query.Offset)
 
-	rows, err := d.db.Query(`WITH activity AS (
+	rows, err := db.Query(`WITH activity AS (
 		SELECT source, session_id, timestamp AS ts FROM usage_records WHERE timestamp BETWEEN ? AND ?
 		UNION ALL
 		SELECT source, session_id, timestamp AS ts FROM prompt_events WHERE timestamp BETWEEN ? AND ?
@@ -116,72 +129,131 @@ func (d *DB) SearchSessions(query SessionQuery) ([]SessionSummary, error) {
 		return nil, err
 	}
 
-	result := make([]SessionSummary, 0, len(identities))
-	for _, identity := range identities {
-		summary, err := d.loadSessionSummary(query, identity)
-		if err != nil {
-			return nil, err
+	result := make([]SessionSummary, len(identities))
+	indices := make(map[sessionKey]int, len(identities))
+	for index, identity := range identities {
+		result[index] = SessionSummary{
+			Source: identity.source, SessionID: identity.sessionID,
+			StartTime: identity.firstActivity, LastActivity: identity.lastActivity,
+			Models: []string{}, CoverageStatus: "stats_only", SourceStatus: "stats_only",
 		}
-		result = append(result, summary)
+		indices[sessionKey{identity.source, identity.sessionID}] = index
+	}
+	if len(result) == 0 {
+		return result, nil
+	}
+	if err := loadSessionMetadata(db, query, identities, indices, result); err != nil {
+		return nil, err
+	}
+	if err := loadSessionUsage(db, query, identities, indices, result); err != nil {
+		return nil, err
+	}
+	if err := loadSessionPrompts(db, query, identities, indices, result); err != nil {
+		return nil, err
+	}
+	if err := loadSessionEventSummaries(db, query, identities, indices, result); err != nil {
+		return nil, err
+	}
+	if err := loadSessionSourceSummaries(db, identities, indices, result); err != nil {
+		return nil, err
+	}
+	for index := range result {
+		summary := &result[index]
+		sort.Strings(summary.Models)
+		summary.TotalTokens = summary.InputTokens + summary.OutputTokens + summary.CacheRead + summary.CacheCreate
+		if summary.Title == "" {
+			summary.Title = summary.Project
+		}
+		if summary.Title == "" {
+			summary.Title = summary.CWD
+		}
+		if summary.Title == "" {
+			summary.Title = summary.SessionID
+		}
 	}
 	return result, nil
 }
 
-func (d *DB) loadSessionSummary(query SessionQuery, identity sessionIdentity) (SessionSummary, error) {
-	summary := SessionSummary{
-		Source: identity.source, SessionID: identity.sessionID, LastActivity: identity.lastActivity,
-		StartTime: identity.firstActivity, CoverageStatus: "stats_only", SourceStatus: "stats_only", Models: []string{},
+func selectedSessionsCTE(identities []sessionIdentity) (string, []interface{}) {
+	values := make([]string, len(identities))
+	args := make([]interface{}, 0, len(identities)*2)
+	for index, identity := range identities {
+		values[index] = "(?,?)"
+		args = append(args, identity.source, identity.sessionID)
 	}
-	var start sql.NullString
-	err := d.db.QueryRow(`SELECT project, cwd, git_branch, start_time FROM sessions
-		WHERE source=? AND session_id=?`, identity.source, identity.sessionID).
-		Scan(&summary.Project, &summary.CWD, &summary.GitBranch, &start)
-	if err != nil && err != sql.ErrNoRows {
-		return SessionSummary{}, err
+	return `WITH selected(source, session_id) AS (VALUES ` + strings.Join(values, ",") + `)`, args
+}
+
+func loadSessionMetadata(db sessionQueryer, query SessionQuery, identities []sessionIdentity, indices map[sessionKey]int, result []SessionSummary) error {
+	cte, args := selectedSessionsCTE(identities)
+	args = append(args, query.From, query.To)
+	rows, err := db.Query(cte+`, usage_metadata AS (
+		SELECT u.source, u.session_id, COALESCE(MAX(u.project), '') AS project,
+			COALESCE(MAX(u.git_branch), '') AS git_branch
+		FROM usage_records u JOIN selected x ON x.source=u.source AND x.session_id=u.session_id
+		WHERE u.timestamp BETWEEN ? AND ? GROUP BY u.source, u.session_id
+	)
+	SELECT x.source, x.session_id, COALESCE(s.project,''), COALESCE(s.cwd,''),
+		COALESCE(s.git_branch,''), s.start_time,
+		COALESCE(um.project,''), COALESCE(um.git_branch,'')
+	FROM selected x
+	LEFT JOIN sessions s ON s.source=x.source AND s.session_id=x.session_id
+	LEFT JOIN usage_metadata um ON um.source=x.source AND um.session_id=x.session_id`, args...)
+	if err != nil {
+		return err
 	}
-	if start.Valid {
-		summary.StartTime = start.String
-	}
-	if err == sql.ErrNoRows || summary.Project == "" || summary.GitBranch == "" {
-		var project, branch string
-		if err := d.db.QueryRow(`SELECT COALESCE(MAX(project),''), COALESCE(MAX(git_branch),'')
-			FROM usage_records WHERE source=? AND session_id=? AND timestamp BETWEEN ? AND ?`,
-			identity.source, identity.sessionID, query.From, query.To).Scan(&project, &branch); err != nil {
-			return SessionSummary{}, err
+	defer rows.Close()
+	for rows.Next() {
+		var source, sessionID, project, cwd, branch, usageProject, usageBranch string
+		var start sql.NullString
+		if err := rows.Scan(&source, &sessionID, &project, &cwd, &branch, &start, &usageProject, &usageBranch); err != nil {
+			return err
 		}
+		summary := &result[indices[sessionKey{source, sessionID}]]
+		summary.Project, summary.CWD, summary.GitBranch = project, cwd, branch
 		if summary.Project == "" {
-			summary.Project = project
+			summary.Project = usageProject
 		}
 		if summary.GitBranch == "" {
-			summary.GitBranch = branch
+			summary.GitBranch = usageBranch
+		}
+		if start.Valid {
+			summary.StartTime = start.String
 		}
 	}
+	return rows.Err()
+}
 
-	usageSQL := `SELECT u.model, u.input_tokens, u.output_tokens,
-		u.cache_read_input_tokens, u.cache_creation_input_tokens, u.cost_usd,
-		CASE WHEN p.model IS NULL THEN 1 ELSE 0 END
-		FROM usage_records u LEFT JOIN pricing p ON p.model=u.model
-		WHERE u.source=? AND u.session_id=? AND u.timestamp BETWEEN ? AND ?`
-	usageArgs := []interface{}{identity.source, identity.sessionID, query.From, query.To}
+func loadSessionUsage(db sessionQueryer, query SessionQuery, identities []sessionIdentity, indices map[sessionKey]int, result []SessionSummary) error {
+	cte, args := selectedSessionsCTE(identities)
+	args = append(args, query.From, query.To)
+	modelClause := ""
 	if query.Model != "" {
-		usageSQL += " AND u.model=?"
-		usageArgs = append(usageArgs, query.Model)
+		modelClause = " AND u.model=?"
+		args = append(args, query.Model)
 	}
-	usageRows, err := d.db.Query(usageSQL, usageArgs...)
+	rows, err := db.Query(cte+` SELECT u.source, u.session_id, u.model,
+		COALESCE(SUM(u.input_tokens),0), COALESCE(SUM(u.output_tokens),0),
+		COALESCE(SUM(u.cache_read_input_tokens),0), COALESCE(SUM(u.cache_creation_input_tokens),0),
+		COALESCE(SUM(u.cost_usd),0), MAX(CASE WHEN p.model IS NULL THEN 1 ELSE 0 END)
+	FROM usage_records u JOIN selected x ON x.source=u.source AND x.session_id=u.session_id
+	LEFT JOIN pricing p ON p.model=u.model
+	WHERE u.timestamp BETWEEN ? AND ?`+modelClause+`
+	GROUP BY u.source, u.session_id, u.model`, args...)
 	if err != nil {
-		return SessionSummary{}, err
+		return err
 	}
-	modelSet := make(map[string]struct{})
-	for usageRows.Next() {
-		var model string
+	defer rows.Close()
+	for rows.Next() {
+		var source, sessionID, model string
 		var input, output, cacheRead, cacheCreate int64
 		var cost float64
 		var unknown int
-		if err := usageRows.Scan(&model, &input, &output, &cacheRead, &cacheCreate, &cost, &unknown); err != nil {
-			usageRows.Close()
-			return SessionSummary{}, err
+		if err := rows.Scan(&source, &sessionID, &model, &input, &output, &cacheRead, &cacheCreate, &cost, &unknown); err != nil {
+			return err
 		}
-		modelSet[model] = struct{}{}
+		summary := &result[indices[sessionKey{source, sessionID}]]
+		summary.Models = append(summary.Models, model)
 		summary.InputTokens += input
 		summary.OutputTokens += output
 		summary.CacheRead += cacheRead
@@ -189,76 +261,108 @@ func (d *DB) loadSessionSummary(query SessionQuery, identity sessionIdentity) (S
 		summary.TotalCost += cost
 		summary.UnknownPrice = summary.UnknownPrice || unknown != 0
 	}
-	if err := usageRows.Err(); err != nil {
-		usageRows.Close()
-		return SessionSummary{}, err
-	}
-	if err := usageRows.Close(); err != nil {
-		return SessionSummary{}, err
-	}
-	for model := range modelSet {
-		summary.Models = append(summary.Models, model)
-	}
-	sort.Strings(summary.Models)
-	summary.TotalTokens = summary.InputTokens + summary.OutputTokens + summary.CacheRead + summary.CacheCreate
+	return rows.Err()
+}
 
-	if err := d.db.QueryRow(`SELECT COUNT(*) FROM prompt_events
-		WHERE source=? AND session_id=? AND timestamp BETWEEN ? AND ?`,
-		identity.source, identity.sessionID, query.From, query.To).Scan(&summary.Prompts); err != nil {
-		return SessionSummary{}, err
+func loadSessionPrompts(db sessionQueryer, query SessionQuery, identities []sessionIdentity, indices map[sessionKey]int, result []SessionSummary) error {
+	cte, args := selectedSessionsCTE(identities)
+	args = append(args, query.From, query.To)
+	rows, err := db.Query(cte+` SELECT p.source, p.session_id, COUNT(*)
+	FROM prompt_events p JOIN selected x ON x.source=p.source AND x.session_id=p.session_id
+	WHERE p.timestamp BETWEEN ? AND ? GROUP BY p.source, p.session_id`, args...)
+	if err != nil {
+		return err
 	}
-	if err := d.db.QueryRow(`SELECT
-		COALESCE(SUM(CASE WHEN event_type='tool_call' THEN 1 ELSE 0 END),0),
-		COALESCE(SUM(CASE WHEN event_type='error' THEN 1 ELSE 0 END),0)
-		FROM session_events WHERE source=? AND session_id=? AND timestamp BETWEEN ? AND ?`,
-		identity.source, identity.sessionID, query.From, query.To).Scan(&summary.ToolCalls, &summary.Errors); err != nil {
-		return SessionSummary{}, err
+	defer rows.Close()
+	for rows.Next() {
+		var source, sessionID string
+		var prompts int
+		if err := rows.Scan(&source, &sessionID, &prompts); err != nil {
+			return err
+		}
+		result[indices[sessionKey{source, sessionID}]].Prompts = prompts
 	}
-	if err := d.db.QueryRow(`SELECT content FROM session_events
-		WHERE source=? AND session_id=? AND event_type='user_message' AND content!=''
-		ORDER BY timestamp, raw_offset, raw_index, id LIMIT 1`, identity.source, identity.sessionID).Scan(&summary.Title); err != nil && err != sql.ErrNoRows {
-		return SessionSummary{}, err
-	}
-	if summary.Title == "" {
-		summary.Title = summary.Project
-	}
-	if summary.Title == "" {
-		summary.Title = summary.CWD
-	}
-	if summary.Title == "" {
-		summary.Title = summary.SessionID
-	}
+	return rows.Err()
+}
 
-	var sourceCount, partialCount, missingCount, rebuildCount, staleCount, otherUnavailableCount int
-	if err := d.db.QueryRow(`SELECT COUNT(*),
-		COALESCE(SUM(CASE WHEN coverage_status!='complete' THEN 1 ELSE 0 END),0),
-		COALESCE(SUM(CASE WHEN source_status='missing_source' THEN 1 ELSE 0 END),0),
-		COALESCE(SUM(CASE WHEN source_status='rebuild_required' THEN 1 ELSE 0 END),0),
-		COALESCE(SUM(CASE WHEN source_status='stale_parser' THEN 1 ELSE 0 END),0),
-		COALESCE(SUM(CASE WHEN source_status NOT IN ('available','missing_source','rebuild_required','stale_parser') THEN 1 ELSE 0 END),0),
-		COALESCE(SUM(malformed_lines),0)
-		FROM session_sources WHERE source=? AND session_id=?`, identity.source, identity.sessionID).
-		Scan(&sourceCount, &partialCount, &missingCount, &rebuildCount, &staleCount, &otherUnavailableCount, &summary.MalformedLines); err != nil {
-		return SessionSummary{}, err
+func loadSessionEventSummaries(db sessionQueryer, query SessionQuery, identities []sessionIdentity, indices map[sessionKey]int, result []SessionSummary) error {
+	cte, args := selectedSessionsCTE(identities)
+	args = append(args, query.From, query.To)
+	rows, err := db.Query(cte+`, event_counts AS (
+		SELECT e.source, e.session_id,
+			SUM(CASE WHEN e.event_type='tool_call' THEN 1 ELSE 0 END) AS tool_calls,
+			SUM(CASE WHEN e.event_type='error' THEN 1 ELSE 0 END) AS errors
+		FROM session_events e JOIN selected x ON x.source=e.source AND x.session_id=e.session_id
+		WHERE e.timestamp BETWEEN ? AND ? GROUP BY e.source, e.session_id
+	), ranked_titles AS (
+		SELECT e.source, e.session_id, e.content,
+			ROW_NUMBER() OVER (PARTITION BY e.source, e.session_id
+				ORDER BY e.timestamp, e.raw_offset, e.raw_index, e.id) AS title_rank
+		FROM session_events e JOIN selected x ON x.source=e.source AND x.session_id=e.session_id
+		WHERE e.event_type='user_message' AND e.content!=''
+	)
+	SELECT x.source, x.session_id, COALESCE(ec.tool_calls,0), COALESCE(ec.errors,0),
+		COALESCE(rt.content,'')
+	FROM selected x
+	LEFT JOIN event_counts ec ON ec.source=x.source AND ec.session_id=x.session_id
+	LEFT JOIN ranked_titles rt ON rt.source=x.source AND rt.session_id=x.session_id AND rt.title_rank=1`, args...)
+	if err != nil {
+		return err
 	}
-	if sourceCount > 0 {
+	defer rows.Close()
+	for rows.Next() {
+		var source, sessionID, title string
+		var toolCalls, errors int
+		if err := rows.Scan(&source, &sessionID, &toolCalls, &errors, &title); err != nil {
+			return err
+		}
+		summary := &result[indices[sessionKey{source, sessionID}]]
+		summary.ToolCalls, summary.Errors, summary.Title = toolCalls, errors, title
+	}
+	return rows.Err()
+}
+
+func loadSessionSourceSummaries(db sessionQueryer, identities []sessionIdentity, indices map[sessionKey]int, result []SessionSummary) error {
+	cte, args := selectedSessionsCTE(identities)
+	rows, err := db.Query(cte+` SELECT ss.source, ss.session_id, COUNT(*),
+		COALESCE(SUM(CASE WHEN ss.coverage_status!='complete' THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN ss.source_status='missing_source' THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN ss.source_status='rebuild_required' THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN ss.source_status='stale_parser' THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN ss.source_status NOT IN ('available','missing_source','rebuild_required','stale_parser') THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(ss.malformed_lines),0)
+	FROM session_sources ss JOIN selected x ON x.source=ss.source AND x.session_id=ss.session_id
+	GROUP BY ss.source, ss.session_id`, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var source, sessionID string
+		var sourceCount, partialCount, missingCount, rebuildCount, staleCount, otherUnavailableCount, malformedLines int
+		if err := rows.Scan(&source, &sessionID, &sourceCount, &partialCount, &missingCount,
+			&rebuildCount, &staleCount, &otherUnavailableCount, &malformedLines); err != nil {
+			return err
+		}
+		summary := &result[indices[sessionKey{source, sessionID}]]
 		summary.CoverageStatus = "complete"
 		summary.SourceStatus = "available"
+		summary.MalformedLines = malformedLines
+		if partialCount > 0 {
+			summary.CoverageStatus = "partial"
+		}
+		switch {
+		case missingCount > 0:
+			summary.SourceStatus = "missing_source"
+		case rebuildCount > 0:
+			summary.SourceStatus = "rebuild_required"
+		case staleCount > 0:
+			summary.SourceStatus = "stale_parser"
+		case otherUnavailableCount > 0:
+			summary.SourceStatus = "unavailable"
+		}
 	}
-	if partialCount > 0 {
-		summary.CoverageStatus = "partial"
-	}
-	switch {
-	case missingCount > 0:
-		summary.SourceStatus = "missing_source"
-	case rebuildCount > 0:
-		summary.SourceStatus = "rebuild_required"
-	case staleCount > 0:
-		summary.SourceStatus = "stale_parser"
-	case otherUnavailableCount > 0:
-		summary.SourceStatus = "unavailable"
-	}
-	return summary, nil
+	return rows.Err()
 }
 
 func literalFTSQuery(value string) string {

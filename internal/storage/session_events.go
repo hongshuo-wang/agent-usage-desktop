@@ -43,12 +43,15 @@ type SessionEventRecord struct {
 	RawOffset       int64
 	RawLength       int64
 	RawIndex        int
+	RawLocator      *RawEventLocator
 }
 
 // RawEventLocator is the source-file location for one source-qualified event.
 type RawEventLocator struct {
 	Path         string
 	SourceStatus string
+	FileSize     int64
+	HeadHash     string
 	RawOffset    int64
 	RawLength    int64
 }
@@ -361,12 +364,14 @@ func (d *DB) GetSessionSourceByPath(path string) (*SessionSource, error) {
 
 // ListSessionEvents returns a stable chronological page for a source-qualified session.
 func (d *DB) ListSessionEvents(source, sessionID string, limit, offset int) ([]SessionEventRecord, error) {
-	rows, err := d.db.Query(`SELECT id, session_source_id, source, session_id,
-		event_type, source_event_type, timestamp, role, content, tool_name,
-		tool_call_id, tool_input, tool_output, event_status, duration_ms,
-		raw_offset, raw_length, raw_index
-		FROM session_events WHERE source=? AND session_id=?
-		ORDER BY timestamp, raw_offset, raw_index, id LIMIT ? OFFSET ?`,
+	rows, err := d.db.Query(`SELECT e.id, e.session_source_id, e.source, e.session_id,
+		e.event_type, e.source_event_type, e.timestamp, e.role, e.content, e.tool_name,
+		e.tool_call_id, e.tool_input, e.tool_output, e.event_status, e.duration_ms,
+		e.raw_offset, e.raw_length, e.raw_index,
+		ss.path, ss.source_status, ss.file_size, ss.head_hash
+		FROM session_events e JOIN session_sources ss ON ss.id=e.session_source_id
+		WHERE e.source=? AND e.session_id=?
+		ORDER BY e.timestamp, e.raw_offset, e.raw_index, e.id LIMIT ? OFFSET ?`,
 		source, sessionID, limit, offset)
 	if err != nil {
 		return nil, err
@@ -374,7 +379,7 @@ func (d *DB) ListSessionEvents(source, sessionID string, limit, offset int) ([]S
 	defer rows.Close()
 	var events []SessionEventRecord
 	for rows.Next() {
-		event, err := scanSessionEvent(rows)
+		event, err := scanSessionEventWithLocator(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -417,12 +422,14 @@ func (d *DB) SessionIdentityExists(source, sessionID string) (bool, error) {
 
 // GetRawEventLocator resolves an event and its source path in one query.
 func (d *DB) GetRawEventLocator(source, sessionID string, eventID int64) (*RawEventLocator, error) {
-	row := d.db.QueryRow(`SELECT ss.path, ss.source_status, e.raw_offset, e.raw_length
+	row := d.db.QueryRow(`SELECT ss.path, ss.source_status, ss.file_size, ss.head_hash,
+		e.raw_offset, e.raw_length
 		FROM session_events e JOIN session_sources ss ON ss.id=e.session_source_id
 		WHERE e.id=? AND e.source=? AND e.session_id=?
 			AND ss.source=e.source AND ss.session_id=e.session_id`, eventID, source, sessionID)
 	var locator RawEventLocator
-	if err := row.Scan(&locator.Path, &locator.SourceStatus, &locator.RawOffset, &locator.RawLength); err != nil {
+	if err := row.Scan(&locator.Path, &locator.SourceStatus, &locator.FileSize, &locator.HeadHash,
+		&locator.RawOffset, &locator.RawLength); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -482,6 +489,33 @@ func scanSessionEvent(row rowScanner) (SessionEventRecord, error) {
 	if duration.Valid {
 		event.DurationMS = &duration.Int64
 	}
+	return event, nil
+}
+
+func scanSessionEventWithLocator(row rowScanner) (SessionEventRecord, error) {
+	var event SessionEventRecord
+	var timestamp sql.NullTime
+	var duration sql.NullInt64
+	var locator RawEventLocator
+	err := row.Scan(
+		&event.ID, &event.SessionSourceID, &event.Source, &event.SessionID,
+		&event.EventType, &event.SourceEventType, &timestamp, &event.Role, &event.Content,
+		&event.ToolName, &event.ToolCallID, &event.ToolInput, &event.ToolOutput,
+		&event.EventStatus, &duration, &event.RawOffset, &event.RawLength, &event.RawIndex,
+		&locator.Path, &locator.SourceStatus, &locator.FileSize, &locator.HeadHash,
+	)
+	if err != nil {
+		return SessionEventRecord{}, err
+	}
+	if timestamp.Valid {
+		event.Timestamp = timestamp.Time
+	}
+	if duration.Valid {
+		event.DurationMS = &duration.Int64
+	}
+	locator.RawOffset = event.RawOffset
+	locator.RawLength = event.RawLength
+	event.RawLocator = &locator
 	return event, nil
 }
 
