@@ -4,6 +4,12 @@ import (
 	"bufio"
 	"errors"
 	"io"
+	"math"
+)
+
+var (
+	errJSONLNegativeOffset = errors.New("jsonl start offset must be non-negative")
+	errJSONLOffsetOverflow = errors.New("jsonl offset overflow")
 )
 
 // JSONLRecord is one newline-terminated JSONL record and its file metadata.
@@ -16,12 +22,20 @@ type JSONLRecord struct {
 // ReadJSONL reads complete JSONL records. A trailing, non-terminated record is
 // left for a future scan so callers can persist the returned offset safely.
 func ReadJSONL(r io.Reader, startOffset int64, visit func(JSONLRecord) error) (int64, error) {
+	if startOffset < 0 {
+		return startOffset, errJSONLNegativeOffset
+	}
+
 	reader := bufio.NewReader(r)
 	offset := startOffset
 
 	for {
 		physical, err := reader.ReadBytes('\n')
 		if len(physical) > 0 && physical[len(physical)-1] == '\n' {
+			if int64(len(physical)) > math.MaxInt64-offset {
+				return offset, errJSONLOffsetOverflow
+			}
+
 			data := physical[:len(physical)-1]
 			if len(data) > 0 && data[len(data)-1] == '\r' {
 				data = data[:len(data)-1]

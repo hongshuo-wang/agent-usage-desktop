@@ -6,14 +6,14 @@ import "time"
 type EventKind string
 
 const (
-	EventKindUserMessage      EventKind = "user_message"
-	EventKindAssistantMessage EventKind = "assistant_message"
-	EventKindReasoning        EventKind = "reasoning"
-	EventKindToolCall         EventKind = "tool_call"
-	EventKindToolResult       EventKind = "tool_result"
-	EventKindError            EventKind = "error"
-	EventKindMetadata         EventKind = "metadata"
-	EventKindUnknown          EventKind = "unknown"
+	EventUserMessage      EventKind = "user_message"
+	EventAssistantMessage EventKind = "assistant_message"
+	EventReasoning        EventKind = "reasoning"
+	EventToolCall         EventKind = "tool_call"
+	EventToolResult       EventKind = "tool_result"
+	EventError            EventKind = "error"
+	EventMetadata         EventKind = "metadata"
+	EventUnknown          EventKind = "unknown"
 )
 
 // EventContext carries session metadata accumulated while parsing a source.
