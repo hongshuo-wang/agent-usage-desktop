@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 )
@@ -163,14 +164,6 @@ func parseCodexEventMessage(raw json.RawMessage, timestamp time.Time) ([]Normali
 	if err := json.Unmarshal(raw, &message); err != nil {
 		return nil, fmt.Errorf("parse codex event message: %w", err)
 	}
-	if message.Type == "token_count" {
-		return nil, nil
-	}
-	// These records mirror canonical response_item messages and would duplicate them.
-	switch message.Type {
-	case "agent_message", "agent_message_delta", "user_message", "user_message_delta":
-		return nil, nil
-	}
 	if strings.Contains(message.Type, "error") || len(bytes.TrimSpace(message.Error)) > 0 && !bytes.Equal(bytes.TrimSpace(message.Error), []byte("null")) {
 		content := stableJSONOrString(message.Message)
 		if content == "" {
@@ -180,6 +173,14 @@ func parseCodexEventMessage(raw json.RawMessage, timestamp time.Time) ([]Normali
 			Kind: EventError, SourceEventType: "event_msg:" + message.Type, Timestamp: timestamp,
 			Content: content, Status: "error",
 		}}, nil
+	}
+	if message.Type == "token_count" {
+		return nil, nil
+	}
+	// These records mirror canonical response_item messages and would duplicate them.
+	switch message.Type {
+	case "agent_message", "agent_message_delta", "user_message", "user_message_delta":
+		return nil, nil
 	}
 	return []NormalizedEvent{{Kind: EventUnknown, SourceEventType: "event_msg:" + sourceEventType(message.Type), Timestamp: timestamp, Content: stableJSON(raw)}}, nil
 }
@@ -242,8 +243,14 @@ func stableJSON(raw []byte) string {
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		return ""
 	}
+	decoder := json.NewDecoder(bytes.NewReader(trimmed))
+	decoder.UseNumber()
 	var value any
-	if err := json.Unmarshal(trimmed, &value); err != nil {
+	if err := decoder.Decode(&value); err != nil {
+		return string(trimmed)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
 		return string(trimmed)
 	}
 	encoded, err := json.Marshal(value)

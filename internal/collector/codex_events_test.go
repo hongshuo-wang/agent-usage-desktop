@@ -104,3 +104,39 @@ func TestCodexEventAdapterCustomToolsAndMirrors(t *testing.T) {
 		t.Fatalf("non-null error = %+v, %v", nonNullError, err)
 	}
 }
+
+func TestCodexEventAdapterErrorOverridesSuppressedEventTypes(t *testing.T) {
+	t.Parallel()
+
+	adapter := codexEventAdapter{}
+	for _, test := range []struct {
+		name     string
+		typeName string
+	}{
+		{name: "token count", typeName: "token_count"},
+		{name: "message mirror", typeName: "agent_message"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			line := `{"type":"event_msg","payload":{"type":"` + test.typeName + `","error":"synthetic failure"}}`
+			events, err := adapter.Parse([]byte(line), &EventContext{})
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if len(events) != 1 || events[0].Kind != EventError || events[0].Status != "error" || events[0].Content != "synthetic failure" {
+				t.Fatalf("events = %+v, want visible error", events)
+			}
+		})
+	}
+}
+
+func TestCodexEventAdapterToolPayloadPreservesLargeInteger(t *testing.T) {
+	t.Parallel()
+
+	events, err := (codexEventAdapter{}).Parse([]byte(`{"type":"response_item","payload":{"type":"function_call","name":"synthetic_tool","call_id":"large-1","arguments":{"count":9007199254740993}}}`), &EventContext{})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(events) != 1 || events[0].ToolInput != `{"count":9007199254740993}` {
+		t.Fatalf("events = %+v, want exact large integer", events)
+	}
+}
