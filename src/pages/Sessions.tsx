@@ -122,9 +122,14 @@ export default function Sessions() {
       setExpanded((prev) => ({ ...prev, [key]: null }));
       try {
         const data = await fetchRaw<SessionDetail[]>(`session-detail?source=${encodeURIComponent(source)}&session_id=${encodeURIComponent(sid)}`);
-        setExpanded((prev) => ({ ...prev, [key]: data }));
+        setExpanded((prev) => prev[key] === undefined ? prev : { ...prev, [key]: data });
       } catch {
-        setExpanded((prev) => { const next = { ...prev }; delete next[key]; return next; });
+        setExpanded((prev) => {
+          if (prev[key] === undefined) return prev;
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
       }
     }
   };

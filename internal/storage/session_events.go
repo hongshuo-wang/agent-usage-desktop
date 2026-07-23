@@ -68,6 +68,18 @@ func (d *DB) UpsertSessionSource(source *SessionSource) (int64, error) {
 	if sourceStatus == "" {
 		sourceStatus = "available"
 	}
+	var existingID int64
+	var existingSource, existingSessionID string
+	err = tx.QueryRow(`SELECT id, source, session_id FROM session_sources WHERE path=?`, source.Path).
+		Scan(&existingID, &existingSource, &existingSessionID)
+	if err != nil && err != sql.ErrNoRows {
+		return 0, err
+	}
+	if err == nil && (existingSource != source.Source || existingSessionID != source.SessionID) {
+		if _, err := tx.Exec(`DELETE FROM session_events WHERE session_source_id=?`, existingID); err != nil {
+			return 0, err
+		}
+	}
 	_, err = tx.Exec(`INSERT INTO session_sources(
 		source, session_id, source_kind, path, parser_version, head_hash,
 		file_size, indexed_offset, coverage_status, source_status,

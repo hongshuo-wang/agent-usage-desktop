@@ -91,6 +91,55 @@ func TestSessionSourceAndEventInsertDedup(t *testing.T) {
 	}
 }
 
+func TestUpsertSessionSourceIdentityChangeClearsIndexedEvents(t *testing.T) {
+	db := tempDB(t)
+	source := testSessionSource("/sessions/replaced.jsonl", "old-session")
+	sourceID, err := db.UpsertSessionSource(source)
+	if err != nil {
+		t.Fatalf("UpsertSessionSource(old): %v", err)
+	}
+	if err := db.InsertSessionEvents([]SessionEventRecord{
+		testSessionEvent(sourceID, source.SessionID, 15),
+	}); err != nil {
+		t.Fatalf("InsertSessionEvents: %v", err)
+	}
+	if got := ftsMatchCount(t, db, "migration"); got != 1 {
+		t.Fatalf("FTS content before replacement = %d, want 1", got)
+	}
+
+	source.Source = "codex"
+	source.SessionID = "new-session"
+	replacedID, err := db.UpsertSessionSource(source)
+	if err != nil {
+		t.Fatalf("UpsertSessionSource(new): %v", err)
+	}
+	if replacedID != sourceID {
+		t.Errorf("source row id changed: got %d, want %d", replacedID, sourceID)
+	}
+	gotSource, err := db.GetSessionSourceByPath(source.Path)
+	if err != nil {
+		t.Fatalf("GetSessionSourceByPath: %v", err)
+	}
+	if gotSource == nil || gotSource.Source != "codex" || gotSource.SessionID != "new-session" {
+		t.Fatalf("source identity not replaced: %+v", gotSource)
+	}
+	for _, identity := range []struct {
+		source    string
+		sessionID string
+	}{{"claude", "old-session"}, {"codex", "new-session"}} {
+		events, err := db.ListSessionEvents(identity.source, identity.sessionID, 10, 0)
+		if err != nil {
+			t.Fatalf("ListSessionEvents(%s/%s): %v", identity.source, identity.sessionID, err)
+		}
+		if len(events) != 0 {
+			t.Errorf("stale events remain for %s/%s: %+v", identity.source, identity.sessionID, events)
+		}
+	}
+	if got := ftsMatchCount(t, db, "migration"); got != 0 {
+		t.Errorf("stale FTS content remains after replacement: %d", got)
+	}
+}
+
 func TestSessionEventsFTSTriggers(t *testing.T) {
 	db := tempDB(t)
 	source := testSessionSource("/sessions/fts.jsonl", "fts-session")
