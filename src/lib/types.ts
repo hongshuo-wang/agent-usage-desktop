@@ -98,9 +98,19 @@ export interface SessionSummary {
   malformed_lines: number;
 }
 
+export type SessionEventType =
+  | "user_message"
+  | "assistant_message"
+  | "reasoning"
+  | "tool_call"
+  | "tool_result"
+  | "error"
+  | "metadata"
+  | "unknown";
+
 export interface SessionEvent {
   id: number;
-  event_type: string;
+  event_type: SessionEventType;
   source_event_type: string;
   timestamp: string;
   role: string;

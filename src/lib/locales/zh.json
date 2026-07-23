@@ -159,5 +159,15 @@
   "rawRecord": "原始记录",
   "inheritedFilters": "继承自概览的筛选条件",
   "clearAllFilters": "清除全部筛选条件",
-  "clearAll": "全部清除"
+  "clearAll": "全部清除",
+  "agent": "Agent",
+  "models": "模型",
+  "startTime": "开始时间",
+  "duration": "持续时间",
+  "coverageStatus": "索引覆盖",
+  "sessionComplete": "索引完整",
+  "sourceEventType": "来源事件类型",
+  "timestamp": "时间戳",
+  "eventStatus": "事件状态",
+  "toolCallId": "工具调用 ID"
 }

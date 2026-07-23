@@ -23,16 +23,7 @@ function InspectorField({ label, value, fallback, mono = false }: { label: strin
 }
 
 export default function EventInspector({ event, raw, rawLoading, rawError, onLoadRaw, onClose, t }: Props) {
-  const payloadFields: Array<[string, string, boolean]> = [];
-  if (event.content || (event.event_type !== "tool_call" && event.event_type !== "tool_result")) {
-    payloadFields.push([t("content"), event.content, false]);
-  }
-  if (event.tool_input || event.event_type === "tool_call") {
-    payloadFields.push([t("toolInput"), event.tool_input, true]);
-  }
-  if (event.tool_output || event.event_type === "tool_result") {
-    payloadFields.push([t("toolOutput"), event.tool_output, true]);
-  }
+  const fallback = t("sourceDataUnavailable");
 
   return (
     <aside data-testid="event-inspector" className="flex min-h-0 min-w-0 flex-col border-l border-border bg-card/30">
@@ -48,14 +39,17 @@ export default function EventInspector({ event, raw, rawLoading, rawError, onLoa
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3">
         <dl>
-          <InspectorField label={t("eventType")} value={event.event_type} fallback={t("sourceDataUnavailable")} />
-          {event.role && <InspectorField label={t("role")} value={event.role} fallback={t("sourceDataUnavailable")} />}
-          {(event.tool_name || event.event_type === "tool_call") && (
-            <InspectorField label={t("toolName")} value={event.tool_name} fallback={t("sourceDataUnavailable")} />
-          )}
-          {payloadFields.map(([label, value, mono]) => (
-            <InspectorField key={label} label={label} value={value} fallback={t("sourceDataUnavailable")} mono={mono} />
-          ))}
+          <InspectorField label={t("eventType")} value={event.event_type} fallback={fallback} />
+          <InspectorField label={t("sourceEventType")} value={event.source_event_type} fallback={fallback} />
+          <InspectorField label={t("timestamp")} value={event.timestamp} fallback={fallback} mono />
+          <InspectorField label={t("eventStatus")} value={event.event_status} fallback={fallback} />
+          <InspectorField label={t("duration")} value={event.duration_ms === null ? "" : `${event.duration_ms} ms`} fallback={fallback} mono />
+          <InspectorField label={t("toolCallId")} value={event.tool_call_id} fallback={fallback} mono />
+          <InspectorField label={t("role")} value={event.role} fallback={fallback} />
+          <InspectorField label={t("toolName")} value={event.tool_name} fallback={fallback} />
+          <InspectorField label={t("content")} value={event.content} fallback={fallback} />
+          <InspectorField label={t("toolInput")} value={event.tool_input} fallback={fallback} mono />
+          <InspectorField label={t("toolOutput")} value={event.tool_output} fallback={fallback} mono />
         </dl>
 
         {event.has_raw && !raw && (

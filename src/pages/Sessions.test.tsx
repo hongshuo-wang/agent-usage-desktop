@@ -6,6 +6,11 @@ import type { RawEventResponse, SessionEvent, SessionSummary } from "../lib/type
 import { fetchAPI, fetchRaw } from "../lib/api";
 import Sessions from "./Sessions";
 
+type Exact<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type RequiredEventType = "user_message" | "assistant_message" | "reasoning" | "tool_call" | "tool_result" | "error" | "metadata" | "unknown";
+const sessionEventTypeIsExact: Exact<SessionEvent["event_type"], RequiredEventType> = true;
+void sessionEventTypeIsExact;
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
@@ -156,6 +161,61 @@ describe("session retrospective center", () => {
     await waitFor(() => expect(screen.queryByTestId("session-filter-context")).not.toBeInTheDocument());
   });
 
+  it("sends user-editable model and project filters to the backend and allows clearing them", async () => {
+    renderSessions("/sessions?from=2026-07-01&to=2026-07-03&model=sonnet&project=console");
+    const initialListSignal = vi.mocked(fetchAPI).mock.calls.find(([path]) => path === "sessions")?.[2]?.signal;
+    const modelInput = await screen.findByRole("textbox", { name: "modelFilter" });
+    const projectInput = screen.getByRole("textbox", { name: "projectFilter" });
+    expect(modelInput).toHaveValue("sonnet");
+    expect(projectInput).toHaveValue("console");
+
+    fireEvent.change(modelInput, { target: { value: "opus" } });
+    fireEvent.change(projectInput, { target: { value: "dashboard" } });
+    await waitFor(() => expect(fetchAPI).toHaveBeenCalledWith("sessions", expect.objectContaining({
+      model: "opus", project: "dashboard",
+    }), expect.objectContaining({ signal: expect.any(AbortSignal) })));
+    expect(initialListSignal?.aborted).toBe(true);
+
+    fireEvent.change(modelInput, { target: { value: "" } });
+    fireEvent.change(projectInput, { target: { value: "" } });
+    await waitFor(() => expect(fetchAPI).toHaveBeenCalledWith("sessions", expect.objectContaining({
+      model: undefined, project: undefined,
+    }), expect.objectContaining({ signal: expect.any(AbortSignal) })));
+  });
+
+  it("shows list duration and the complete source-backed session header", async () => {
+    mockContracts([summary({
+      coverage_status: "partial",
+      start_time: "2026-07-23T08:30:00Z",
+      last_activity: "2026-07-23T10:00:00Z",
+      models: ["sonnet", "haiku"],
+    })]);
+    renderSessions();
+
+    const listItem = (await screen.findAllByTestId("session-list-item"))[0];
+    expect(listItem).toHaveTextContent("1h 30m");
+    const timeline = screen.getByTestId("session-timeline");
+    expect(within(timeline).getByText("Newest investigation")).toBeVisible();
+    for (const [label, value] of [
+      ["agent", "claude"],
+      ["project", "console"],
+      ["branch", "main"],
+      ["startTime", "2026-07-23T08:30:00Z"],
+      ["models", "sonnet, haiku"],
+      ["totalTokens", "165"],
+      ["inputTokens", "100"],
+      ["outputTokens", "40"],
+      ["cacheRead", "20"],
+      ["cacheCreate", "5"],
+      ["toolCalls", "2"],
+      ["estimatedCost", "$0.1200"],
+    ]) {
+      const labelElement = within(timeline).getByText(label);
+      expect(labelElement.parentElement).toHaveTextContent(value);
+    }
+    expect(within(timeline).getByText("sessionPartial")).toBeVisible();
+  });
+
   it("collapses tool calls and long results by default while expanding errors", async () => {
     renderSessions();
     const timeline = await screen.findByTestId("session-timeline");
@@ -178,6 +238,44 @@ describe("session retrospective center", () => {
     await user.click(screen.getByRole("button", { name: "closeInspector" }));
     expect(screen.queryByTestId("event-inspector")).not.toBeInTheDocument();
     expect(screen.getByTestId("session-center-grid")).toHaveAttribute("data-inspector-open", "false");
+  });
+
+  it("shows every normalized event field with labels and exact source values", async () => {
+    const detailed = event({
+      id: 12,
+      event_type: "tool_call",
+      source_event_type: "response_item:function_call",
+      timestamp: "2026-07-23T09:02:03Z",
+      role: "assistant",
+      content: "provided content",
+      tool_name: "shell",
+      tool_call_id: "call-7",
+      tool_input: '{"command":"go test ./..."}',
+      tool_output: "provided output",
+      event_status: "success",
+      duration_ms: 125,
+      has_raw: false,
+    });
+    mockContracts([summary()], [detailed]);
+    const user = userEvent.setup();
+    renderSessions();
+    await user.click(await screen.findByText("eventCollapsed"));
+    const inspector = screen.getByTestId("event-inspector");
+    for (const [label, value] of [
+      ["eventType", "tool_call"],
+      ["sourceEventType", "response_item:function_call"],
+      ["timestamp", "2026-07-23T09:02:03Z"],
+      ["eventStatus", "success"],
+      ["duration", "125 ms"],
+      ["toolCallId", "call-7"],
+      ["content", "provided content"],
+      ["toolInput", '{"command":"go test ./..."}'],
+      ["toolOutput", "provided output"],
+    ]) {
+      const labelElement = within(inspector).getByText(label);
+      expect(labelElement.parentElement).toHaveTextContent(value);
+    }
+    expect(fetchRaw).not.toHaveBeenCalled();
   });
 
   it("does not request raw data until Raw record is explicitly clicked and caches it for the session", async () => {
@@ -277,7 +375,7 @@ describe("session retrospective center", () => {
 
     await screen.findAllByText("Stats");
     for (const key of ["sessionStatsOnly", "sessionPartial", "sessionMissingSource", "sessionMalformed", "sessionUnknownPrice"]) {
-      expect(screen.getByText(key)).toBeVisible();
+      expect(screen.getAllByText(key)[0]).toBeVisible();
     }
   });
 
@@ -289,8 +387,10 @@ describe("session retrospective center", () => {
     expect(unavailable).toBeVisible();
     await user.click(unavailable);
     const inspector = screen.getByTestId("event-inspector");
-    const contentLabel = within(inspector).getByText("content");
-    expect(contentLabel.parentElement).toHaveTextContent("sourceDataUnavailable");
+    for (const label of ["eventStatus", "duration", "toolCallId", "content", "toolInput", "toolOutput"]) {
+      const labelElement = within(inspector).getByText(label);
+      expect(labelElement.parentElement).toHaveTextContent("sourceDataUnavailable");
+    }
     expect(screen.queryByText(/system prompt|request body|tool schema/i)).not.toBeInTheDocument();
   });
 

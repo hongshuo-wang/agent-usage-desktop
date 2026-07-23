@@ -159,5 +159,15 @@
   "rawRecord": "Raw record",
   "inheritedFilters": "Inherited Dashboard filters",
   "clearAllFilters": "Clear all filters",
-  "clearAll": "Clear all"
+  "clearAll": "Clear all",
+  "agent": "Agent",
+  "models": "Models",
+  "startTime": "Start time",
+  "duration": "Duration",
+  "coverageStatus": "Coverage",
+  "sessionComplete": "Complete index",
+  "sourceEventType": "Source event type",
+  "timestamp": "Timestamp",
+  "eventStatus": "Event status",
+  "toolCallId": "Tool call ID"
 }

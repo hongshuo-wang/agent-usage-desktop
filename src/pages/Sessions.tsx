@@ -326,6 +326,31 @@ export default function Sessions() {
         onCustomToChange={(to) => setFilters((current) => ({ ...current, preset: "custom", to }))}
       />
 
+      <div className="flex min-w-0 flex-wrap items-end gap-3 px-1" data-testid="session-model-project-filters">
+        <label className="flex min-w-48 flex-1 flex-col gap-1 text-[10px] text-muted-foreground sm:max-w-64">
+          <span>{t("modelFilter")}</span>
+          <input
+            type="text"
+            aria-label={t("modelFilter")}
+            value={filters.model}
+            onChange={(event) => setFilters((current) => ({ ...current, model: event.target.value }))}
+            autoComplete="off"
+            className="h-8 min-w-0 rounded border border-border bg-card px-2.5 text-xs text-foreground outline-none focus:border-accent"
+          />
+        </label>
+        <label className="flex min-w-48 flex-1 flex-col gap-1 text-[10px] text-muted-foreground sm:max-w-64">
+          <span>{t("projectFilter")}</span>
+          <input
+            type="text"
+            aria-label={t("projectFilter")}
+            value={filters.project}
+            onChange={(event) => setFilters((current) => ({ ...current, project: event.target.value }))}
+            autoComplete="off"
+            className="h-8 min-w-0 rounded border border-border bg-card px-2.5 text-xs text-foreground outline-none focus:border-accent"
+          />
+        </label>
+      </div>
+
       {hasDrilldown(drilldown) && (
         <aside data-testid="session-filter-context" className="flex min-w-0 flex-wrap items-center gap-2 border-y border-border px-3 py-2 text-xs">
           <span className="font-medium text-muted-foreground">{t("inheritedFilters")}</span>

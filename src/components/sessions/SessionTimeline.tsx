@@ -2,6 +2,7 @@ import { ArrowLeft, LoaderCircle } from "lucide-react";
 import type { SessionEvent, SessionSummary } from "../../lib/types";
 import { fmtCost, fmtTokens } from "../../lib/utils";
 import EventCard from "./EventCard";
+import { sessionStatusLabels } from "./SessionList";
 
 type Translate = (key: string) => string;
 
@@ -18,6 +19,15 @@ interface Props {
   onLoadMore: () => void;
   onInspect: (event: SessionEvent) => void;
   t: Translate;
+}
+
+function HeaderField({ label, value, fallback, mono = false }: { label: string; value: string; fallback: string; mono?: boolean }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-[10px] text-muted-foreground">{label}</dt>
+      <dd className={`truncate text-xs ${mono ? "font-mono" : ""}`}>{value || fallback}</dd>
+    </div>
+  );
 }
 
 export default function SessionTimeline({
@@ -38,15 +48,31 @@ export default function SessionTimeline({
             </button>
           )}
           <div className="min-w-0 flex-1">
-            <h2 className="truncate text-sm font-semibold">{session.title}</h2>
-            <p className="truncate text-xs text-muted-foreground">{session.source} / {session.project || session.cwd || session.session_id}</p>
+            <h2 className="truncate text-sm font-semibold">{session.title || t("sourceDataUnavailable")}</h2>
           </div>
         </div>
+        <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-5">
+          <HeaderField label={t("agent")} value={session.source} fallback={t("sourceDataUnavailable")} />
+          <HeaderField label={t("project")} value={session.project} fallback={t("sourceDataUnavailable")} />
+          <HeaderField label={t("branch")} value={session.git_branch} fallback={t("sourceDataUnavailable")} />
+          <HeaderField label={t("startTime")} value={session.start_time} fallback={t("sourceDataUnavailable")} mono />
+          <HeaderField label={t("models")} value={session.models.join(", ")} fallback={t("sourceDataUnavailable")} />
+        </dl>
+        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1 text-[10px] text-muted-foreground">
+          <span>{t("coverageStatus")}:</span>
+          {sessionStatusLabels(session).map((label) => (
+            <span key={label} className="border-l-2 border-accent px-1.5">{t(label)}</span>
+          ))}
+        </div>
         <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-4">
-          <div><dt className="text-[10px] text-muted-foreground">{t("tokens")}</dt><dd className="font-mono">{fmtTokens(session.total_tokens)}</dd></div>
-          <div><dt className="text-[10px] text-muted-foreground">{t("cost")}</dt><dd className="font-mono">{fmtCost(session.total_cost)}</dd></div>
-          <div><dt className="text-[10px] text-muted-foreground">{t("toolCalls")}</dt><dd className="font-mono">{session.tool_calls}</dd></div>
-          <div><dt className="text-[10px] text-muted-foreground">{t("errors")}</dt><dd className="font-mono">{session.errors}</dd></div>
+          <HeaderField label={t("totalTokens")} value={fmtTokens(session.total_tokens)} fallback={t("sourceDataUnavailable")} mono />
+          <HeaderField label={t("inputTokens")} value={fmtTokens(session.input_tokens)} fallback={t("sourceDataUnavailable")} mono />
+          <HeaderField label={t("outputTokens")} value={fmtTokens(session.output_tokens)} fallback={t("sourceDataUnavailable")} mono />
+          <HeaderField label={t("cacheRead")} value={fmtTokens(session.cache_read)} fallback={t("sourceDataUnavailable")} mono />
+          <HeaderField label={t("cacheCreate")} value={fmtTokens(session.cache_create)} fallback={t("sourceDataUnavailable")} mono />
+          <HeaderField label={t("toolCalls")} value={String(session.tool_calls)} fallback={t("sourceDataUnavailable")} mono />
+          <HeaderField label={t("estimatedCost")} value={fmtCost(session.total_cost)} fallback={t("sourceDataUnavailable")} mono />
+          <HeaderField label={t("errors")} value={String(session.errors)} fallback={t("sourceDataUnavailable")} mono />
         </dl>
       </header>
 

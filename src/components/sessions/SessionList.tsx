@@ -22,16 +22,32 @@ interface Props {
 export const sessionIdentity = (session: Pick<SessionSummary, "source" | "session_id">) =>
   `${session.source}\u0000${session.session_id}`;
 
-function statusLabels(session: SessionSummary): string[] {
+export function sessionStatusLabels(session: SessionSummary): string[] {
   const labels: string[] = [];
-  if (session.source_status === "stats_only" || session.coverage_status === "stats_only") labels.push("sessionStatsOnly");
-  if (session.coverage_status === "partial") labels.push("sessionPartial");
+  if (session.source_status === "stats_only" || session.coverage_status === "stats_only") {
+    labels.push("sessionStatsOnly");
+  } else if (session.coverage_status === "partial") {
+    labels.push("sessionPartial");
+  } else if (session.coverage_status === "complete") {
+    labels.push("sessionComplete");
+  }
   if (session.source_status === "missing_source") labels.push("sessionMissingSource");
   if (session.source_status === "rebuild_required") labels.push("sessionRebuildRequired");
   if (session.source_status === "stale_parser") labels.push("sessionStaleParser");
   if (session.malformed_lines > 0) labels.push("sessionMalformed");
   if (session.unknown_price) labels.push("sessionUnknownPrice");
   return labels;
+}
+
+export function formatSessionDuration(startTime: string, lastActivity: string, fallback: string): string {
+  const start = Date.parse(startTime);
+  const end = Date.parse(lastActivity);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return fallback;
+  const minutes = Math.floor((end - start) / 60_000);
+  const days = Math.floor(minutes / (24 * 60));
+  const hours = Math.floor((minutes % (24 * 60)) / 60);
+  const remainingMinutes = minutes % 60;
+  return [days ? `${days}d` : "", hours ? `${hours}h` : "", `${remainingMinutes}m`].filter(Boolean).join(" ");
 }
 
 export default function SessionList({
@@ -98,9 +114,12 @@ export default function SessionList({
                       <span>{fmtCost(session.total_cost)}</span>
                       <span>{session.prompts} {t("prompts")}</span>
                     </div>
-                    {statusLabels(session).length > 0 && (
+                    <div className="mt-1 text-[10px] text-muted-foreground">
+                      {t("duration")}: {formatSessionDuration(session.start_time, session.last_activity, t("sourceDataUnavailable"))}
+                    </div>
+                    {sessionStatusLabels(session).length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-1">
-                        {statusLabels(session).map((label) => (
+                        {sessionStatusLabels(session).map((label) => (
                           <span key={label} className="border-l-2 border-accent px-1.5 text-[10px] text-muted-foreground">{t(label)}</span>
                         ))}
                       </div>
