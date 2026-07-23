@@ -60,7 +60,7 @@ func TestOpenClawCollector_IncrementalScanPreservesSessionContext(t *testing.T) 
 		t.Fatalf("expected preserved session_id oc-sess-1, got %s", sessions[0].SessionID)
 	}
 
-	details, err := db.GetSessionDetail("oc-sess-1")
+	details, err := db.GetSessionDetail("openclaw", "oc-sess-1")
 	if err != nil {
 		t.Fatalf("GetSessionDetail: %v", err)
 	}

@@ -209,19 +209,13 @@ type SessionDetail struct {
 }
 
 // GetSessionDetail returns per-model usage breakdown for a specific session.
-func (d *DB) GetSessionDetail(sessionID string, sources ...string) ([]SessionDetail, error) {
-	query := `SELECT model, COUNT(*) as calls,
+func (d *DB) GetSessionDetail(source, sessionID string) ([]SessionDetail, error) {
+	rows, err := d.db.Query(`SELECT model, COUNT(*) as calls,
 		SUM(input_tokens) as inp, SUM(output_tokens) as outp,
 		SUM(cache_read_input_tokens) as cr, SUM(cache_creation_input_tokens) as cc,
 		SUM(cost_usd) as cost
-		FROM usage_records WHERE session_id=?`
-	args := []interface{}{sessionID}
-	if len(sources) > 0 && sources[0] != "" {
-		query += ` AND source=?`
-		args = append(args, sources[0])
-	}
-	query += ` GROUP BY source, model ORDER BY cost DESC`
-	rows, err := d.db.Query(query, args...)
+		FROM usage_records WHERE source=? AND session_id=?
+		GROUP BY model ORDER BY cost DESC`, source, sessionID)
 	if err != nil {
 		return nil, err
 	}

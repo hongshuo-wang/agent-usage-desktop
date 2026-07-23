@@ -27,6 +27,7 @@ interface SessionDetail {
 }
 
 const PAGE_SIZE = 20;
+const sessionKey = (source: string, sessionID: string) => JSON.stringify([source, sessionID]);
 const BADGE_COLORS: Record<string, string> = {
   claude: "bg-blue-500/10 text-blue-500 border-blue-500/20",
   codex: "bg-green-500/10 text-green-500 border-green-500/20",
@@ -113,16 +114,17 @@ export default function Sessions() {
     else { setSortKey(key); setSortDir("desc"); }
   };
 
-  const toggleExpand = async (sid: string) => {
-    if (expanded[sid] !== undefined) {
-      setExpanded((prev) => { const next = { ...prev }; delete next[sid]; return next; });
+  const toggleExpand = async (source: string, sid: string) => {
+    const key = sessionKey(source, sid);
+    if (expanded[key] !== undefined) {
+      setExpanded((prev) => { const next = { ...prev }; delete next[key]; return next; });
     } else {
-      setExpanded((prev) => ({ ...prev, [sid]: null }));
+      setExpanded((prev) => ({ ...prev, [key]: null }));
       try {
-        const data = await fetchRaw<SessionDetail[]>(`session-detail?session_id=${encodeURIComponent(sid)}`);
-        setExpanded((prev) => ({ ...prev, [sid]: data }));
+        const data = await fetchRaw<SessionDetail[]>(`session-detail?source=${encodeURIComponent(source)}&session_id=${encodeURIComponent(sid)}`);
+        setExpanded((prev) => ({ ...prev, [key]: data }));
       } catch {
-        setExpanded((prev) => { const next = { ...prev }; delete next[sid]; return next; });
+        setExpanded((prev) => { const next = { ...prev }; delete next[key]; return next; });
       }
     }
   };
@@ -174,8 +176,9 @@ export default function Sessions() {
               </tr>
             </thead>
             <tbody>
-              {paged.map((s) => (
-                <Fragment key={s.session_id}>
+              {paged.map((s) => {
+                const key = sessionKey(s.source, s.session_id);
+                return <Fragment key={key}>
                   <tr className="hover:bg-muted/30 transition-colors">
                     <td className="px-6 py-3">
                       <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase border ${BADGE_COLORS[s.source] || ""}`}>
@@ -189,25 +192,25 @@ export default function Sessions() {
                     <td className="px-6 py-3">{fmtTokens(s.tokens || 0)}</td>
                     <td className="px-6 py-3 font-medium text-green-500">{fmtCost(s.total_cost || 0)}</td>
                     <td className="px-6 py-3">
-                      <button onClick={() => toggleExpand(s.session_id)}
+                      <button onClick={() => toggleExpand(s.source, s.session_id)}
                         className="w-7 h-7 rounded-md border border-border flex items-center justify-center hover:border-accent">
-                        <span className={`transition-transform ${expanded[s.session_id] !== undefined ? "rotate-90" : ""}`}>▶</span>
+                        <span className={`transition-transform ${expanded[key] !== undefined ? "rotate-90" : ""}`}>▶</span>
                       </button>
                     </td>
                   </tr>
-                  {expanded[s.session_id] !== undefined && (
+                  {expanded[key] !== undefined && (
                     <tr>
                       <td colSpan={8} className="px-6 py-3 bg-muted/20">
-                        {expanded[s.session_id] === null ? (
+                        {expanded[key] === null ? (
                           <span className="text-muted-foreground text-xs">Loading...</span>
                         ) : (
-                          <DetailTable details={expanded[s.session_id] || []} t={t} />
+                          <DetailTable details={expanded[key] || []} t={t} />
                         )}
                       </td>
                     </tr>
                   )}
-                </Fragment>
-              ))}
+                </Fragment>;
+              })}
             </tbody>
           </table>
           )}

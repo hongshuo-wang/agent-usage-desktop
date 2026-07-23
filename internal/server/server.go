@@ -214,12 +214,13 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
+	source := r.URL.Query().Get("source")
 	sid := r.URL.Query().Get("session_id")
-	if sid == "" {
-		http.Error(w, "session_id required", 400)
+	if source == "" || sid == "" {
+		http.Error(w, "source and session_id required", http.StatusBadRequest)
 		return
 	}
-	data, err := s.db.GetSessionDetail(sid)
+	data, err := s.db.GetSessionDetail(source, sid)
 	if err != nil {
 		serverError(w, err)
 		return

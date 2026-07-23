@@ -247,12 +247,14 @@ func TestSessionReadsUseCompositeIdentity(t *testing.T) {
 			t.Errorf("%s session mixed source data: tokens=%d prompts=%d", session.Source, session.Tokens, session.Prompts)
 		}
 	}
-	claudeDetails, err := db.GetSessionDetail("shared-session", "claude")
-	if err != nil {
-		t.Fatalf("GetSessionDetail: %v", err)
-	}
-	if len(claudeDetails) != 1 || claudeDetails[0].InputTokens != wants["claude"].tokens {
-		t.Fatalf("source-qualified detail mixed data: %+v", claudeDetails)
+	for source, want := range wants {
+		details, err := db.GetSessionDetail(source, "shared-session")
+		if err != nil {
+			t.Fatalf("GetSessionDetail(%s): %v", source, err)
+		}
+		if len(details) != 1 || details[0].InputTokens != want.tokens {
+			t.Fatalf("%s detail mixed source data: %+v", source, details)
+		}
 	}
 }
 
