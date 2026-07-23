@@ -103,7 +103,7 @@ func TestUpsertSessionSourceWithEventsRollsBackAtomically(t *testing.T) {
 		t.Fatalf("seed source: %v", err)
 	}
 	if _, err := db.db.Exec(`CREATE TRIGGER fail_session_event_insert
-		BEFORE INSERT ON session_events BEGIN
+		BEFORE INSERT ON session_events WHEN new.raw_offset = 768 BEGIN
 			SELECT RAISE(ABORT, 'injected session event failure');
 		END`); err != nil {
 		t.Fatalf("create failure trigger: %v", err)
@@ -114,6 +114,7 @@ func TestUpsertSessionSourceWithEventsRollsBackAtomically(t *testing.T) {
 	source.IndexedOffset = 2048
 	_, err = db.UpsertSessionSourceWithEvents(source, []SessionEventRecord{
 		testSessionEvent(sourceID, source.SessionID, 512),
+		testSessionEvent(sourceID, source.SessionID, 768),
 	})
 	if err == nil || !strings.Contains(err.Error(), "injected session event failure") {
 		t.Fatalf("error = %v, want injected insert failure", err)
