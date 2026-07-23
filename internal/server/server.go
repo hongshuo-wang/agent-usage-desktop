@@ -59,8 +59,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/cost-by-model", s.handleCostByModel)
 	mux.HandleFunc("/api/cost-over-time", s.handleCostOverTime)
 	mux.HandleFunc("/api/tokens-over-time", s.handleTokensOverTime)
-	mux.HandleFunc("/api/sessions", s.handleSessions)
+	mux.HandleFunc("GET /api/sessions", s.handleSessionSearch)
+	mux.HandleFunc("GET /api/sessions/{source}/{session_id}/events", s.handleSessionEventsRoute)
+	mux.HandleFunc("GET /api/sessions/{source}/{session_id}/events/{event_id}/raw", s.handleSessionRawRoute)
 	mux.HandleFunc("/api/session-detail", s.handleSessionDetail)
+	mux.HandleFunc("POST /api/session-index/rebuild", s.handleSessionIndexRebuild)
 
 	return corsMiddleware(mux)
 }

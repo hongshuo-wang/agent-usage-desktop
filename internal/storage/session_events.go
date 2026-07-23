@@ -45,6 +45,14 @@ type SessionEventRecord struct {
 	RawIndex        int
 }
 
+// RawEventLocator is the source-file location for one source-qualified event.
+type RawEventLocator struct {
+	Path         string
+	SourceStatus string
+	RawOffset    int64
+	RawLength    int64
+}
+
 // UpsertSessionSource inserts or replaces source metadata keyed by path.
 func (d *DB) UpsertSessionSource(source *SessionSource) (int64, error) {
 	d.mu.Lock()
@@ -393,6 +401,62 @@ func (d *DB) GetSessionEvent(source, sessionID string, eventID int64) (*SessionE
 		return nil, err
 	}
 	return &event, nil
+}
+
+// SessionIdentityExists checks all persisted identity-bearing tables.
+func (d *DB) SessionIdentityExists(source, sessionID string) (bool, error) {
+	var exists int
+	err := d.db.QueryRow(`SELECT EXISTS(
+		SELECT 1 FROM sessions WHERE source=? AND session_id=?
+		UNION ALL SELECT 1 FROM usage_records WHERE source=? AND session_id=?
+		UNION ALL SELECT 1 FROM session_sources WHERE source=? AND session_id=?
+		UNION ALL SELECT 1 FROM session_events WHERE source=? AND session_id=?
+	)`, source, sessionID, source, sessionID, source, sessionID, source, sessionID).Scan(&exists)
+	return exists != 0, err
+}
+
+// GetRawEventLocator resolves an event and its source path in one query.
+func (d *DB) GetRawEventLocator(source, sessionID string, eventID int64) (*RawEventLocator, error) {
+	row := d.db.QueryRow(`SELECT ss.path, ss.source_status, e.raw_offset, e.raw_length
+		FROM session_events e JOIN session_sources ss ON ss.id=e.session_source_id
+		WHERE e.id=? AND e.source=? AND e.session_id=?
+			AND ss.source=e.source AND ss.session_id=e.session_id`, eventID, source, sessionID)
+	var locator RawEventLocator
+	if err := row.Scan(&locator.Path, &locator.SourceStatus, &locator.RawOffset, &locator.RawLength); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &locator, nil
+}
+
+// RebuildSessionIndex clears normalized content and marks every source for re-indexing.
+func (d *DB) RebuildSessionIndex() (int64, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	tx, err := d.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM session_events`); err != nil {
+		return 0, err
+	}
+	result, err := tx.Exec(`UPDATE session_sources SET
+		source_status='rebuild_required', coverage_status='partial', indexed_offset=0,
+		malformed_lines=0, last_error=''`)
+	if err != nil {
+		return 0, err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 type rowScanner interface {
