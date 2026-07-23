@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/hongshuo-wang/agent-usage-desktop/internal/storage"
@@ -59,6 +60,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/cost-by-model", s.handleCostByModel)
 	mux.HandleFunc("/api/cost-over-time", s.handleCostOverTime)
 	mux.HandleFunc("/api/tokens-over-time", s.handleTokensOverTime)
+	mux.HandleFunc("GET /api/throughput", s.handleThroughput)
 	mux.HandleFunc("GET /api/sessions", s.handleSessionSearch)
 	mux.HandleFunc("GET /api/sessions/{source}/{session_id}/events", s.handleSessionEventsRoute)
 	mux.HandleFunc("GET /api/sessions/{source}/{session_id}/events/{event_id}/raw", s.handleSessionRawRoute)
@@ -85,7 +87,11 @@ func (s *Server) parseTimeRange(r *http.Request) (time.Time, time.Time, int, err
 	// Parse tz_offset (minutes, JS getTimezoneOffset convention: UTC+8 = -480)
 	tzOffset := 0
 	if tzStr := r.URL.Query().Get("tz_offset"); tzStr != "" {
-		fmt.Sscanf(tzStr, "%d", &tzOffset)
+		var err error
+		tzOffset, err = strconv.Atoi(tzStr)
+		if err != nil || tzOffset < -840 || tzOffset > 720 {
+			return time.Time{}, time.Time{}, 0, fmt.Errorf("invalid 'tz_offset' %q: expected minutes between -840 and 720", tzStr)
+		}
 	}
 
 	var fromTime, toTime time.Time
