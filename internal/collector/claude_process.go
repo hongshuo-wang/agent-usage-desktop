@@ -238,6 +238,10 @@ func (c *ClaudeCollector) processFile(path, project string) error {
 		existingSource.FileSize = info.Size()
 		existingSource.IndexedOffset = indexedOffset
 		existingSource.HeadHash = headHash
+		existingSource.CoverageStatus = "partial"
+		if existingSource.MalformedLines == 0 && indexedOffset == info.Size() {
+			existingSource.CoverageStatus = "complete"
+		}
 		existingSource.SourceStatus = "available"
 		if _, err := c.db.UpsertSessionSource(existingSource); err != nil {
 			return fmt.Errorf("update claude source: %w", err)
@@ -246,15 +250,15 @@ func (c *ClaudeCollector) processFile(path, project string) error {
 	}
 
 	totalMalformed := malformedLines
-	coverage := "complete"
 	if existingSource != nil && !rebuild {
 		totalMalformed += existingSource.MalformedLines
 		if lastError == "" {
 			lastError = existingSource.LastError
 		}
 	}
-	if totalMalformed > 0 {
-		coverage = "partial"
+	coverage := "partial"
+	if totalMalformed == 0 && indexedOffset == info.Size() {
+		coverage = "complete"
 	}
 	source := &storage.SessionSource{
 		Source:         "claude",

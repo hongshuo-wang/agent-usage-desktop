@@ -125,6 +125,13 @@ func TestClaudeCollectorPartialLineWaitsForNewline(t *testing.T) {
 	if size != int64(len(complete)+1+len(partial)) || offset != int64(len(complete)+1) {
 		t.Fatalf("file state = size %d offset %d", size, offset)
 	}
+	source, err := db.GetSessionSourceByPath(path)
+	if err != nil || source == nil {
+		t.Fatalf("GetSessionSourceByPath = %+v, %v", source, err)
+	}
+	if source.CoverageStatus != "partial" || source.IndexedOffset >= source.FileSize {
+		t.Fatalf("partial source metadata = %+v", source)
+	}
 
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -145,10 +152,52 @@ func TestClaudeCollectorPartialLineWaitsForNewline(t *testing.T) {
 	if len(events) != 1 || events[0].Content != "later" {
 		t.Fatalf("completed events = %+v", events)
 	}
+	source, err = db.GetSessionSourceByPath(path)
+	if err != nil || source == nil {
+		t.Fatalf("GetSessionSourceByPath completed = %+v, %v", source, err)
+	}
+	if source.CoverageStatus != "complete" || source.IndexedOffset != source.FileSize {
+		t.Fatalf("completed source metadata = %+v", source)
+	}
 	from, to := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 	stats, _ := db.GetDashboardStats(from, to, "claude")
 	if stats.TotalTokens != 15 {
 		t.Fatalf("usage duplicated or lost: %+v", stats)
+	}
+}
+
+func TestClaudeCollectorPartialOnlyAppendMarksCoveragePartial(t *testing.T) {
+	db := tempDB(t)
+	root := t.TempDir()
+	complete := claudeVisibleLine("sess-partial-append", "2026-01-02T03:04:05Z", strings.Repeat("x", 5000))
+	path := writeClaudeSessionFile(t, root, "proj", "session.jsonl", complete+"\n")
+	collector := NewClaudeCollector(db, []string{root})
+	if err := collector.Scan(); err != nil {
+		t.Fatalf("Scan complete: %v", err)
+	}
+
+	partial := claudeVisibleLine("sess-partial-append", "2026-01-02T03:04:06Z", "unfinished")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	if _, err := f.WriteString(partial); err != nil {
+		f.Close()
+		t.Fatalf("append partial: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if err := collector.Scan(); err != nil {
+		t.Fatalf("Scan partial append: %v", err)
+	}
+
+	source, err := db.GetSessionSourceByPath(path)
+	if err != nil || source == nil {
+		t.Fatalf("GetSessionSourceByPath = %+v, %v", source, err)
+	}
+	if source.CoverageStatus != "partial" || source.IndexedOffset >= source.FileSize {
+		t.Fatalf("partial-only append source metadata = %+v", source)
 	}
 }
 
