@@ -102,6 +102,49 @@ func TestClaudeCollectorEventOffsetsAppendAndDedup(t *testing.T) {
 	}
 }
 
+func TestClaudeCollectorSmallFileAppendPreservesSourceIndex(t *testing.T) {
+	db := tempDB(t)
+	root := t.TempDir()
+	first := claudeVisibleLine("sess-small-append", "2026-01-02T03:04:05Z", "first")
+	path := writeClaudeSessionFile(t, root, "proj", "session.jsonl", first+"\n")
+	collector := NewClaudeCollector(db, []string{root})
+
+	if err := collector.Scan(); err != nil {
+		t.Fatalf("Scan first: %v", err)
+	}
+	initialSource, err := db.GetSessionSourceByPath(path)
+	if err != nil || initialSource == nil {
+		t.Fatalf("initial source = %+v, %v", initialSource, err)
+	}
+	if initialSource.FileSize >= 4096 {
+		t.Fatalf("initial file size = %d, want less than 4096", initialSource.FileSize)
+	}
+
+	second := claudeVisibleLine("sess-small-append", "2026-01-02T03:04:06Z", "second")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	if _, err := f.WriteString(second + "\n"); err != nil {
+		f.Close()
+		t.Fatalf("append: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if err := collector.Scan(); err != nil {
+		t.Fatalf("Scan append: %v", err)
+	}
+	source, err := db.GetSessionSourceByPath(path)
+	if err != nil || source == nil {
+		t.Fatalf("source after append = %+v, %v", source, err)
+	}
+	if source.ID != initialSource.ID {
+		t.Fatalf("source index rebuilt after append: id = %d, want %d", source.ID, initialSource.ID)
+	}
+}
+
 func TestClaudeCollectorPartialLineWaitsForNewline(t *testing.T) {
 	db := tempDB(t)
 	root := t.TempDir()

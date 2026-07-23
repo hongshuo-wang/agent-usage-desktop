@@ -36,8 +36,14 @@ func (c *ClaudeCollector) processFile(path, project string) error {
 		rebuild = rebuild || existingSource.SourceStatus != "available" ||
 			existingSource.ParserVersion != adapter.ParserVersion() ||
 			info.Size() < existingSource.FileSize || info.Size() < lastOffset
-		if existingSource.HeadHash != "" && existingSource.HeadHash != headHash {
-			rebuild = true
+		if existingSource.HeadHash != "" && info.Size() >= existingSource.FileSize {
+			previousHeadHash, err := claudeSourceHeadHash(path, existingSource.FileSize)
+			if err != nil {
+				return err
+			}
+			if existingSource.HeadHash != previousHeadHash {
+				rebuild = true
+			}
 		}
 	}
 	if rebuild {
