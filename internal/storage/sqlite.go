@@ -61,6 +61,7 @@ func Open(path string) (*DB, error) {
 	}
 	db.SetMaxOpenConns(1)
 	if err := migrate(db); err != nil {
+		db.Close()
 		return nil, err
 	}
 	return &DB{db: db}, nil
@@ -288,18 +289,132 @@ func migrate(db *sql.DB) error {
 				);
 			`,
 		},
+		{
+			"007_session_event_index", `
+				CREATE TABLE sessions_v2 (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					source TEXT NOT NULL,
+					session_id TEXT NOT NULL,
+					project TEXT DEFAULT '',
+					cwd TEXT DEFAULT '',
+					version TEXT DEFAULT '',
+					git_branch TEXT DEFAULT '',
+					start_time DATETIME,
+					prompts INTEGER DEFAULT 0,
+					UNIQUE(source, session_id)
+				);
+
+				INSERT INTO sessions_v2(id, source, session_id, project, cwd, version, git_branch, start_time, prompts)
+				SELECT id, source, session_id, project, cwd, version, git_branch, start_time, prompts FROM sessions;
+				DROP TABLE sessions;
+				ALTER TABLE sessions_v2 RENAME TO sessions;
+
+				DROP INDEX IF EXISTS idx_usage_dedup;
+				CREATE UNIQUE INDEX idx_usage_dedup
+					ON usage_records(source, session_id, model, timestamp, input_tokens, output_tokens);
+
+				DROP INDEX IF EXISTS idx_prompt_dedup;
+				CREATE UNIQUE INDEX idx_prompt_dedup
+					ON prompt_events(source, session_id, timestamp);
+
+				CREATE TABLE session_sources (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					source TEXT NOT NULL,
+					session_id TEXT NOT NULL,
+					source_kind TEXT NOT NULL DEFAULT 'jsonl',
+					path TEXT NOT NULL UNIQUE,
+					parser_version TEXT NOT NULL,
+					head_hash TEXT NOT NULL DEFAULT '',
+					file_size INTEGER NOT NULL DEFAULT 0,
+					indexed_offset INTEGER NOT NULL DEFAULT 0,
+					coverage_status TEXT NOT NULL DEFAULT 'partial',
+					source_status TEXT NOT NULL DEFAULT 'available',
+					malformed_lines INTEGER NOT NULL DEFAULT 0,
+					last_error TEXT NOT NULL DEFAULT '',
+					last_indexed_at DATETIME,
+					UNIQUE(source, session_id, path)
+				);
+				CREATE INDEX idx_session_sources_session ON session_sources(source, session_id);
+				CREATE INDEX idx_session_sources_status ON session_sources(source, source_status);
+
+				CREATE TABLE session_events (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					session_source_id INTEGER NOT NULL,
+					source TEXT NOT NULL,
+					session_id TEXT NOT NULL,
+					event_type TEXT NOT NULL,
+					source_event_type TEXT NOT NULL DEFAULT '',
+					timestamp DATETIME,
+					role TEXT NOT NULL DEFAULT '',
+					content TEXT NOT NULL DEFAULT '',
+					tool_name TEXT NOT NULL DEFAULT '',
+					tool_call_id TEXT NOT NULL DEFAULT '',
+					tool_input TEXT NOT NULL DEFAULT '',
+					tool_output TEXT NOT NULL DEFAULT '',
+					event_status TEXT NOT NULL DEFAULT '',
+					duration_ms INTEGER,
+					raw_offset INTEGER NOT NULL DEFAULT 0,
+					raw_length INTEGER NOT NULL DEFAULT 0,
+					raw_index INTEGER NOT NULL DEFAULT 0,
+					FOREIGN KEY(session_source_id) REFERENCES session_sources(id) ON DELETE CASCADE,
+					UNIQUE(session_source_id, raw_offset, raw_index)
+				);
+				CREATE INDEX idx_session_events_session_time ON session_events(source, session_id, timestamp, id);
+				CREATE INDEX idx_session_events_session_type ON session_events(source, session_id, event_type);
+				CREATE INDEX idx_session_events_source_id ON session_events(session_source_id);
+
+				CREATE VIRTUAL TABLE session_events_fts USING fts5(
+					content,
+					tool_name,
+					tool_input,
+					tool_output,
+					content='session_events',
+					content_rowid='id',
+					tokenize='unicode61'
+				);
+
+				CREATE TRIGGER session_events_fts_insert AFTER INSERT ON session_events BEGIN
+					INSERT INTO session_events_fts(rowid, content, tool_name, tool_input, tool_output)
+					VALUES (new.id, new.content, new.tool_name, new.tool_input, new.tool_output);
+				END;
+				CREATE TRIGGER session_events_fts_delete AFTER DELETE ON session_events BEGIN
+					INSERT INTO session_events_fts(session_events_fts, rowid, content, tool_name, tool_input, tool_output)
+					VALUES ('delete', old.id, old.content, old.tool_name, old.tool_input, old.tool_output);
+				END;
+				CREATE TRIGGER session_events_fts_update AFTER UPDATE ON session_events BEGIN
+					INSERT INTO session_events_fts(session_events_fts, rowid, content, tool_name, tool_input, tool_output)
+					VALUES ('delete', old.id, old.content, old.tool_name, old.tool_input, old.tool_output);
+					INSERT INTO session_events_fts(rowid, content, tool_name, tool_input, tool_output)
+					VALUES (new.id, new.content, new.tool_name, new.tool_input, new.tool_output);
+				END;
+			`,
+		},
 	}
 	for _, m := range migrations {
 		var done string
-		db.QueryRow("SELECT value FROM meta WHERE key=?", "migration_"+m.id).Scan(&done)
+		err := db.QueryRow("SELECT value FROM meta WHERE key=?", "migration_"+m.id).Scan(&done)
+		if err != nil && err != sql.ErrNoRows {
+			return fmt.Errorf("read migration %s marker: %w", m.id, err)
+		}
 		if done == "done" {
 			continue
 		}
-		if _, err := db.Exec(m.sql); err != nil {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("begin migration %s: %w", m.id, err)
+		}
+		if _, err := tx.Exec(m.sql); err != nil {
+			tx.Rollback()
 			return fmt.Errorf("migration %s: %w", m.id, err)
 		}
-		db.Exec(`INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
-			"migration_"+m.id, "done")
+		if _, err := tx.Exec(`INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+			"migration_"+m.id, "done"); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("mark migration %s: %w", m.id, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit migration %s: %w", m.id, err)
+		}
 	}
 	db.Exec("ALTER TABLE skill_targets ADD COLUMN variant_id INTEGER NOT NULL DEFAULT 0")
 	db.Exec("ALTER TABLE skills ADD COLUMN current_variant_id INTEGER NOT NULL DEFAULT 0")

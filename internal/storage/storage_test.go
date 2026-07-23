@@ -1,9 +1,12 @@
 package storage
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 func tempDB(t *testing.T) *DB {
@@ -139,6 +142,117 @@ func TestUpsertSession(t *testing.T) {
 	}
 	if err := db.UpsertSession(sess2); err != nil {
 		t.Fatalf("UpsertSession update: %v", err)
+	}
+}
+
+func TestUpsertSessionAllowsSameIDAcrossSources(t *testing.T) {
+	db := tempDB(t)
+	ts := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	for _, source := range []string{"claude", "codex"} {
+		if err := db.UpsertSession(&SessionRecord{
+			Source: source, SessionID: "shared-session", Project: source, StartTime: ts,
+		}); err != nil {
+			t.Fatalf("UpsertSession(%s): %v", source, err)
+		}
+	}
+
+	var count int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE session_id = ?`, "shared-session").Scan(&count); err != nil {
+		t.Fatalf("count sessions: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected two source-qualified sessions, got %d", count)
+	}
+}
+
+func TestUsageAndPromptDedupIncludeSource(t *testing.T) {
+	db := tempDB(t)
+	ts := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	for _, source := range []string{"claude", "codex"} {
+		if err := db.InsertUsage(&UsageRecord{
+			Source: source, SessionID: "shared-session", Model: "same-model",
+			InputTokens: 10, OutputTokens: 5, Timestamp: ts,
+		}); err != nil {
+			t.Fatalf("InsertUsage(%s): %v", source, err)
+		}
+		if err := db.InsertPromptBatch([]*PromptEvent{{
+			Source: source, SessionID: "shared-session", Timestamp: ts,
+		}}); err != nil {
+			t.Fatalf("InsertPromptBatch(%s): %v", source, err)
+		}
+	}
+
+	for _, table := range []string{"usage_records", "prompt_events"} {
+		var count int
+		if err := db.db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if count != 2 {
+			t.Errorf("expected two %s rows, got %d", table, count)
+		}
+	}
+
+	stats, err := db.GetDashboardStats(ts.Add(-time.Minute), ts.Add(time.Minute), "")
+	if err != nil {
+		t.Fatalf("GetDashboardStats: %v", err)
+	}
+	if stats.TotalSessions != 2 {
+		t.Errorf("expected two source-qualified sessions in stats, got %d", stats.TotalSessions)
+	}
+}
+
+func TestSessionReadsUseCompositeIdentity(t *testing.T) {
+	db := tempDB(t)
+	ts := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	wants := map[string]struct {
+		tokens  int64
+		prompts int
+	}{
+		"claude": {tokens: 15, prompts: 1},
+		"codex":  {tokens: 35, prompts: 2},
+	}
+	for source, want := range wants {
+		if err := db.UpsertSession(&SessionRecord{
+			Source: source, SessionID: "shared-session", Project: source, StartTime: ts,
+		}); err != nil {
+			t.Fatalf("UpsertSession(%s): %v", source, err)
+		}
+		if err := db.InsertUsage(&UsageRecord{
+			Source: source, SessionID: "shared-session", Model: "same-model",
+			InputTokens: want.tokens, Timestamp: ts,
+		}); err != nil {
+			t.Fatalf("InsertUsage(%s): %v", source, err)
+		}
+		prompts := make([]*PromptEvent, want.prompts)
+		for i := range prompts {
+			prompts[i] = &PromptEvent{Source: source, SessionID: "shared-session", Timestamp: ts.Add(time.Duration(i) * time.Second)}
+		}
+		if err := db.InsertPromptBatch(prompts); err != nil {
+			t.Fatalf("InsertPromptBatch(%s): %v", source, err)
+		}
+	}
+
+	sessions, err := db.GetSessions(ts.Add(-time.Minute), ts.Add(time.Minute), "")
+	if err != nil {
+		t.Fatalf("GetSessions: %v", err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("expected two source-qualified sessions, got %d", len(sessions))
+	}
+	for _, session := range sessions {
+		want := wants[session.Source]
+		if session.Tokens != want.tokens || session.Prompts != want.prompts {
+			t.Errorf("%s session mixed source data: tokens=%d prompts=%d", session.Source, session.Tokens, session.Prompts)
+		}
+	}
+	claudeDetails, err := db.GetSessionDetail("shared-session", "claude")
+	if err != nil {
+		t.Fatalf("GetSessionDetail: %v", err)
+	}
+	if len(claudeDetails) != 1 || claudeDetails[0].InputTokens != wants["claude"].tokens {
+		t.Fatalf("source-qualified detail mixed data: %+v", claudeDetails)
 	}
 }
 
@@ -475,8 +589,8 @@ func TestMigrateDeletesAllData(t *testing.T) {
 	}
 	db.SetFileState("/sessions/claude/test.jsonl", 1024, 512, nil)
 	db.UpsertSession(&SessionRecord{Source: "claude", SessionID: "c-1", StartTime: ts, Prompts: 1})
-	// Clear migration markers to simulate pre-migration state
-	db.db.Exec("DELETE FROM meta WHERE key LIKE 'migration_%'")
+	// Re-run the destructive migration this test covers.
+	db.db.Exec("DELETE FROM meta WHERE key = 'migration_002_input_tokens_non_overlapping'")
 	db.Close()
 
 	// Second open: migration 002 should delete ALL data
@@ -538,6 +652,185 @@ func TestMigrateIdempotent(t *testing.T) {
 	}
 	if stats.TotalCalls != 1 {
 		t.Errorf("expected 1 record preserved, got %d", stats.TotalCalls)
+	}
+}
+
+func TestMigration007PreservesLegacyData(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "legacy.db")
+	legacy, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open legacy database: %v", err)
+	}
+	legacySchema := `
+		CREATE TABLE usage_records (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL, session_id TEXT NOT NULL,
+			model TEXT NOT NULL, input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0,
+			cache_creation_input_tokens INTEGER DEFAULT 0, cache_read_input_tokens INTEGER DEFAULT 0,
+			reasoning_output_tokens INTEGER DEFAULT 0, cost_usd REAL DEFAULT 0, timestamp DATETIME NOT NULL,
+			project TEXT DEFAULT '', git_branch TEXT DEFAULT ''
+		);
+		CREATE UNIQUE INDEX idx_usage_dedup ON usage_records(session_id, model, timestamp, input_tokens, output_tokens);
+		CREATE TABLE sessions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL, session_id TEXT NOT NULL UNIQUE,
+			project TEXT DEFAULT '', cwd TEXT DEFAULT '', version TEXT DEFAULT '', git_branch TEXT DEFAULT '',
+			start_time DATETIME, prompts INTEGER DEFAULT 0
+		);
+		CREATE TABLE prompt_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL, session_id TEXT NOT NULL, timestamp DATETIME NOT NULL
+		);
+		CREATE UNIQUE INDEX idx_prompt_dedup ON prompt_events(session_id, timestamp);
+		CREATE TABLE file_state (path TEXT PRIMARY KEY, size INTEGER DEFAULT 0, last_offset INTEGER DEFAULT 0, scan_context TEXT DEFAULT '');
+		CREATE TABLE pricing (model TEXT PRIMARY KEY, input_cost_per_token REAL DEFAULT 0, output_cost_per_token REAL DEFAULT 0,
+			cache_read_input_token_cost REAL DEFAULT 0, cache_creation_input_token_cost REAL DEFAULT 0, updated_at DATETIME);
+		CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT DEFAULT '');
+		CREATE TABLE config_backups (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, tool TEXT NOT NULL, file_path TEXT NOT NULL,
+			backup_path TEXT NOT NULL, slot INTEGER NOT NULL DEFAULT 0,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, trigger_type TEXT NOT NULL DEFAULT ''
+		);
+		CREATE TABLE skills (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, source_path TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE skill_targets (
+			skill_id INTEGER NOT NULL, tool TEXT NOT NULL, method TEXT NOT NULL DEFAULT 'symlink',
+			enabled INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (skill_id, tool)
+		);
+		CREATE TABLE skill_variants (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, skill_id INTEGER NOT NULL, source_path TEXT NOT NULL,
+			origin_tool TEXT NOT NULL DEFAULT 'global', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE (skill_id, source_path)
+		);
+		INSERT INTO usage_records(source,session_id,model,input_tokens,output_tokens,cost_usd,timestamp,project,git_branch)
+			VALUES('claude','legacy-session','legacy-model',17,9,1.25,'2025-01-01 12:00:00+00:00','legacy-project','main');
+		INSERT INTO sessions(source,session_id,project,cwd,version,git_branch,start_time,prompts)
+			VALUES('claude','legacy-session','legacy-project','/legacy','1.2.3','main','2025-01-01 12:00:00+00:00',4);
+		INSERT INTO prompt_events(source,session_id,timestamp)
+			VALUES('claude','legacy-session','2025-01-01 12:00:01+00:00');
+		INSERT INTO config_backups(tool,file_path,backup_path,slot,trigger_type)
+			VALUES('claude','/legacy/config','/legacy/backup',2,'manual');
+	`
+	if _, err := legacy.Exec(legacySchema); err != nil {
+		legacy.Close()
+		t.Fatalf("seed legacy schema: %v", err)
+	}
+	for _, id := range []string{
+		"001_fix_opencode_input_tokens", "002_input_tokens_non_overlapping",
+		"003_prompt_events_rescan", "004_file_state_scan_context",
+		"005_config_manager", "006_skill_variants",
+	} {
+		if _, err := legacy.Exec(`INSERT INTO meta(key,value) VALUES(?, 'done')`, "migration_"+id); err != nil {
+			legacy.Close()
+			t.Fatalf("seed migration marker %s: %v", id, err)
+		}
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close legacy database: %v", err)
+	}
+
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open legacy database: %v", err)
+	}
+	defer db.Close()
+
+	var usageCount, inputTokens, outputTokens int64
+	var totalCost float64
+	if err := db.db.QueryRow(`SELECT COUNT(*), SUM(input_tokens), SUM(output_tokens), SUM(cost_usd) FROM usage_records`).
+		Scan(&usageCount, &inputTokens, &outputTokens, &totalCost); err != nil {
+		t.Fatalf("read preserved usage: %v", err)
+	}
+	if usageCount != 1 || inputTokens != 17 || outputTokens != 9 || totalCost != 1.25 {
+		t.Errorf("usage changed during migration: count=%d input=%d output=%d cost=%v", usageCount, inputTokens, outputTokens, totalCost)
+	}
+
+	checks := []struct {
+		query string
+		want  int
+	}{
+		{`SELECT COUNT(*) FROM sessions WHERE source='claude' AND session_id='legacy-session' AND prompts=4`, 1},
+		{`SELECT COUNT(*) FROM prompt_events WHERE source='claude' AND session_id='legacy-session'`, 1},
+		{`SELECT COUNT(*) FROM config_backups WHERE tool='claude' AND slot=2 AND trigger_type='manual'`, 1},
+		{`SELECT COUNT(*) FROM meta WHERE key='migration_007_session_event_index' AND value='done'`, 1},
+	}
+	for _, check := range checks {
+		var got int
+		if err := db.db.QueryRow(check.query).Scan(&got); err != nil {
+			t.Fatalf("preservation query %q: %v", check.query, err)
+		}
+		if got != check.want {
+			t.Errorf("preservation query %q: got %d, want %d", check.query, got, check.want)
+		}
+	}
+}
+
+func TestMigration007RollsBackSchemaWhenFTSCreationFails(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "atomic.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open seed database: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close seed database: %v", err)
+	}
+
+	raw, err := sql.Open("sqlite", dbPath+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatalf("open raw database: %v", err)
+	}
+	revert007 := `
+		DROP TRIGGER session_events_fts_update;
+		DROP TRIGGER session_events_fts_delete;
+		DROP TRIGGER session_events_fts_insert;
+		DROP TABLE session_events_fts;
+		DROP TABLE session_events;
+		DROP TABLE session_sources;
+		CREATE TABLE sessions_legacy (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL, session_id TEXT NOT NULL UNIQUE,
+			project TEXT DEFAULT '', cwd TEXT DEFAULT '', version TEXT DEFAULT '', git_branch TEXT DEFAULT '',
+			start_time DATETIME, prompts INTEGER DEFAULT 0
+		);
+		INSERT INTO sessions_legacy SELECT * FROM sessions;
+		DROP TABLE sessions;
+		ALTER TABLE sessions_legacy RENAME TO sessions;
+		DROP INDEX idx_usage_dedup;
+		CREATE UNIQUE INDEX idx_usage_dedup ON usage_records(session_id, model, timestamp, input_tokens, output_tokens);
+		DROP INDEX idx_prompt_dedup;
+		CREATE UNIQUE INDEX idx_prompt_dedup ON prompt_events(session_id, timestamp);
+		DELETE FROM meta WHERE key='migration_007_session_event_index';
+		CREATE TABLE session_events_fts(blocker TEXT);
+	`
+	if _, err := raw.Exec(revert007); err != nil {
+		raw.Close()
+		t.Fatalf("restore pre-007 schema: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw database: %v", err)
+	}
+
+	if reopened, err := Open(dbPath); err == nil {
+		reopened.Close()
+		t.Fatal("expected migration failure from conflicting FTS table")
+	}
+
+	check, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open database after failed migration: %v", err)
+	}
+	defer check.Close()
+	var markerCount, sourceTableCount int
+	if err := check.QueryRow(`SELECT COUNT(*) FROM meta WHERE key='migration_007_session_event_index'`).Scan(&markerCount); err != nil {
+		t.Fatalf("read migration marker: %v", err)
+	}
+	if err := check.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='session_sources'`).Scan(&sourceTableCount); err != nil {
+		t.Fatalf("read session_sources schema: %v", err)
+	}
+	if markerCount != 0 || sourceTableCount != 0 {
+		t.Fatalf("failed migration left partial state: marker=%d session_sources=%d", markerCount, sourceTableCount)
+	}
+	if _, err := check.Exec(`INSERT INTO sessions(source,session_id) VALUES('claude','same'),('codex','same')`); err == nil {
+		t.Fatal("sessions table rebuild was not rolled back")
 	}
 }
 

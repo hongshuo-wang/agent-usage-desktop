@@ -84,7 +84,7 @@ func (d *DB) SetFileState(path string, size, offset int64, ctx *FileScanContext)
 func (d *DB) UpsertSession(s *SessionRecord) error {
 	_, err := d.db.Exec(`INSERT INTO sessions(source,session_id,project,cwd,version,git_branch,start_time,prompts)
 		VALUES(?,?,?,?,?,?,?,?)
-		ON CONFLICT(session_id) DO UPDATE SET
+		ON CONFLICT(source,session_id) DO UPDATE SET
 			project=CASE WHEN excluded.project!='' THEN excluded.project ELSE sessions.project END,
 			cwd=CASE WHEN excluded.cwd!='' THEN excluded.cwd ELSE sessions.cwd END,
 			version=CASE WHEN excluded.version!='' THEN excluded.version ELSE sessions.version END,

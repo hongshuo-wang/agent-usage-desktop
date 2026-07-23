@@ -76,7 +76,10 @@ func (d *DB) GetDashboardStats(from, to time.Time, source string) (*DashboardSta
 	if totalInput > 0 {
 		s.CacheHitRate = float64(cacheRead) / float64(totalInput)
 	}
-	d.db.QueryRow(`SELECT COUNT(DISTINCT session_id) FROM usage_records WHERE timestamp BETWEEN ? AND ?`+sf, args...).Scan(&s.TotalSessions)
+	d.db.QueryRow(`SELECT COUNT(*) FROM (
+		SELECT source, session_id FROM usage_records
+		WHERE timestamp BETWEEN ? AND ?`+sf+` GROUP BY source, session_id
+	)`, args...).Scan(&s.TotalSessions)
 	d.db.QueryRow(`SELECT COUNT(*) FROM prompt_events WHERE timestamp BETWEEN ? AND ?`+sf, args...).Scan(&s.TotalPrompts)
 	d.db.QueryRow(`SELECT COUNT(*) FROM usage_records WHERE timestamp BETWEEN ? AND ?`+sf, args...).Scan(&s.TotalCalls)
 	return s, nil
@@ -206,13 +209,19 @@ type SessionDetail struct {
 }
 
 // GetSessionDetail returns per-model usage breakdown for a specific session.
-func (d *DB) GetSessionDetail(sessionID string) ([]SessionDetail, error) {
-	rows, err := d.db.Query(`SELECT model, COUNT(*) as calls,
+func (d *DB) GetSessionDetail(sessionID string, sources ...string) ([]SessionDetail, error) {
+	query := `SELECT model, COUNT(*) as calls,
 		SUM(input_tokens) as inp, SUM(output_tokens) as outp,
 		SUM(cache_read_input_tokens) as cr, SUM(cache_creation_input_tokens) as cc,
 		SUM(cost_usd) as cost
-		FROM usage_records WHERE session_id=?
-		GROUP BY model ORDER BY cost DESC`, sessionID)
+		FROM usage_records WHERE session_id=?`
+	args := []interface{}{sessionID}
+	if len(sources) > 0 && sources[0] != "" {
+		query += ` AND source=?`
+		args = append(args, sources[0])
+	}
+	query += ` GROUP BY source, model ORDER BY cost DESC`
+	rows, err := d.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -239,12 +248,12 @@ func (d *DB) GetSessions(from, to time.Time, source string) ([]SessionInfo, erro
 		COALESCE(s.start_time,''), COALESCE(p.prompts,0),
 		COALESCE(u.cost,0), COALESCE(u.tokens,0)
 		FROM sessions s
-		LEFT JOIN (SELECT session_id, SUM(cost_usd) as cost, SUM(input_tokens+cache_read_input_tokens+cache_creation_input_tokens+output_tokens) as tokens
-			FROM usage_records WHERE timestamp BETWEEN ? AND ?`+sf+` GROUP BY session_id) u
-		ON s.session_id = u.session_id
-		LEFT JOIN (SELECT session_id, COUNT(*) as prompts
-			FROM prompt_events WHERE timestamp BETWEEN ? AND ?`+sf+` GROUP BY session_id) p
-		ON s.session_id = p.session_id
+		LEFT JOIN (SELECT source, session_id, SUM(cost_usd) as cost, SUM(input_tokens+cache_read_input_tokens+cache_creation_input_tokens+output_tokens) as tokens
+			FROM usage_records WHERE timestamp BETWEEN ? AND ?`+sf+` GROUP BY source, session_id) u
+		ON s.source = u.source AND s.session_id = u.session_id
+		LEFT JOIN (SELECT source, session_id, COUNT(*) as prompts
+			FROM prompt_events WHERE timestamp BETWEEN ? AND ?`+sf+` GROUP BY source, session_id) p
+		ON s.source = p.source AND s.session_id = p.session_id
 		WHERE u.session_id IS NOT NULL
 		ORDER BY s.start_time DESC`, args...)
 	if err != nil {
