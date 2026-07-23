@@ -127,8 +127,6 @@ fn main() {
             commands::set_cost_threshold,
             commands::get_notifications_enabled,
             commands::set_notifications_enabled,
-            commands::install_agent_usage_skill,
-            commands::uninstall_agent_usage_skill,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
