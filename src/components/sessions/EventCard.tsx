@@ -71,4 +71,3 @@ export default function EventCard({ event, onInspect, t }: { event: SessionEvent
     </article>
   );
 }
-
