@@ -268,6 +268,67 @@ func TestCodexCollectorSameSessionIDRemainsSeparateFromClaude(t *testing.T) {
 	}
 }
 
+func TestCodexCollectorFailedRebuildKeepsOldEventIndex(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "atomic-rebuild.db")
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	root := t.TempDir()
+	path := filepath.Join(root, "session.jsonl")
+	oldContent := `{"timestamp":"2026-01-02T03:04:05Z","type":"session_meta","payload":{"id":"codex-atomic-rebuild"}}` + "\n" +
+		`{"timestamp":"2026-01-02T03:04:06Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"old-visible"}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(oldContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	collector := NewCodexCollector(db, []string{root})
+	if err := collector.Scan(); err != nil {
+		t.Fatalf("seed Scan: %v", err)
+	}
+	oldSource, err := db.GetSessionSourceByPath(path)
+	if err != nil || oldSource == nil {
+		t.Fatalf("old source = %+v, %v", oldSource, err)
+	}
+
+	inspection, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inspection.Close()
+	if _, err := inspection.Exec(`CREATE TRIGGER fail_codex_rebuild_insert
+		BEFORE INSERT ON session_events WHEN new.content = 'new-visible' BEGIN
+			SELECT RAISE(ABORT, 'injected codex rebuild failure');
+		END`); err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+	newContent := strings.Replace(oldContent, "old-visible", "new-visible", 1)
+	if len(newContent) != len(oldContent) {
+		t.Fatal("replacement changed file size")
+	}
+	if err := os.WriteFile(path, []byte(newContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.Scan(); err != nil {
+		t.Fatalf("rebuild Scan: %v", err)
+	}
+
+	gotSource, err := db.GetSessionSourceByPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotSource == nil || gotSource.ID != oldSource.ID || gotSource.HeadHash != oldSource.HeadHash {
+		t.Fatalf("old source lost after failed rebuild: %+v", gotSource)
+	}
+	events, err := db.ListSessionEvents("codex", "codex-atomic-rebuild", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Content != "old-visible" {
+		t.Fatalf("old events lost after failed rebuild: %+v", events)
+	}
+}
+
 func TestCodexCollector_Scan(t *testing.T) {
 	db := tempDB(t)
 

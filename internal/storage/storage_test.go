@@ -461,6 +461,77 @@ func TestGetSessions(t *testing.T) {
 	}
 }
 
+func TestGetSessionsUsesInRangeActivityForMembership(t *testing.T) {
+	db := tempDB(t)
+	activity := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+	from := activity.Add(-time.Minute)
+	to := activity.Add(time.Minute)
+
+	for _, session := range []*SessionRecord{
+		{Source: "claude", SessionID: "shared-session", StartTime: activity.Add(-24 * time.Hour)},
+		{Source: "codex", SessionID: "shared-session", StartTime: activity},
+		{Source: "claude", SessionID: "inactive-session", StartTime: activity.Add(-48 * time.Hour)},
+		{Source: "codex", SessionID: "no-activity-session", StartTime: activity},
+	} {
+		if err := db.UpsertSession(session); err != nil {
+			t.Fatalf("UpsertSession(%s/%s): %v", session.Source, session.SessionID, err)
+		}
+	}
+	if err := db.InsertUsage(&UsageRecord{
+		Source: "claude", SessionID: "shared-session", Model: "synthetic-model",
+		InputTokens: 10, OutputTokens: 5, CostUSD: 1.25, Timestamp: activity,
+	}); err != nil {
+		t.Fatalf("InsertUsage(in range): %v", err)
+	}
+	if err := db.InsertUsage(&UsageRecord{
+		Source: "claude", SessionID: "inactive-session", Model: "synthetic-model",
+		InputTokens: 100, OutputTokens: 50, Timestamp: activity.Add(-2 * time.Hour),
+	}); err != nil {
+		t.Fatalf("InsertUsage(out of range): %v", err)
+	}
+
+	source := testSessionSource("/synthetic/codex-session.jsonl", "shared-session")
+	source.Source = "codex"
+	sourceID, err := db.UpsertSessionSource(source)
+	if err != nil {
+		t.Fatalf("UpsertSessionSource: %v", err)
+	}
+	event := testSessionEvent(sourceID, source.SessionID, 10)
+	event.Source = "codex"
+	event.Timestamp = activity
+	event.Content = "synthetic event-only content"
+	if err := db.InsertSessionEvents([]SessionEventRecord{event}); err != nil {
+		t.Fatalf("InsertSessionEvents: %v", err)
+	}
+
+	sessions, err := db.GetSessions(from, to, "")
+	if err != nil {
+		t.Fatalf("GetSessions(all): %v", err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("sessions = %+v, want only two active source-qualified sessions", sessions)
+	}
+	seen := make(map[string]SessionInfo, len(sessions))
+	for _, session := range sessions {
+		seen[session.Source+"/"+session.SessionID] = session
+	}
+	claude, ok := seen["claude/shared-session"]
+	if !ok || claude.Tokens != 15 || claude.TotalCost != 1.25 {
+		t.Fatalf("in-range usage session = %+v, present=%v", claude, ok)
+	}
+	if codex, ok := seen["codex/shared-session"]; !ok || codex.Tokens != 0 {
+		t.Fatalf("event-only session = %+v, present=%v", codex, ok)
+	}
+
+	codexSessions, err := db.GetSessions(from, to, "codex")
+	if err != nil {
+		t.Fatalf("GetSessions(codex): %v", err)
+	}
+	if len(codexSessions) != 1 || codexSessions[0].Source != "codex" || codexSessions[0].SessionID != "shared-session" {
+		t.Fatalf("source-filtered sessions = %+v", codexSessions)
+	}
+}
+
 func TestGetDashboardStatsCacheHitRate(t *testing.T) {
 	db := tempDB(t)
 	ts := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)

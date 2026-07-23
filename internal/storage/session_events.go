@@ -149,6 +149,44 @@ func (d *DB) UpsertSessionSourceWithEvents(source *SessionSource, events []Sessi
 	return sourceID, nil
 }
 
+// ReplaceSessionSourceWithEvents atomically replaces one path's indexed events
+// and source metadata while retaining the existing source row when possible.
+func (d *DB) ReplaceSessionSourceWithEvents(source *SessionSource, events []SessionEventRecord) (int64, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	var existingID int64
+	err = tx.QueryRow(`SELECT id FROM session_sources WHERE path=?`, source.Path).Scan(&existingID)
+	if err != nil && err != sql.ErrNoRows {
+		return 0, err
+	}
+	if err == nil {
+		if _, err := tx.Exec(`DELETE FROM session_events WHERE session_source_id=?`, existingID); err != nil {
+			return 0, err
+		}
+	}
+	sourceID, err := upsertSessionSourceTx(tx, source)
+	if err != nil {
+		return 0, err
+	}
+	for i := range events {
+		events[i].SessionSourceID = sourceID
+	}
+	if err := insertSessionEventsTx(tx, events); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return sourceID, nil
+}
+
 // InsertSessionEvents inserts normalized events and ignores duplicate raw locators.
 func (d *DB) InsertSessionEvents(events []SessionEventRecord) error {
 	if len(events) == 0 {

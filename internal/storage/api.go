@@ -235,7 +235,7 @@ func (d *DB) GetSessionDetail(source, sessionID string) ([]SessionDetail, error)
 func (d *DB) GetSessions(from, to time.Time, source string) ([]SessionInfo, error) {
 	sf, sa := sourceFilter(source)
 	baseArgs := append([]interface{}{from, to}, sa...)
-	// The range is applied to usage, prompts, and session metadata independently.
+	// The range is applied to usage, prompts, and normalized events independently.
 	args := append([]interface{}{}, baseArgs...)
 	args = append(args, baseArgs...)
 	args = append(args, from, to)
@@ -254,7 +254,11 @@ func (d *DB) GetSessions(from, to time.Time, source string) ([]SessionInfo, erro
 		LEFT JOIN (SELECT source, session_id, COUNT(*) as prompts
 			FROM prompt_events WHERE timestamp BETWEEN ? AND ?`+sf+` GROUP BY source, session_id) p
 		ON s.source = p.source AND s.session_id = p.session_id
-		WHERE s.start_time BETWEEN ? AND ?`+sessionSourceFilter+`
+		WHERE (u.session_id IS NOT NULL OR p.session_id IS NOT NULL OR EXISTS (
+			SELECT 1 FROM session_events e
+			WHERE e.source=s.source AND e.session_id=s.session_id
+				AND e.timestamp BETWEEN ? AND ?
+		))`+sessionSourceFilter+`
 		ORDER BY s.start_time DESC`, args...)
 	if err != nil {
 		return nil, err

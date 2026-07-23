@@ -136,6 +136,62 @@ func TestUpsertSessionSourceWithEventsRollsBackAtomically(t *testing.T) {
 	}
 }
 
+func TestReplaceSessionSourceWithEventsRollsBackOldIndexAtomically(t *testing.T) {
+	db := tempDB(t)
+	source := testSessionSource("/sessions/rebuild.jsonl", "rebuild-session")
+	oldSourceID, err := db.UpsertSessionSource(source)
+	if err != nil {
+		t.Fatalf("seed source: %v", err)
+	}
+	oldEvent := testSessionEvent(oldSourceID, source.SessionID, 10)
+	if err := db.InsertSessionEvents([]SessionEventRecord{oldEvent}); err != nil {
+		t.Fatalf("seed event: %v", err)
+	}
+	if got := ftsMatchCount(t, db, "migration"); got != 1 {
+		t.Fatalf("old FTS content = %d, want 1", got)
+	}
+	if _, err := db.db.Exec(`CREATE TRIGGER fail_replacement_event_insert
+		BEFORE INSERT ON session_events WHEN new.raw_offset = 200 BEGIN
+			SELECT RAISE(ABORT, 'injected replacement failure');
+		END`); err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+
+	replacement := *source
+	replacement.HeadHash = "replacement-head"
+	replacement.FileSize = 4096
+	replacement.IndexedOffset = 4096
+	first := testSessionEvent(oldSourceID, source.SessionID, 100)
+	first.Content = "replacement first"
+	second := testSessionEvent(oldSourceID, source.SessionID, 200)
+	second.Content = "replacement second"
+	_, err = db.ReplaceSessionSourceWithEvents(&replacement, []SessionEventRecord{first, second})
+	if err == nil || !strings.Contains(err.Error(), "injected replacement failure") {
+		t.Fatalf("ReplaceSessionSourceWithEvents error = %v", err)
+	}
+
+	gotSource, err := db.GetSessionSourceByPath(source.Path)
+	if err != nil {
+		t.Fatalf("GetSessionSourceByPath: %v", err)
+	}
+	if gotSource == nil || gotSource.ID != oldSourceID || gotSource.HeadHash != source.HeadHash || gotSource.FileSize != source.FileSize || gotSource.IndexedOffset != source.IndexedOffset {
+		t.Fatalf("old source metadata not restored: %+v", gotSource)
+	}
+	events, err := db.ListSessionEvents(source.Source, source.SessionID, 10, 0)
+	if err != nil {
+		t.Fatalf("ListSessionEvents: %v", err)
+	}
+	if len(events) != 1 || events[0].Content != oldEvent.Content || events[0].RawOffset != oldEvent.RawOffset {
+		t.Fatalf("old events not restored: %+v", events)
+	}
+	if got := ftsMatchCount(t, db, "migration"); got != 1 {
+		t.Fatalf("old FTS content after rollback = %d, want 1", got)
+	}
+	if got := ftsMatchCount(t, db, "replacement"); got != 0 {
+		t.Fatalf("replacement FTS content after rollback = %d, want 0", got)
+	}
+}
+
 func TestUpsertSessionSourceIdentityChangeClearsIndexedEvents(t *testing.T) {
 	db := tempDB(t)
 	source := testSessionSource("/sessions/replaced.jsonl", "old-session")

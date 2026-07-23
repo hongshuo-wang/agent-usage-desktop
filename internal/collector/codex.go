@@ -208,11 +208,6 @@ func (c *CodexCollector) processFile(path string) error {
 	if err != nil {
 		return fmt.Errorf("read codex jsonl: %w", err)
 	}
-	if rebuild && existingSource != nil {
-		if err := c.db.DeleteSourceIndex(path); err != nil {
-			return fmt.Errorf("clear codex event index: %w", err)
-		}
-	}
 	if context.SessionID == "" {
 		context.SessionID = filepath.Base(path)
 		context.SessionID = context.SessionID[:len(context.SessionID)-len(filepath.Ext(context.SessionID))]
@@ -286,8 +281,14 @@ func (c *CodexCollector) processFile(path string) error {
 		eventRecords[i].Source = "codex"
 		eventRecords[i].SessionID = context.SessionID
 	}
-	if _, err := c.db.UpsertSessionSourceWithEvents(source, eventRecords); err != nil {
-		return fmt.Errorf("upsert codex source and events: %w", err)
+	var sourceErr error
+	if rebuild {
+		_, sourceErr = c.db.ReplaceSessionSourceWithEvents(source, eventRecords)
+	} else {
+		_, sourceErr = c.db.UpsertSessionSourceWithEvents(source, eventRecords)
+	}
+	if sourceErr != nil {
+		return fmt.Errorf("upsert codex source and events: %w", sourceErr)
 	}
 	return c.db.SetFileState(path, observedSize, indexedOffset, &storage.FileScanContext{
 		SessionID: context.SessionID, CWD: context.CWD, Version: context.Version, Model: context.Model,
