@@ -1,8 +1,11 @@
 package collector
 
 import (
+	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +21,348 @@ func tempDB(t *testing.T) *storage.DB {
 	}
 	t.Cleanup(func() { db.Close() })
 	return db
+}
+
+func writeClaudeSessionFile(t *testing.T, root, project, name, content string) string {
+	t.Helper()
+	dir := filepath.Join(root, project)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	return path
+}
+
+func claudeVisibleLine(sessionID, timestamp, text string) string {
+	return fmt.Sprintf(`{"type":"user","timestamp":%q,"sessionId":%q,"cwd":"/work","version":"1.0","message":{"role":"user","content":%q}}`, timestamp, sessionID, text)
+}
+
+func claudeUsageLine(sessionID, timestamp string, input, output int) string {
+	return fmt.Sprintf(`{"type":"assistant","timestamp":%q,"sessionId":%q,"message":{"role":"assistant","model":"claude-sonnet-4","usage":{"input_tokens":%d,"output_tokens":%d,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`, timestamp, sessionID, input, output)
+}
+
+func TestClaudeCollectorEventOffsetsAppendAndDedup(t *testing.T) {
+	db := tempDB(t)
+	root := t.TempDir()
+	ts := "2026-01-02T03:04:05Z"
+	first := claudeVisibleLine("sess-events", ts, "hello")
+	path := writeClaudeSessionFile(t, root, "proj", "session.jsonl", first+"\n")
+	collector := NewClaudeCollector(db, []string{root})
+
+	if err := collector.Scan(); err != nil {
+		t.Fatalf("Scan first: %v", err)
+	}
+	events, err := db.ListSessionEvents("claude", "sess-events", 100, 0)
+	if err != nil {
+		t.Fatalf("ListSessionEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events after first scan = %+v", events)
+	}
+	if events[0].RawOffset != 0 || events[0].RawLength != int64(len(first)) || events[0].RawIndex != 0 {
+		t.Errorf("first locator = offset %d length %d index %d", events[0].RawOffset, events[0].RawLength, events[0].RawIndex)
+	}
+
+	second := fmt.Sprintf(`{"type":"assistant","timestamp":"2026-01-02T03:04:06Z","sessionId":"sess-events","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"world"}]}}`)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	if _, err := f.WriteString(second + "\n"); err != nil {
+		f.Close()
+		t.Fatalf("append: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if err := collector.Scan(); err != nil {
+		t.Fatalf("Scan append: %v", err)
+	}
+	if err := collector.Scan(); err != nil {
+		t.Fatalf("Scan repeat: %v", err)
+	}
+	events, _ = db.ListSessionEvents("claude", "sess-events", 100, 0)
+	if len(events) != 3 {
+		t.Fatalf("events after append/repeat = %+v", events)
+	}
+	for i, event := range events[1:] {
+		if event.RawOffset != int64(len(first)+1) || event.RawLength != int64(len(second)) || event.RawIndex != i {
+			t.Errorf("appended locator %d = %+v", i, event)
+		}
+	}
+	source, err := db.GetSessionSourceByPath(path)
+	if err != nil || source == nil {
+		t.Fatalf("source = %+v, %v", source, err)
+	}
+	if source.ParserVersion != "claude-events-v1" || source.HeadHash == "" || source.IndexedOffset != int64(len(first)+len(second)+2) || source.FileSize != source.IndexedOffset || source.CoverageStatus != "complete" {
+		t.Errorf("source metadata = %+v", source)
+	}
+}
+
+func TestClaudeCollectorPartialLineWaitsForNewline(t *testing.T) {
+	db := tempDB(t)
+	root := t.TempDir()
+	ts := "2026-01-02T03:04:05Z"
+	complete := claudeUsageLine("sess-partial", ts, 10, 5)
+	partial := claudeVisibleLine("sess-partial", "2026-01-02T03:04:06Z", "later")
+	path := writeClaudeSessionFile(t, root, "proj", "session.jsonl", complete+"\n"+partial)
+	collector := NewClaudeCollector(db, []string{root})
+
+	if err := collector.Scan(); err != nil {
+		t.Fatalf("Scan partial: %v", err)
+	}
+	events, _ := db.ListSessionEvents("claude", "sess-partial", 100, 0)
+	if len(events) != 0 {
+		t.Fatalf("partial event indexed early: %+v", events)
+	}
+	size, offset, _, err := db.GetFileState(path)
+	if err != nil {
+		t.Fatalf("GetFileState: %v", err)
+	}
+	if size != int64(len(complete)+1+len(partial)) || offset != int64(len(complete)+1) {
+		t.Fatalf("file state = size %d offset %d", size, offset)
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	if _, err := f.WriteString("\n"); err != nil {
+		f.Close()
+		t.Fatalf("append newline: %v", err)
+	}
+	f.Close()
+	if err := collector.Scan(); err != nil {
+		t.Fatalf("Scan completed: %v", err)
+	}
+	if err := collector.Scan(); err != nil {
+		t.Fatalf("Scan repeat: %v", err)
+	}
+	events, _ = db.ListSessionEvents("claude", "sess-partial", 100, 0)
+	if len(events) != 1 || events[0].Content != "later" {
+		t.Fatalf("completed events = %+v", events)
+	}
+	from, to := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	stats, _ := db.GetDashboardStats(from, to, "claude")
+	if stats.TotalTokens != 15 {
+		t.Fatalf("usage duplicated or lost: %+v", stats)
+	}
+}
+
+func TestClaudeCollectorIndexesElevenMiBVisibleLine(t *testing.T) {
+	db := tempDB(t)
+	root := t.TempDir()
+	text := strings.Repeat("x", 11*1024*1024)
+	line := claudeVisibleLine("sess-large", "2026-01-02T03:04:05Z", text)
+	writeClaudeSessionFile(t, root, "proj", "large.jsonl", line+"\n")
+
+	if err := NewClaudeCollector(db, []string{root}).Scan(); err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	events, _ := db.ListSessionEvents("claude", "sess-large", 10, 0)
+	if len(events) != 1 || len(events[0].Content) != len(text) {
+		t.Fatalf("large event count/content length = %d/%d", len(events), func() int {
+			if len(events) == 0 {
+				return 0
+			}
+			return len(events[0].Content)
+		}())
+	}
+}
+
+func TestClaudeCollectorMalformedLineContinuesWithPartialCoverage(t *testing.T) {
+	db := tempDB(t)
+	root := t.TempDir()
+	valid := claudeVisibleLine("sess-malformed", "2026-01-02T03:04:06Z", "after")
+	path := writeClaudeSessionFile(t, root, "proj", "bad.jsonl", `{"type":`+"\n"+valid+"\n")
+
+	if err := NewClaudeCollector(db, []string{root}).Scan(); err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	events, _ := db.ListSessionEvents("claude", "sess-malformed", 10, 0)
+	if len(events) != 1 || events[0].Content != "after" {
+		t.Fatalf("events = %+v", events)
+	}
+	source, _ := db.GetSessionSourceByPath(path)
+	if source == nil || source.MalformedLines != 1 || source.CoverageStatus != "partial" || source.LastError == "" {
+		t.Fatalf("source = %+v", source)
+	}
+}
+
+func TestClaudeCollectorRebuildTriggersReplaceOnlyEventIndex(t *testing.T) {
+	triggers := []struct {
+		name   string
+		mutate func(t *testing.T, db *storage.DB, path, original string)
+	}{
+		{"truncation", func(t *testing.T, _ *storage.DB, path, _ string) {
+			write := claudeVisibleLine("sess-rebuild", "2026-01-02T03:04:05Z", "new") + "\n"
+			if err := os.WriteFile(path, []byte(write), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"head change", func(t *testing.T, _ *storage.DB, path, original string) {
+			replaced := strings.Replace(original, "old", "new", 1)
+			if len(replaced) != len(original) {
+				t.Fatal("replacement changed size")
+			}
+			if err := os.WriteFile(path, []byte(replaced), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"head change with growth", func(t *testing.T, _ *storage.DB, path, original string) {
+			replaced := strings.Replace(original, "old", "new", 1)
+			replaced += `{"type":"system","timestamp":"2026-01-02T03:04:07Z","sessionId":"sess-rebuild","subtype":"checkpoint"}` + "\n"
+			if err := os.WriteFile(path, []byte(replaced), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"parser version", func(t *testing.T, db *storage.DB, path, _ string) {
+			source, err := db.GetSessionSourceByPath(path)
+			if err != nil || source == nil {
+				t.Fatalf("source: %+v %v", source, err)
+			}
+			source.ParserVersion = "claude-events-v0"
+			if _, err := db.UpsertSessionSource(source); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, trigger := range triggers {
+		t.Run(trigger.name, func(t *testing.T) {
+			db := tempDB(t)
+			root := t.TempDir()
+			ts := "2026-01-02T03:04:05Z"
+			visible := claudeVisibleLine("sess-rebuild", ts, "old")
+			usage := claudeUsageLine("sess-rebuild", "2026-01-02T03:04:06Z", 10, 5)
+			original := visible + "\n" + usage + "\n"
+			if trigger.name == "truncation" {
+				original += `{"type":"system","timestamp":"2026-01-02T03:04:06Z","sessionId":"sess-rebuild","subtype":"checkpoint","padding":"` + strings.Repeat("padding", 40) + `"}` + "\n"
+			}
+			path := writeClaudeSessionFile(t, root, "proj", "session.jsonl", original)
+			collector := NewClaudeCollector(db, []string{root})
+			if err := collector.Scan(); err != nil {
+				t.Fatalf("first Scan: %v", err)
+			}
+			trigger.mutate(t, db, path, original)
+			if err := collector.Scan(); err != nil {
+				t.Fatalf("rebuild Scan: %v", err)
+			}
+
+			events, _ := db.ListSessionEvents("claude", "sess-rebuild", 100, 0)
+			var oldCount int
+			for _, event := range events {
+				if event.Content == "old" {
+					oldCount++
+				}
+			}
+			if trigger.name != "parser version" && oldCount != 0 {
+				t.Fatalf("stale event retained: %+v", events)
+			}
+			if trigger.name == "parser version" && (len(events) != 1 || oldCount != 1) {
+				t.Fatalf("parser rebuild duplicated unchanged content: %+v", events)
+			}
+			from, to := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+			stats, _ := db.GetDashboardStats(from, to, "claude")
+			if stats.TotalTokens != 15 {
+				t.Fatalf("historical usage changed: %+v", stats)
+			}
+			sessions, _ := db.GetSessions(from, to, "claude")
+			if len(sessions) != 1 || sessions[0].Prompts != 1 {
+				t.Fatalf("session/prompt count duplicated: %+v", sessions)
+			}
+			source, _ := db.GetSessionSourceByPath(path)
+			if source == nil || source.ParserVersion != "claude-events-v1" || source.IndexedOffset == 0 {
+				t.Fatalf("rebuilt source = %+v", source)
+			}
+		})
+	}
+}
+
+func TestClaudeCollectorSourceMissingAndRestored(t *testing.T) {
+	db := tempDB(t)
+	root := t.TempDir()
+	visible := claudeVisibleLine("sess-missing", "2026-01-02T03:04:05Z", "kept")
+	usage := claudeUsageLine("sess-missing", "2026-01-02T03:04:06Z", 10, 5)
+	content := visible + "\n" + usage + "\n"
+	path := writeClaudeSessionFile(t, root, "proj", "session.jsonl", content)
+	other := writeClaudeSessionFile(t, root, "proj", "other.jsonl", claudeVisibleLine("sess-other", "2026-01-02T03:04:07Z", "other")+"\n")
+	collector := NewClaudeCollector(db, []string{root})
+	if err := collector.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.Scan(); err != nil {
+		t.Fatal(err)
+	}
+
+	events, _ := db.ListSessionEvents("claude", "sess-missing", 10, 0)
+	if len(events) != 0 {
+		t.Fatalf("missing events retained: %+v", events)
+	}
+	otherEvents, _ := db.ListSessionEvents("claude", "sess-other", 10, 0)
+	if len(otherEvents) != 1 {
+		t.Fatalf("other source affected: %+v", otherEvents)
+	}
+	source, _ := db.GetSessionSourceByPath(path)
+	if source == nil || source.SourceStatus != "missing_source" {
+		t.Fatalf("missing source = %+v", source)
+	}
+	from, to := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	stats, _ := db.GetDashboardStats(from, to, "claude")
+	sessions, _ := db.GetSessions(from, to, "claude")
+	if stats.TotalTokens != 15 || len(sessions) != 1 || sessions[0].SessionID != "sess-missing" {
+		t.Fatalf("historical data removed: stats=%+v sessions=%+v", stats, sessions)
+	}
+
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	events, _ = db.ListSessionEvents("claude", "sess-missing", 10, 0)
+	if len(events) != 1 || events[0].Content != "kept" {
+		t.Fatalf("restored events = %+v", events)
+	}
+	source, _ = db.GetSessionSourceByPath(path)
+	if source.SourceStatus != "available" {
+		t.Fatalf("restored source = %+v", source)
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClaudeCollectorEventOnlySessionCreatesMetadataAndSource(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "events.db")
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	root := t.TempDir()
+	path := writeClaudeSessionFile(t, root, "proj", "event-only.jsonl", claudeVisibleLine("sess-event-only", "2026-01-02T03:04:05Z", "visible")+"\n")
+	if err := NewClaudeCollector(db, []string{root}).Scan(); err != nil {
+		t.Fatal(err)
+	}
+	inspection, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer inspection.Close()
+	var project string
+	if err := inspection.QueryRow(`SELECT project FROM sessions WHERE source='claude' AND session_id='sess-event-only'`).Scan(&project); err != nil || project != "proj" {
+		t.Fatalf("event-only session project = %q, %v", project, err)
+	}
+	source, _ := db.GetSessionSourceByPath(path)
+	if source == nil || source.SessionID != "sess-event-only" {
+		t.Fatalf("source = %+v", source)
+	}
 }
 
 func TestClaudeCollector_Scan(t *testing.T) {

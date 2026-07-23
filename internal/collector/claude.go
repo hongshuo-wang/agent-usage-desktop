@@ -31,8 +31,8 @@ type claudeEntry struct {
 }
 
 type claudeMessage struct {
-	Role  string      `json:"role"`
-	Model string      `json:"model"`
+	Role  string       `json:"role"`
+	Model string       `json:"model"`
 	Usage *claudeUsage `json:"usage"`
 }
 
@@ -106,6 +106,7 @@ func isRealUserPrompt(raw json.RawMessage) bool {
 
 // Scan walks all configured paths and processes new JSONL data from Claude Code sessions.
 func (c *ClaudeCollector) Scan() error {
+	seenPaths := make(map[string]struct{})
 	for _, basePath := range c.paths {
 		projects, err := os.ReadDir(basePath)
 		if err != nil {
@@ -122,6 +123,7 @@ func (c *ClaudeCollector) Scan() error {
 				if err != nil || info.IsDir() || filepath.Ext(path) != ".jsonl" {
 					return nil
 				}
+				seenPaths[path] = struct{}{}
 				if err := c.processFile(path, projName); err != nil {
 					log.Printf("claude: error processing %s: %v", path, err)
 				}
@@ -129,5 +131,5 @@ func (c *ClaudeCollector) Scan() error {
 			})
 		}
 	}
-	return nil
+	return c.db.MarkMissingSessionSources("claude", seenPaths)
 }
