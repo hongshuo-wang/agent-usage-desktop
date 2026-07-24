@@ -233,12 +233,12 @@ func loadSessionUsage(db sessionQueryer, query SessionQuery, identities []sessio
 		args = append(args, query.Model)
 	}
 	rows, err := db.Query(cte+` SELECT u.source, u.session_id, u.model,
-		COALESCE(SUM(u.input_tokens),0), COALESCE(SUM(u.output_tokens),0),
-		COALESCE(SUM(u.cache_read_input_tokens),0), COALESCE(SUM(u.cache_creation_input_tokens),0),
-		COALESCE(SUM(u.cost_usd),0), MAX(CASE WHEN p.model IS NULL THEN 1 ELSE 0 END)
-	FROM usage_records u JOIN selected x ON x.source=u.source AND x.session_id=u.session_id
-	LEFT JOIN pricing p ON p.model=u.model
-	WHERE u.timestamp BETWEEN ? AND ?`+modelClause+`
+			COALESCE(SUM(u.input_tokens),0), COALESCE(SUM(u.output_tokens),0),
+			COALESCE(SUM(u.cache_read_input_tokens),0), COALESCE(SUM(u.cache_creation_input_tokens),0),
+			COALESCE(SUM(CASE WHEN u.pricing_status IN ('priced','legacy') THEN u.cost_usd ELSE 0 END),0),
+			MAX(CASE WHEN u.pricing_status='unpriced' THEN 1 ELSE 0 END)
+		FROM usage_records u JOIN selected x ON x.source=u.source AND x.session_id=u.session_id
+		WHERE u.timestamp BETWEEN ? AND ?`+modelClause+`
 	GROUP BY u.source, u.session_id, u.model`, args...)
 	if err != nil {
 		return err

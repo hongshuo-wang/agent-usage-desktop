@@ -12,6 +12,10 @@ export type UsageFilters = {
 export interface DashboardStats {
   total_tokens: number;
   total_cost: number;
+  priced_cost_usd: number;
+  unpriced_records: number;
+  legacy_cost_usd: number;
+  pricing_last_synced_at: string | null;
   total_sessions: number;
   total_prompts: number;
   total_calls: number;

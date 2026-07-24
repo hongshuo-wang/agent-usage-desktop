@@ -392,6 +392,9 @@ export default function Dashboard() {
   }), [throughput, t]);
 
   const stats = data?.stats;
+  const pricingCoverage = stats && stats.total_calls > 0
+    ? Math.min(1, Math.max(0, (stats.total_calls - stats.unpriced_records) / stats.total_calls))
+    : 0;
   const noUsage = Boolean(data && !data.stats.total_calls && !data.stats.total_tokens
     && !data.sources.length && !data.models.length && !data.projects.length);
 
@@ -484,10 +487,35 @@ export default function Dashboard() {
               <BandTitle title={t("coreMetrics")} detail={`${filters.from} ${t("to")} ${filters.to}`} />
               <div className="grid grid-cols-2 gap-x-4 gap-y-4 lg:grid-cols-5">
                 <Metric label={t("totalTokens")} value={fmtTokens(stats.total_tokens)} detail={`${stats.total_calls} ${t("apiCalls")}`} />
-                <Metric label={t("estimatedCost")} value={fmtCost(stats.total_cost)} />
+                <Metric label={t("localCostEstimate")} value={fmtCost(stats.total_cost)} />
                 <Metric label={t("sessions")} value={String(stats.total_sessions)} />
                 <Metric label={t("userMessages")} value={String(stats.total_prompts)} />
                 <Metric label={t("cacheHitRate")} value={`${(stats.cache_hit_rate * 100).toFixed(1)}%`} />
+              </div>
+              <div
+                data-testid="pricing-coverage"
+                className="mt-4 grid min-w-0 gap-2 border-t border-border pt-3 text-xs sm:grid-cols-2 lg:grid-cols-[auto_minmax(0,1fr)_auto] lg:items-center lg:gap-4"
+              >
+                <span className="flex min-w-0 items-baseline gap-2">
+                  <span className="text-muted-foreground">{t("pricingCoverage")}</span>
+                  <strong className="font-mono tabular-nums">{(pricingCoverage * 100).toFixed(1)}%</strong>
+                </span>
+                <span className="flex min-w-0 flex-col gap-1 text-muted-foreground sm:items-end lg:items-start">
+                  <span>{stats.unpriced_records} {t("unpricedRecordsCostExcluded")}</span>
+                  {stats.legacy_cost_usd > 0 && (
+                    <span>{fmtCost(stats.legacy_cost_usd)} {t("legacyCostUntraceable")}</span>
+                  )}
+                </span>
+                <span className="flex min-w-0 items-baseline gap-2 sm:col-span-2 lg:col-span-1 lg:justify-self-end">
+                  <span className="text-muted-foreground">{t("lastPricingSync")}</span>
+                  {stats.pricing_last_synced_at ? (
+                    <time dateTime={stats.pricing_last_synced_at} className="font-mono tabular-nums">
+                      {formatLastIndexed(stats.pricing_last_synced_at)}
+                    </time>
+                  ) : (
+                    <span className="text-muted-foreground">{t("notAvailable")}</span>
+                  )}
+                </span>
               </div>
             </section>
 

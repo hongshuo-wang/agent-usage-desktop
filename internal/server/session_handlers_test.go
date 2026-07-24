@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -46,17 +47,26 @@ func seedSessionAPI(t *testing.T) *sessionAPIFixture {
 			t.Fatalf("UpsertSession(%s): %v", session.Source, err)
 		}
 	}
-	if err := db.UpsertPricing("priced-model", 0.01, 0.02, 0.003, 0.004); err != nil {
-		t.Fatalf("UpsertPricing: %v", err)
+	if _, err := db.CreatePricingSnapshot(day.AddDate(0, 0, -3), "litellm", "session-fixture", []storage.PricingSnapshotEntry{{
+		Model: "priced-model", InputCostPerToken: 0.0625, OutputCostPerToken: 0.125,
+		CacheReadInputTokenCost: 0.03125, CacheCreationInputTokenCost: 0.015625,
+	}}); err != nil {
+		t.Fatalf("CreatePricingSnapshot: %v", err)
 	}
 	usage := []*storage.UsageRecord{
-		{Source: "claude", SessionID: "shared", Model: "priced-model", InputTokens: 10, OutputTokens: 2, CacheReadInputTokens: 3, CacheCreationInputTokens: 4, CostUSD: 1.25, Timestamp: day, Project: "alpha", GitBranch: "main"},
-		{Source: "claude", SessionID: "shared", Model: "unknown-model", InputTokens: 20, OutputTokens: 5, CostUSD: 0, Timestamp: day.Add(time.Minute), Project: "alpha", GitBranch: "main"},
-		{Source: "claude", SessionID: "shared", Model: "priced-model", InputTokens: 100, OutputTokens: 50, CostUSD: 9, Timestamp: day.AddDate(0, 0, -2), Project: "alpha"},
-		{Source: "codex", SessionID: "shared", Model: "priced-model", InputTokens: 7, OutputTokens: 3, CostUSD: 0.5, Timestamp: day, Project: "beta", GitBranch: "dev"},
+		{Source: "claude", SessionID: "shared", Model: "priced-model", InputTokens: 10, OutputTokens: 2, CacheReadInputTokens: 3, CacheCreationInputTokens: 4, Timestamp: day, Project: "alpha", GitBranch: "main"},
+		{Source: "claude", SessionID: "shared", Model: "unknown-model", InputTokens: 20, OutputTokens: 5, Timestamp: day.Add(time.Minute), Project: "alpha", GitBranch: "main"},
+		{Source: "claude", SessionID: "shared", Model: "priced-model", InputTokens: 100, OutputTokens: 50, Timestamp: day.AddDate(0, 0, -2), Project: "alpha"},
+		{Source: "codex", SessionID: "shared", Model: "priced-model", InputTokens: 7, OutputTokens: 3, Timestamp: day, Project: "beta", GitBranch: "dev"},
 	}
 	if err := db.InsertUsageBatch(usage); err != nil {
 		t.Fatalf("InsertUsageBatch: %v", err)
+	}
+	if err := db.PriceUnpricedUsage(func(input, output, cacheCreation, cacheRead int64, prices [4]float64) float64 {
+		return float64(input)*prices[0] + float64(output)*prices[1] +
+			float64(cacheRead)*prices[2] + float64(cacheCreation)*prices[3]
+	}); err != nil {
+		t.Fatalf("PriceUnpricedUsage: %v", err)
 	}
 	if err := db.InsertPromptBatch([]*storage.PromptEvent{
 		{Source: "claude", SessionID: "shared", Timestamp: day.Add(10 * time.Second)},
@@ -192,7 +202,7 @@ func TestSessionSearchIntersectsFiltersAndAggregates(t *testing.T) {
 	if len(got.Models) != 1 || got.Models[0] != "priced-model" {
 		t.Errorf("models = %v, want [priced-model]", got.Models)
 	}
-	if got.InputTokens != 10 || got.OutputTokens != 2 || got.CacheRead != 3 || got.CacheCreate != 4 || got.TotalTokens != 19 || got.TotalCost != 1.25 {
+	if got.InputTokens != 10 || got.OutputTokens != 2 || got.CacheRead != 3 || got.CacheCreate != 4 || got.TotalTokens != 19 || got.TotalCost != 1.03125 {
 		t.Errorf("model-filtered totals are wrong: %+v", got)
 	}
 	if got.Prompts != 2 || got.ToolCalls != 1 || got.Errors != 1 {
@@ -514,7 +524,7 @@ func TestSessionIndexRebuildPreservesHistoryAndMarksSources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetDashboardStats(after): %v", err)
 	}
-	if *after != *before {
+	if !reflect.DeepEqual(after, before) {
 		t.Errorf("usage/prompt/session stats changed: before=%+v after=%+v", before, after)
 	}
 	for _, path := range []string{fx.rawPath} {

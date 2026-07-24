@@ -4,6 +4,8 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Dashboard from "./Dashboard";
 import { fetchAPI } from "../lib/api";
+import en from "../lib/locales/en.json";
+import zh from "../lib/locales/zh.json";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -52,6 +54,10 @@ vi.mock("../lib/api", () => ({ fetchAPI: vi.fn() }));
 const stats = {
   total_tokens: 410,
   total_cost: 1.2345,
+  priced_cost_usd: 1,
+  unpriced_records: 2,
+  legacy_cost_usd: 0.2345,
+  pricing_last_synced_at: "2025-01-02T05:06:07Z",
   total_sessions: 7,
   total_prompts: 13,
   total_calls: 19,
@@ -262,6 +268,26 @@ describe("Dashboard overview", () => {
     expect(within(row).getByText("4 sessions")).toBeInTheDocument();
     expect(within(row).getByText("62.5%")).toBeInTheDocument();
     expect(within(row).getByTestId("composition-share")).toHaveStyle({ width: "62.5%" });
+  });
+
+  it("shows local estimate coverage pricing freshness and excluded cost semantics", async () => {
+    renderDashboard();
+
+    const core = await screen.findByTestId("dashboard-band-core");
+    expect(within(core).getByText("localCostEstimate")).toBeInTheDocument();
+    const coverage = within(core).getByTestId("pricing-coverage");
+    expect(within(coverage).getByText("pricingCoverage")).toBeInTheDocument();
+    expect(within(coverage).getByText("89.5%")).toBeInTheDocument();
+    expect(within(coverage).getByText("2 unpricedRecordsCostExcluded")).toBeInTheDocument();
+    expect(within(coverage).getByText("$0.2345 legacyCostUntraceable")).toBeInTheDocument();
+    expect(within(coverage).getByText("lastPricingSync")).toBeInTheDocument();
+    expect(within(coverage).getByText("2025-01-02 05:06")).toBeInTheDocument();
+    expect(en.localCostEstimate).toBe("Local cost estimate");
+    expect(en.unpricedRecordsCostExcluded).toContain("cost is not included");
+    expect(en.legacyCostUntraceable).toContain("source is not traceable");
+    expect(zh.localCostEstimate).toBe("本地费用估算");
+    expect(zh.unpricedRecordsCostExcluded).toContain("不计入");
+    expect(zh.legacyCostUntraceable).toContain("无法追溯");
   });
 
   it("shows durable local index status and last indexed time", async () => {

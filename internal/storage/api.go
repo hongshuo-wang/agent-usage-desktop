@@ -15,16 +15,20 @@ func sourceFilter(source string) (string, []interface{}) {
 
 // DashboardStats holds aggregate statistics for the dashboard summary cards.
 type DashboardStats struct {
-	TotalCost     float64 `json:"total_cost"`
-	TotalTokens   int64   `json:"total_tokens"`
-	InputTokens   int64   `json:"input_tokens"`
-	OutputTokens  int64   `json:"output_tokens"`
-	CacheRead     int64   `json:"cache_read"`
-	CacheCreate   int64   `json:"cache_create"`
-	TotalSessions int     `json:"total_sessions"`
-	TotalPrompts  int     `json:"total_prompts"`
-	TotalCalls    int     `json:"total_calls"`
-	CacheHitRate  float64 `json:"cache_hit_rate"`
+	TotalCost           float64    `json:"total_cost"`
+	PricedCostUSD       float64    `json:"priced_cost_usd"`
+	UnpricedRecords     int        `json:"unpriced_records"`
+	LegacyCostUSD       float64    `json:"legacy_cost_usd"`
+	PricingLastSyncedAt *time.Time `json:"pricing_last_synced_at"`
+	TotalTokens         int64      `json:"total_tokens"`
+	InputTokens         int64      `json:"input_tokens"`
+	OutputTokens        int64      `json:"output_tokens"`
+	CacheRead           int64      `json:"cache_read"`
+	CacheCreate         int64      `json:"cache_create"`
+	TotalSessions       int        `json:"total_sessions"`
+	TotalPrompts        int        `json:"total_prompts"`
+	TotalCalls          int        `json:"total_calls"`
+	CacheHitRate        float64    `json:"cache_hit_rate"`
 }
 
 // CostByModel represents total cost for a single model.
@@ -68,12 +72,16 @@ func (d *DB) GetDashboardStats(from, to time.Time, source string) (*DashboardSta
 	s := &DashboardStats{}
 	sf, sa := sourceFilter(source)
 	args := append([]interface{}{from, to}, sa...)
-	err := d.db.QueryRow(`SELECT COALESCE(SUM(cost_usd),0),
+	err := d.db.QueryRow(`SELECT COALESCE(SUM(CASE WHEN pricing_status IN ('priced','legacy') THEN cost_usd ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN pricing_status='priced' THEN cost_usd ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN pricing_status='unpriced' THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN pricing_status='legacy' THEN cost_usd ELSE 0 END),0),
 		COALESCE(SUM(input_tokens+cache_read_input_tokens+cache_creation_input_tokens+output_tokens),0),
 		COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
 		COALESCE(SUM(cache_read_input_tokens),0), COALESCE(SUM(cache_creation_input_tokens),0)
 		FROM usage_records WHERE timestamp BETWEEN ? AND ?`+sf, args...).Scan(
-		&s.TotalCost, &s.TotalTokens, &s.InputTokens, &s.OutputTokens, &s.CacheRead, &s.CacheCreate,
+		&s.TotalCost, &s.PricedCostUSD, &s.UnpricedRecords, &s.LegacyCostUSD,
+		&s.TotalTokens, &s.InputTokens, &s.OutputTokens, &s.CacheRead, &s.CacheCreate,
 	)
 	if err != nil {
 		return nil, err
@@ -81,6 +89,17 @@ func (d *DB) GetDashboardStats(from, to time.Time, source string) (*DashboardSta
 	totalInput := s.InputTokens + s.CacheRead + s.CacheCreate
 	if totalInput > 0 {
 		s.CacheHitRate = float64(s.CacheRead) / float64(totalInput)
+	}
+	var lastSyncedAt any
+	if err := d.db.QueryRow(`SELECT MAX(synced_at) FROM pricing_snapshots`).Scan(&lastSyncedAt); err != nil {
+		return nil, err
+	}
+	if lastSyncedAt != nil {
+		parsed, err := parseDatabaseTime(lastSyncedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse latest pricing sync: %w", err)
+		}
+		s.PricingLastSyncedAt = &parsed
 	}
 	d.db.QueryRow(`SELECT COUNT(*) FROM (
 		SELECT source, session_id FROM usage_records
@@ -95,7 +114,7 @@ func (d *DB) GetDashboardStats(from, to time.Time, source string) (*DashboardSta
 func (d *DB) GetCostByModel(from, to time.Time, source string) ([]CostByModel, error) {
 	sf, sa := sourceFilter(source)
 	args := append([]interface{}{from, to}, sa...)
-	rows, err := d.db.Query(`SELECT model, SUM(cost_usd) as cost FROM usage_records
+	rows, err := d.db.Query(`SELECT model, SUM(CASE WHEN pricing_status IN ('priced','legacy') THEN cost_usd ELSE 0 END) as cost FROM usage_records
 		WHERE timestamp BETWEEN ? AND ?`+sf+` GROUP BY model ORDER BY cost DESC`, args...)
 	if err != nil {
 		return nil, err
@@ -154,7 +173,7 @@ func (d *DB) GetCostOverTime(from, to time.Time, granularity string, source stri
 	expr := granularityExpr(granularity, tzOffset)
 	sf, sa := sourceFilter(source)
 	args := append([]interface{}{from, to}, sa...)
-	rows, err := d.db.Query(`SELECT `+expr+` as d, model, SUM(cost_usd) as cost
+	rows, err := d.db.Query(`SELECT `+expr+` as d, model, SUM(CASE WHEN pricing_status IN ('priced','legacy') THEN cost_usd ELSE 0 END) as cost
 		FROM usage_records WHERE timestamp BETWEEN ? AND ?`+sf+`
 		GROUP BY d, model ORDER BY d`, args...)
 	if err != nil {
@@ -220,7 +239,7 @@ func (d *DB) GetSessions(from, to time.Time, source string) ([]SessionInfo, erro
 		COALESCE(s.start_time,''), COALESCE(p.prompts,0),
 		COALESCE(u.cost,0), COALESCE(u.tokens,0)
 		FROM sessions s
-		LEFT JOIN (SELECT source, session_id, SUM(cost_usd) as cost, SUM(input_tokens+cache_read_input_tokens+cache_creation_input_tokens+output_tokens) as tokens
+		LEFT JOIN (SELECT source, session_id, SUM(CASE WHEN pricing_status IN ('priced','legacy') THEN cost_usd ELSE 0 END) as cost, SUM(input_tokens+cache_read_input_tokens+cache_creation_input_tokens+output_tokens) as tokens
 			FROM usage_records WHERE timestamp BETWEEN ? AND ?`+sf+` GROUP BY source, session_id) u
 		ON s.source = u.source AND s.session_id = u.session_id
 		LEFT JOIN (SELECT source, session_id, COUNT(*) as prompts

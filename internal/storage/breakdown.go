@@ -39,14 +39,15 @@ func (d *DB) GetUsageBreakdown(from, to time.Time, source, dimension string) ([]
 	rows, err := d.db.Query(`WITH filtered AS (
 		SELECT `+dimensionExpression+` AS key, u.source, u.session_id,
 			u.input_tokens, u.output_tokens, u.cache_read_input_tokens,
-			u.cache_creation_input_tokens, u.cost_usd,
-			CASE WHEN p.model IS NULL THEN 1 ELSE 0 END AS unknown_price
-		FROM usage_records u LEFT JOIN pricing p ON p.model=u.model
+			u.cache_creation_input_tokens,
+			CASE WHEN u.pricing_status IN ('priced','legacy') THEN u.cost_usd ELSE 0 END AS included_cost,
+			CASE WHEN u.pricing_status='unpriced' THEN 1 ELSE 0 END AS unknown_price
+		FROM usage_records u
 		WHERE u.timestamp BETWEEN ? AND ?`+filter+`
 	), aggregates AS (
 		SELECT key,
 			COALESCE(SUM(input_tokens+output_tokens+cache_read_input_tokens+cache_creation_input_tokens),0) AS total_tokens,
-			COALESCE(SUM(cost_usd),0) AS total_cost,
+			COALESCE(SUM(included_cost),0) AS total_cost,
 			COUNT(*) AS calls,
 			CASE WHEN SUM(input_tokens+cache_read_input_tokens+cache_creation_input_tokens)>0
 				THEN CAST(SUM(cache_read_input_tokens) AS REAL)/SUM(input_tokens+cache_read_input_tokens+cache_creation_input_tokens)

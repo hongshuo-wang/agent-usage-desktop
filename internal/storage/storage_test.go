@@ -40,6 +40,74 @@ func TestDashboardStatsExposeExactTokenComponents(t *testing.T) {
 	}
 }
 
+func TestDashboardPricingCoverageUsesStoredStatus(t *testing.T) {
+	db := tempDB(t)
+	eventTime := time.Date(2025, 2, 1, 12, 0, 0, 0, time.UTC)
+	if _, err := db.CreatePricingSnapshot(eventTime.Add(-time.Hour), "litellm", "pricing-event", []PricingSnapshotEntry{
+		{Model: "acme/claude-sonnet-4-6", InputCostPerToken: 1},
+	}); err != nil {
+		t.Fatalf("CreatePricingSnapshot(event): %v", err)
+	}
+	latestSync := eventTime.Add(24 * time.Hour)
+	if _, err := db.CreatePricingSnapshot(latestSync, "litellm", "latest-global", nil); err != nil {
+		t.Fatalf("CreatePricingSnapshot(latest): %v", err)
+	}
+	if err := db.InsertUsage(&UsageRecord{
+		Source: "claude", SessionID: "priced-fuzzy", Model: "claude-sonnet-4.6",
+		Timestamp: eventTime, InputTokens: 1,
+	}); err != nil {
+		t.Fatalf("InsertUsage(priced): %v", err)
+	}
+	if err := db.PriceUnpricedUsage(func(_, _ int64, _, _ int64, _ [4]float64) float64 { return 1.25 }); err != nil {
+		t.Fatalf("PriceUnpricedUsage: %v", err)
+	}
+	if err := db.InsertUsageBatch([]*UsageRecord{
+		{Source: "claude", SessionID: "unpriced", Model: "currently-known", Timestamp: eventTime.Add(time.Second), InputTokens: 1, CostUSD: 9.5},
+		{Source: "claude", SessionID: "legacy", Model: "legacy-model", Timestamp: eventTime.Add(2 * time.Second), InputTokens: 1, CostUSD: 2.5},
+		{Source: "codex", SessionID: "filtered-source", Model: "missing", Timestamp: eventTime.Add(3 * time.Second), InputTokens: 1},
+		{Source: "claude", SessionID: "filtered-range", Model: "missing", Timestamp: eventTime.Add(2 * time.Hour), InputTokens: 1},
+	}); err != nil {
+		t.Fatalf("InsertUsageBatch: %v", err)
+	}
+	if _, err := db.db.Exec(`UPDATE usage_records SET pricing_status='legacy' WHERE session_id='legacy'`); err != nil {
+		t.Fatalf("mark legacy usage: %v", err)
+	}
+	if err := db.UpsertPricing("currently-known", 1, 0, 0, 0); err != nil {
+		t.Fatalf("UpsertPricing: %v", err)
+	}
+
+	var exactKeyCount int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM pricing WHERE model='claude-sonnet-4.6'`).Scan(&exactKeyCount); err != nil {
+		t.Fatalf("count exact pricing keys: %v", err)
+	}
+	if exactKeyCount != 0 {
+		t.Fatalf("fuzzy-resolved model unexpectedly has %d exact live pricing keys", exactKeyCount)
+	}
+
+	stats, err := db.GetDashboardStats(eventTime.Add(-time.Minute), eventTime.Add(time.Minute), "claude")
+	if err != nil {
+		t.Fatalf("GetDashboardStats: %v", err)
+	}
+	payload, err := json.Marshal(stats)
+	if err != nil {
+		t.Fatalf("marshal dashboard stats: %v", err)
+	}
+	var fields map[string]interface{}
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		t.Fatalf("decode dashboard stats: %v", err)
+	}
+	for key, want := range map[string]float64{
+		"total_cost": 3.75, "priced_cost_usd": 1.25, "unpriced_records": 1, "legacy_cost_usd": 2.5,
+	} {
+		if got, ok := fields[key].(float64); !ok || got != want {
+			t.Errorf("stats[%q] = %v, want %v", key, fields[key], want)
+		}
+	}
+	if got, ok := fields["pricing_last_synced_at"].(string); !ok || got != latestSync.Format(time.RFC3339) {
+		t.Errorf("pricing_last_synced_at = %v, want global ledger max %q", fields["pricing_last_synced_at"], latestSync.Format(time.RFC3339))
+	}
+}
+
 func tempDB(t *testing.T) *DB {
 	t.Helper()
 	dir := t.TempDir()
@@ -105,7 +173,6 @@ func TestInsertUsageAndDedup(t *testing.T) {
 	if err := db.InsertUsage(rec); err != nil {
 		t.Fatalf("InsertUsage: %v", err)
 	}
-
 	// Insert same record again — should be silently ignored (dedup)
 	if err := db.InsertUsage(rec); err != nil {
 		t.Fatalf("InsertUsage duplicate: %v", err)
@@ -412,6 +479,9 @@ func TestGetSessions(t *testing.T) {
 	if err := db.InsertUsage(rec); err != nil {
 		t.Fatalf("InsertUsage: %v", err)
 	}
+	if _, err := db.db.Exec(`UPDATE usage_records SET pricing_status='legacy' WHERE session_id='sess-1'`); err != nil {
+		t.Fatalf("mark preserved cost legacy: %v", err)
+	}
 
 	// Insert 2 prompt events in range
 	prompts := []*PromptEvent{
@@ -460,6 +530,9 @@ func TestGetSessionsUsesInRangeActivityForMembership(t *testing.T) {
 		InputTokens: 10, OutputTokens: 5, CostUSD: 1.25, Timestamp: activity,
 	}); err != nil {
 		t.Fatalf("InsertUsage(in range): %v", err)
+	}
+	if _, err := db.db.Exec(`UPDATE usage_records SET pricing_status='legacy' WHERE session_id='shared-session'`); err != nil {
+		t.Fatalf("mark preserved cost legacy: %v", err)
 	}
 	if err := db.InsertUsage(&UsageRecord{
 		Source: "claude", SessionID: "inactive-session", Model: "synthetic-model",

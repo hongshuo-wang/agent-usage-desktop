@@ -20,6 +20,9 @@ func TestUsageBreakdownUsesExactTokenSessionCacheAndPriceSemantics(t *testing.T)
 	}); err != nil {
 		t.Fatalf("InsertUsageBatch: %v", err)
 	}
+	if _, err := db.db.Exec(`UPDATE usage_records SET pricing_status='priced' WHERE model='known-zero-price'`); err != nil {
+		t.Fatalf("mark known usage priced: %v", err)
+	}
 
 	rows, err := db.GetUsageBreakdown(base.Add(-time.Minute), base.Add(time.Minute), "", "project")
 	if err != nil {
@@ -48,6 +51,54 @@ func TestUsageBreakdownUsesExactTokenSessionCacheAndPriceSemantics(t *testing.T)
 	}
 	if models[0].TotalTokens != 110 || models[0].Sessions != 1 || models[0].Calls != 2 {
 		t.Errorf("model aggregate = %+v", models[0])
+	}
+}
+
+func TestBreakdownUnknownPriceUsesStoredStatus(t *testing.T) {
+	db := tempDB(t)
+	eventTime := time.Date(2025, 2, 1, 12, 0, 0, 0, time.UTC)
+	if _, err := db.CreatePricingSnapshot(eventTime.Add(-time.Hour), "litellm", "fuzzy", []PricingSnapshotEntry{
+		{Model: "acme/claude-sonnet-4-6", InputCostPerToken: 1},
+	}); err != nil {
+		t.Fatalf("CreatePricingSnapshot: %v", err)
+	}
+	if err := db.InsertUsage(&UsageRecord{
+		Source: "claude", SessionID: "priced", Model: "claude-sonnet-4.6",
+		Project: "priced", Timestamp: eventTime, InputTokens: 1,
+	}); err != nil {
+		t.Fatalf("InsertUsage(priced): %v", err)
+	}
+	if err := db.PriceUnpricedUsage(func(_, _ int64, _, _ int64, _ [4]float64) float64 { return 1 }); err != nil {
+		t.Fatalf("PriceUnpricedUsage: %v", err)
+	}
+	if err := db.InsertUsageBatch([]*UsageRecord{
+		{Source: "claude", SessionID: "unpriced", Model: "currently-known", Project: "unpriced", Timestamp: eventTime.Add(time.Second), InputTokens: 1, CostUSD: 4},
+		{Source: "claude", SessionID: "legacy", Model: "legacy-model", Project: "legacy", Timestamp: eventTime.Add(2 * time.Second), InputTokens: 1, CostUSD: 2},
+	}); err != nil {
+		t.Fatalf("InsertUsageBatch: %v", err)
+	}
+	if _, err := db.db.Exec(`UPDATE usage_records SET pricing_status='legacy' WHERE session_id='legacy'`); err != nil {
+		t.Fatalf("mark legacy usage: %v", err)
+	}
+	if err := db.UpsertPricing("currently-known", 1, 0, 0, 0); err != nil {
+		t.Fatalf("UpsertPricing: %v", err)
+	}
+
+	rows, err := db.GetUsageBreakdown(eventTime.Add(-time.Minute), eventTime.Add(time.Minute), "", "project")
+	if err != nil {
+		t.Fatalf("GetUsageBreakdown: %v", err)
+	}
+	if findBreakdown(t, rows, "priced").UnknownPrice {
+		t.Error("fuzzy-resolved priced row was marked unknown without an exact live pricing key")
+	}
+	if !findBreakdown(t, rows, "unpriced").UnknownPrice {
+		t.Error("stored unpriced row was treated as known because a live pricing key exists")
+	}
+	if got := findBreakdown(t, rows, "unpriced").TotalCost; got != 0 {
+		t.Errorf("unpriced breakdown cost = %v, want 0", got)
+	}
+	if findBreakdown(t, rows, "legacy").UnknownPrice {
+		t.Error("legacy row was marked unknown despite its preserved stored cost")
 	}
 }
 

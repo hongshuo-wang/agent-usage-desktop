@@ -61,7 +61,7 @@ RPM 和 TPM 是本机观测到的吞吐量，不代表供应商配额或限流�
 
 Agent 原始文件是事实来源。源文件或解析器版本变化时，SQLite 索引可以重建。默认数据库和配置都保留在这台电脑上。
 
-应用不会上传会话内容，默认只在 loopback 地址提供 API。价格同步是唯一的常规网络请求：应用从 [litellm 的 GitHub 数据](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)读取模型价格，保存到本地，并在价格变化后重新计算索引中的费用。
+应用不会上传会话内容，默认只在 loopback 地址提供 API。价格同步是唯一的常规网络请求：应用从 [litellm 的 GitHub 数据](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)读取模型价格并保存不可变的本地快照。同步不会重写已经按事件分配的历史费用。
 
 ## 安装
 
@@ -192,6 +192,10 @@ cargo test --manifest-path src-tauri/Cargo.toml
      + 缓存读取输入 × 缓存读取价格
      + 输出 token × 输出价格
 ```
+
+显示费用是本地估算，不是服务商账单。每条用量按事件发生时可用的最新本地定价快照计算，后续同步不会重新计算历史费用。无法定价的用量会标记为未定价，其费用不计入估算。
+
+在定价快照引入前已存在的费用数值会保留为 legacy，并计入本地估算；其原始定价来源无法追溯。
 
 ## 技术栈
 
