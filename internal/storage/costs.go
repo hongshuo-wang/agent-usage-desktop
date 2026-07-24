@@ -5,6 +5,12 @@ import "strings"
 // CostCalcFunc is a function that calculates USD cost from token counts and per-token prices.
 type CostCalcFunc func(inputTokens, outputTokens, cacheCreation, cacheRead int64, prices [4]float64) float64
 
+type PricingMatch struct {
+	Key       string
+	Prices    [4]float64
+	MatchKind string
+}
+
 // RecalcCosts recalculates costs for all usage records where cost_usd is zero,
 // using fuzzy model name matching against the provided pricing map.
 func (d *DB) RecalcCosts(allPrices map[string][4]float64, calcFn CostCalcFunc) error {
@@ -18,9 +24,9 @@ func (d *DB) RecalcCosts(allPrices map[string][4]float64, calcFn CostCalcFunc) e
 	defer rows.Close()
 
 	type rec struct {
-		id                       int64
-		model                    string
-		input, output, cc, cr    int64
+		id                    int64
+		model                 string
+		input, output, cc, cr int64
 	}
 	var recs []rec
 	for rows.Next() {
@@ -53,11 +59,11 @@ func (d *DB) RecalcCosts(allPrices map[string][4]float64, calcFn CostCalcFunc) e
 
 	updated := 0
 	for _, r := range recs {
-		prices, ok := matchPricing(r.model, allPrices)
+		match, ok := matchPricing(r.model, allPrices)
 		if !ok {
 			continue
 		}
-		cost := calcFn(r.input, r.output, r.cc, r.cr, prices)
+		cost := calcFn(r.input, r.output, r.cc, r.cr, match.Prices)
 		if cost > 0 {
 			if _, err := stmt.Exec(cost, r.id); err != nil {
 				return err
@@ -72,19 +78,18 @@ func (d *DB) RecalcCosts(allPrices map[string][4]float64, calcFn CostCalcFunc) e
 	return nil
 }
 
-func matchPricing(model string, allPrices map[string][4]float64) ([4]float64, bool) {
-	// Direct match
+func matchPricing(model string, allPrices map[string][4]float64) (PricingMatch, bool) {
 	if p, ok := allPrices[model]; ok {
-		return p, true
+		return PricingMatch{Key: model, Prices: p, MatchKind: "direct"}, true
 	}
-	// Try with provider prefix
+
 	for _, prefix := range []string{"anthropic/", "openai/", "deepseek/", "gemini/", "google/", "mistral/", "cohere/", "azure_ai/"} {
-		if p, ok := allPrices[prefix+model]; ok {
-			return p, true
+		key := prefix + model
+		if p, ok := allPrices[key]; ok {
+			return PricingMatch{Key: key, Prices: p, MatchKind: "provider_prefix"}, true
 		}
 	}
 
-	// Normalize: replace / with . and version dots with dashes for matching
 	norm := func(s string) string {
 		s = strings.ToLower(s)
 		s = strings.ReplaceAll(s, "/", ".")
@@ -92,30 +97,32 @@ func matchPricing(model string, allPrices map[string][4]float64) ([4]float64, bo
 	}
 
 	modelNorm := norm(model)
-	// Also try normalizing version numbers: 4.6 -> 4-6
 	modelNormDash := strings.NewReplacer("4.6", "4-6", "4.5", "4-5", "3.5", "3-5", "5.4", "5-4").Replace(modelNorm)
 
-	var bestKey string
+	var best PricingMatch
 	var bestScore int
+	found := false
 	for k := range allPrices {
 		kNorm := norm(k)
 		for _, mn := range []string{modelNorm, modelNormDash} {
-			if strings.Contains(kNorm, mn) || strings.Contains(mn, kNorm) {
-				// Shortest key wins — avoids matching reseller paths over original provider
-				score := 10000 - len(k)
-				if kNorm == mn {
-					score += 100000 // exact normalized match bonus
-				}
-				if score > bestScore {
-					bestKey = k
-					bestScore = score
-				}
+			matchKind := "fuzzy"
+			score := 10000 - len(k)
+			if kNorm == mn {
+				matchKind = "normalized"
+				score += 100000
+			} else if !strings.HasSuffix(kNorm, "."+mn) {
+				continue
+			}
+
+			if !found || score > bestScore || (score == bestScore && k < best.Key) {
+				best = PricingMatch{Key: k, Prices: allPrices[k], MatchKind: matchKind}
+				bestScore = score
+				found = true
 			}
 		}
 	}
-	if bestKey != "" {
-		p := allPrices[bestKey]
-		return p, true
+	if found {
+		return best, true
 	}
-	return [4]float64{}, false
+	return PricingMatch{}, false
 }

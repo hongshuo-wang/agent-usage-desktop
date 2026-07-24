@@ -2,82 +2,123 @@ package storage
 
 import "testing"
 
-func TestMatchPricingDirectMatch(t *testing.T) {
-	prices := map[string][4]float64{
-		"claude-opus-4-6": {0.015, 0.075, 0.0015, 0.01875},
-	}
-	p, ok := matchPricing("claude-opus-4-6", prices)
-	if !ok {
-		t.Fatal("expected direct match")
-	}
-	if p[0] != 0.015 {
-		t.Errorf("expected input price 0.015, got %f", p[0])
+func TestResolvePricingIsDeterministicAcrossMapOrder(t *testing.T) {
+	firstKey := "acme/claude-sonnet-4-6"
+	secondKey := "beta/claude-sonnet-4-6"
+	firstPrices := [4]float64{0.001, 0.002, 0.003, 0.004}
+	secondPrices := [4]float64{0.005, 0.006, 0.007, 0.008}
+
+	pricesInOrder := make(map[string][4]float64)
+	pricesInOrder[firstKey] = firstPrices
+	pricesInOrder[secondKey] = secondPrices
+
+	pricesInReverseOrder := make(map[string][4]float64)
+	pricesInReverseOrder[secondKey] = secondPrices
+	pricesInReverseOrder[firstKey] = firstPrices
+
+	for name, prices := range map[string]map[string][4]float64{
+		"forward insertion": pricesInOrder,
+		"reverse insertion": pricesInReverseOrder,
+	} {
+		t.Run(name, func(t *testing.T) {
+			match, ok := matchPricing("claude-sonnet-4.6", prices)
+			if !ok {
+				t.Fatal("expected fuzzy match")
+			}
+			if match.Key != firstKey {
+				t.Fatalf("matched key = %q, want lexicographically first key %q", match.Key, firstKey)
+			}
+			if match.Prices != firstPrices {
+				t.Fatalf("matched prices = %v, want %v", match.Prices, firstPrices)
+			}
+			if match.MatchKind != "fuzzy" {
+				t.Fatalf("match kind = %q, want fuzzy", match.MatchKind)
+			}
+		})
 	}
 }
 
-func TestMatchPricingProviderPrefix(t *testing.T) {
-	prices := map[string][4]float64{
-		"deepseek/deepseek-r1": {0.001, 0.002, 0.0005, 0.001},
+func TestResolvePricingReturnsCanonicalKey(t *testing.T) {
+	tests := []struct {
+		name      string
+		model     string
+		prices    map[string][4]float64
+		want      PricingMatch
+		wantMatch bool
+	}{
+		{
+			name:  "direct key",
+			model: "claude-opus-4-6",
+			prices: map[string][4]float64{
+				"claude-opus-4-6": {0.015, 0.075, 0.0015, 0.01875},
+			},
+			want: PricingMatch{
+				Key:       "claude-opus-4-6",
+				Prices:    [4]float64{0.015, 0.075, 0.0015, 0.01875},
+				MatchKind: "direct",
+			},
+			wantMatch: true,
+		},
+		{
+			name:  "provider prefix",
+			model: "deepseek-r1",
+			prices: map[string][4]float64{
+				"deepseek/deepseek-r1": {0.001, 0.002, 0.0005, 0.001},
+			},
+			want: PricingMatch{
+				Key:       "deepseek/deepseek-r1",
+				Prices:    [4]float64{0.001, 0.002, 0.0005, 0.001},
+				MatchKind: "provider_prefix",
+			},
+			wantMatch: true,
+		},
+		{
+			name:  "version normalization",
+			model: "claude-sonnet-4.6",
+			prices: map[string][4]float64{
+				"claude-sonnet-4-6": {0.003, 0.015, 0.001, 0.004},
+			},
+			want: PricingMatch{
+				Key:       "claude-sonnet-4-6",
+				Prices:    [4]float64{0.003, 0.015, 0.001, 0.004},
+				MatchKind: "normalized",
+			},
+			wantMatch: true,
+		},
+		{
+			name:  "no match",
+			model: "totally-unknown-model",
+			prices: map[string][4]float64{
+				"claude-opus-4-6": {0.015, 0.075, 0, 0},
+			},
+			want:      PricingMatch{},
+			wantMatch: false,
+		},
 	}
-	p, ok := matchPricing("deepseek-r1", prices)
-	if !ok {
-		t.Fatal("expected provider prefix match for deepseek/deepseek-r1")
-	}
-	if p[0] != 0.001 {
-		t.Errorf("expected input price 0.001, got %f", p[0])
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := matchPricing(tt.model, tt.prices)
+			if ok != tt.wantMatch {
+				t.Fatalf("matched = %t, want %t (result: %+v)", ok, tt.wantMatch, got)
+			}
+			if got != tt.want {
+				t.Fatalf("match = %+v, want %+v", got, tt.want)
+			}
+		})
 	}
 }
 
-func TestMatchPricingShortestKeyWins(t *testing.T) {
+func TestResolvePricingRejectsAmbiguousPartialMatch(t *testing.T) {
 	prices := map[string][4]float64{
-		"deepseek/deepseek-r1":                              {0.001, 0.002, 0, 0},
-		"fireworks_ai/accounts/fireworks/models/deepseek-r1": {0.009, 0.009, 0, 0},
+		"vendor/not-deepseek-r1-preview": {0.001, 0.002, 0.003, 0.004},
 	}
-	// Direct provider prefix match should win
-	p, ok := matchPricing("deepseek-r1", prices)
-	if !ok {
-		t.Fatal("expected match")
-	}
-	if p[0] != 0.001 {
-		t.Errorf("expected original provider price 0.001, got %f (matched reseller)", p[0])
-	}
-}
 
-func TestMatchPricingFuzzyShortestKey(t *testing.T) {
-	// When no direct or provider-prefix match exists, fuzzy match should prefer shortest key
-	prices := map[string][4]float64{
-		"deepseek-r1":                                        {0.001, 0.002, 0, 0},
-		"fireworks_ai/accounts/fireworks/models/deepseek-r1": {0.009, 0.009, 0, 0},
-	}
-	p, ok := matchPricing("some-deepseek-r1-variant", prices)
-	if !ok {
-		t.Fatal("expected fuzzy match")
-	}
-	// Shortest key "deepseek-r1" should win over the long reseller path
-	if p[0] != 0.001 {
-		t.Errorf("expected shortest key price 0.001, got %f", p[0])
-	}
-}
-
-func TestMatchPricingVersionNormalization(t *testing.T) {
-	prices := map[string][4]float64{
-		"claude-sonnet-4-6": {0.003, 0.015, 0.001, 0.004},
-	}
-	p, ok := matchPricing("claude-sonnet-4.6", prices)
-	if !ok {
-		t.Fatal("expected version-normalized match (4.6 -> 4-6)")
-	}
-	if p[0] != 0.003 {
-		t.Errorf("expected input price 0.003, got %f", p[0])
-	}
-}
-
-func TestMatchPricingNoMatch(t *testing.T) {
-	prices := map[string][4]float64{
-		"claude-opus-4-6": {0.015, 0.075, 0, 0},
-	}
-	_, ok := matchPricing("totally-unknown-model", prices)
+	match, ok := matchPricing("deepseek-r1", prices)
 	if ok {
-		t.Error("expected no match for unknown model")
+		t.Fatalf("unexpected substring match: %+v", match)
+	}
+	if match != (PricingMatch{}) {
+		t.Fatalf("no-match result = %+v, want zero value", match)
 	}
 }
