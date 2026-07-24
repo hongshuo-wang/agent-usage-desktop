@@ -750,6 +750,33 @@ func TestMigrateIdempotent(t *testing.T) {
 	}
 }
 
+var deprecatedConfigManagementTables = []string{
+	"provider_profiles",
+	"profile_tool_targets",
+	"mcp_servers",
+	"mcp_server_targets",
+	"skills",
+	"skill_targets",
+	"config_backups",
+	"sync_state",
+	"skill_repo_sources",
+	"skill_variants",
+}
+
+func TestFreshDatabaseContainsOnlyProductSchema(t *testing.T) {
+	db := tempDB(t)
+
+	for _, table := range []string{
+		"usage_records", "pricing", "sessions", "prompt_events",
+		"session_sources", "session_events", "session_events_fts",
+	} {
+		if !sqliteTableExists(t, db.db, table) {
+			t.Errorf("fresh database missing core table %q", table)
+		}
+	}
+	assertDeprecatedConfigTablesAbsent(t, db.db)
+}
+
 func TestMigration007PreservesLegacyData(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "legacy.db")
 	legacy, err := sql.Open("sqlite", dbPath)
@@ -778,6 +805,22 @@ func TestMigration007PreservesLegacyData(t *testing.T) {
 		CREATE TABLE pricing (model TEXT PRIMARY KEY, input_cost_per_token REAL DEFAULT 0, output_cost_per_token REAL DEFAULT 0,
 			cache_read_input_token_cost REAL DEFAULT 0, cache_creation_input_token_cost REAL DEFAULT 0, updated_at DATETIME);
 		CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT DEFAULT '');
+		CREATE TABLE provider_profiles (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
+			is_active INTEGER NOT NULL DEFAULT 0, config TEXT NOT NULL DEFAULT ''
+		);
+		CREATE TABLE profile_tool_targets (
+			profile_id INTEGER NOT NULL, tool TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+			tool_config TEXT NOT NULL DEFAULT '', PRIMARY KEY (profile_id, tool)
+		);
+		CREATE TABLE mcp_servers (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
+			command TEXT NOT NULL, args TEXT NOT NULL DEFAULT '', env TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1
+		);
+		CREATE TABLE mcp_server_targets (
+			server_id INTEGER NOT NULL, tool TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+			PRIMARY KEY (server_id, tool)
+		);
 		CREATE TABLE config_backups (
 			id INTEGER PRIMARY KEY AUTOINCREMENT, tool TEXT NOT NULL, file_path TEXT NOT NULL,
 			backup_path TEXT NOT NULL, slot INTEGER NOT NULL DEFAULT 0,
@@ -797,14 +840,32 @@ func TestMigration007PreservesLegacyData(t *testing.T) {
 			origin_tool TEXT NOT NULL DEFAULT 'global', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE (skill_id, source_path)
 		);
-		INSERT INTO usage_records(source,session_id,model,input_tokens,output_tokens,cost_usd,timestamp,project,git_branch)
-			VALUES('claude','legacy-session','legacy-model',17,9,1.25,'2025-01-01 12:00:00+00:00','legacy-project','main');
+		CREATE TABLE sync_state (
+			tool TEXT NOT NULL, file_path TEXT NOT NULL, last_hash TEXT NOT NULL DEFAULT '',
+			last_sync DATETIME, last_sync_dir TEXT NOT NULL DEFAULT '', PRIMARY KEY (tool, file_path)
+		);
+		CREATE TABLE skill_repo_sources (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL, repo TEXT NOT NULL,
+			branch TEXT NOT NULL DEFAULT 'main', subpath TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1
+		);
+		INSERT INTO usage_records(source,session_id,model,input_tokens,output_tokens,
+			cache_creation_input_tokens,cache_read_input_tokens,reasoning_output_tokens,cost_usd,timestamp,project,git_branch)
+			VALUES('claude','legacy-session','legacy-model',17,9,5,7,3,1.25,'2025-01-01 12:00:00+00:00','legacy-project','main');
 		INSERT INTO sessions(source,session_id,project,cwd,version,git_branch,start_time,prompts)
 			VALUES('claude','legacy-session','legacy-project','/legacy','1.2.3','main','2025-01-01 12:00:00+00:00',4);
 		INSERT INTO prompt_events(source,session_id,timestamp)
 			VALUES('claude','legacy-session','2025-01-01 12:00:01+00:00');
+		INSERT INTO provider_profiles(id,name,is_active,config) VALUES(1,'legacy-profile',1,'legacy');
+		INSERT INTO profile_tool_targets(profile_id,tool,enabled,tool_config) VALUES(1,'claude',1,'legacy');
+		INSERT INTO mcp_servers(id,name,command,args,env,enabled) VALUES(1,'legacy-mcp','legacy-command','','',1);
+		INSERT INTO mcp_server_targets(server_id,tool,enabled) VALUES(1,'claude',1);
+		INSERT INTO skills(id,name,source_path,description,enabled) VALUES(1,'legacy-skill','/legacy/skill','legacy',1);
+		INSERT INTO skill_targets(skill_id,tool,method,enabled) VALUES(1,'claude','symlink',1);
+		INSERT INTO skill_variants(id,skill_id,source_path,origin_tool) VALUES(1,1,'/legacy/skill','global');
 		INSERT INTO config_backups(tool,file_path,backup_path,slot,trigger_type)
 			VALUES('claude','/legacy/config','/legacy/backup',2,'manual');
+		INSERT INTO sync_state(tool,file_path,last_hash,last_sync_dir) VALUES('claude','/legacy/config','legacy-hash','/legacy');
+		INSERT INTO skill_repo_sources(owner,repo,branch,subpath,enabled) VALUES('legacy','repo','main','skill',1);
 	`
 	if _, err := legacy.Exec(legacySchema); err != nil {
 		legacy.Close()
@@ -830,14 +891,21 @@ func TestMigration007PreservesLegacyData(t *testing.T) {
 	}
 	defer db.Close()
 
-	var usageCount, inputTokens, outputTokens int64
+	var usageCount, inputTokens, outputTokens, cacheCreate, cacheRead, reasoningOutput int64
 	var totalCost float64
-	if err := db.db.QueryRow(`SELECT COUNT(*), SUM(input_tokens), SUM(output_tokens), SUM(cost_usd) FROM usage_records`).
-		Scan(&usageCount, &inputTokens, &outputTokens, &totalCost); err != nil {
+	if err := db.db.QueryRow(`SELECT COUNT(*), SUM(input_tokens), SUM(output_tokens),
+		SUM(cache_creation_input_tokens), SUM(cache_read_input_tokens), SUM(reasoning_output_tokens), SUM(cost_usd)
+		FROM usage_records`).Scan(
+		&usageCount, &inputTokens, &outputTokens, &cacheCreate, &cacheRead, &reasoningOutput, &totalCost,
+	); err != nil {
 		t.Fatalf("read preserved usage: %v", err)
 	}
-	if usageCount != 1 || inputTokens != 17 || outputTokens != 9 || totalCost != 1.25 {
-		t.Errorf("usage changed during migration: count=%d input=%d output=%d cost=%v", usageCount, inputTokens, outputTokens, totalCost)
+	if usageCount != 1 || inputTokens != 17 || outputTokens != 9 || cacheCreate != 5 || cacheRead != 7 || reasoningOutput != 3 || totalCost != 1.25 {
+		t.Errorf("usage changed during migration: count=%d input=%d output=%d cache_create=%d cache_read=%d reasoning=%d cost=%v",
+			usageCount, inputTokens, outputTokens, cacheCreate, cacheRead, reasoningOutput, totalCost)
+	}
+	if totalTokens := inputTokens + outputTokens + cacheCreate + cacheRead; totalTokens != 38 {
+		t.Errorf("token total changed during migration: got %d, want 38", totalTokens)
 	}
 
 	checks := []struct {
@@ -846,8 +914,8 @@ func TestMigration007PreservesLegacyData(t *testing.T) {
 	}{
 		{`SELECT COUNT(*) FROM sessions WHERE source='claude' AND session_id='legacy-session' AND prompts=4`, 1},
 		{`SELECT COUNT(*) FROM prompt_events WHERE source='claude' AND session_id='legacy-session'`, 1},
-		{`SELECT COUNT(*) FROM config_backups WHERE tool='claude' AND slot=2 AND trigger_type='manual'`, 1},
 		{`SELECT COUNT(*) FROM meta WHERE key='migration_007_session_event_index' AND value='done'`, 1},
+		{`SELECT COUNT(*) FROM meta WHERE key='migration_008_remove_config_management' AND value='done'`, 1},
 	}
 	for _, check := range checks {
 		var got int
@@ -858,6 +926,25 @@ func TestMigration007PreservesLegacyData(t *testing.T) {
 			t.Errorf("preservation query %q: got %d, want %d", check.query, got, check.want)
 		}
 	}
+	assertDeprecatedConfigTablesAbsent(t, db.db)
+}
+
+func assertDeprecatedConfigTablesAbsent(t *testing.T, db *sql.DB) {
+	t.Helper()
+	for _, table := range deprecatedConfigManagementTables {
+		if sqliteTableExists(t, db, table) {
+			t.Errorf("deprecated config-management table %q still exists", table)
+		}
+	}
+}
+
+func sqliteTableExists(t *testing.T, db *sql.DB, table string) bool {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&count); err != nil {
+		t.Fatalf("inspect sqlite table %q: %v", table, err)
+	}
+	return count != 0
 }
 
 func TestMigration007RollsBackSchemaWhenFTSCreationFails(t *testing.T) {

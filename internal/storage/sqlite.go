@@ -178,116 +178,10 @@ func migrate(db *sql.DB) error {
 			`,
 		},
 		{
-			"005_config_manager", `
-				CREATE TABLE IF NOT EXISTS provider_profiles (
-					id INTEGER PRIMARY KEY AUTOINCREMENT,
-					name TEXT NOT NULL UNIQUE,
-					is_active INTEGER NOT NULL DEFAULT 0,
-					config TEXT NOT NULL DEFAULT '',
-					created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-					updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-				);
-
-				CREATE TABLE IF NOT EXISTS profile_tool_targets (
-					profile_id INTEGER NOT NULL,
-					tool TEXT NOT NULL,
-					enabled INTEGER NOT NULL DEFAULT 1,
-					tool_config TEXT NOT NULL DEFAULT '',
-					PRIMARY KEY (profile_id, tool),
-					FOREIGN KEY (profile_id) REFERENCES provider_profiles(id) ON DELETE CASCADE
-				);
-
-				CREATE TABLE IF NOT EXISTS mcp_servers (
-					id INTEGER PRIMARY KEY AUTOINCREMENT,
-					name TEXT NOT NULL UNIQUE,
-					command TEXT NOT NULL,
-					args TEXT NOT NULL DEFAULT '',
-					env TEXT NOT NULL DEFAULT '',
-					enabled INTEGER NOT NULL DEFAULT 1,
-					created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-				);
-
-				CREATE TABLE IF NOT EXISTS mcp_server_targets (
-					server_id INTEGER NOT NULL,
-					tool TEXT NOT NULL,
-					enabled INTEGER NOT NULL DEFAULT 1,
-					PRIMARY KEY (server_id, tool),
-					FOREIGN KEY (server_id) REFERENCES mcp_servers(id) ON DELETE CASCADE
-				);
-
-				CREATE TABLE IF NOT EXISTS skills (
-					id INTEGER PRIMARY KEY AUTOINCREMENT,
-					name TEXT NOT NULL UNIQUE,
-					source_path TEXT NOT NULL,
-					description TEXT NOT NULL DEFAULT '',
-					enabled INTEGER NOT NULL DEFAULT 1,
-					source_type TEXT NOT NULL DEFAULT 'manual',
-					source_label TEXT NOT NULL DEFAULT '',
-					repo_owner TEXT NOT NULL DEFAULT '',
-					repo_name TEXT NOT NULL DEFAULT '',
-					repo_branch TEXT NOT NULL DEFAULT '',
-					repo_subpath TEXT NOT NULL DEFAULT '',
-					readme_url TEXT NOT NULL DEFAULT '',
-					updatable INTEGER NOT NULL DEFAULT 0,
-					last_checked_at DATETIME,
-					last_synced_at DATETIME,
-					created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-				);
-
-				CREATE TABLE IF NOT EXISTS skill_targets (
-					skill_id INTEGER NOT NULL,
-					tool TEXT NOT NULL,
-					method TEXT NOT NULL DEFAULT 'symlink',
-					enabled INTEGER NOT NULL DEFAULT 1,
-					variant_id INTEGER NOT NULL DEFAULT 0,
-					PRIMARY KEY (skill_id, tool),
-					FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE
-				);
-
-				CREATE TABLE IF NOT EXISTS config_backups (
-					id INTEGER PRIMARY KEY AUTOINCREMENT,
-					tool TEXT NOT NULL,
-					file_path TEXT NOT NULL,
-					backup_path TEXT NOT NULL,
-					slot INTEGER NOT NULL DEFAULT 0,
-					created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-					trigger_type TEXT NOT NULL DEFAULT ''
-				);
-
-				CREATE TABLE IF NOT EXISTS sync_state (
-					tool TEXT NOT NULL,
-					file_path TEXT NOT NULL,
-					last_hash TEXT NOT NULL DEFAULT '',
-					last_sync DATETIME,
-					last_sync_dir TEXT NOT NULL DEFAULT '',
-					PRIMARY KEY (tool, file_path)
-				);
-
-				CREATE TABLE IF NOT EXISTS skill_repo_sources (
-					id INTEGER PRIMARY KEY AUTOINCREMENT,
-					owner TEXT NOT NULL,
-					repo TEXT NOT NULL,
-					branch TEXT NOT NULL DEFAULT 'main',
-					subpath TEXT NOT NULL DEFAULT '',
-					enabled INTEGER NOT NULL DEFAULT 1,
-					created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-					updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-					UNIQUE (owner, repo, branch, subpath)
-				);
-			`,
+			"005_config_manager", `SELECT 1;`,
 		},
 		{
-			"006_skill_variants", `
-				CREATE TABLE IF NOT EXISTS skill_variants (
-					id INTEGER PRIMARY KEY AUTOINCREMENT,
-					skill_id INTEGER NOT NULL,
-					source_path TEXT NOT NULL,
-					origin_tool TEXT NOT NULL DEFAULT 'global',
-					created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-					UNIQUE (skill_id, source_path),
-					FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE
-				);
-			`,
+			"006_skill_variants", `SELECT 1;`,
 		},
 		{
 			"007_session_event_index", `
@@ -389,6 +283,20 @@ func migrate(db *sql.DB) error {
 				END;
 			`,
 		},
+		{
+			"008_remove_config_management", `
+				DROP TABLE IF EXISTS profile_tool_targets;
+				DROP TABLE IF EXISTS mcp_server_targets;
+				DROP TABLE IF EXISTS skill_targets;
+				DROP TABLE IF EXISTS skill_variants;
+				DROP TABLE IF EXISTS provider_profiles;
+				DROP TABLE IF EXISTS mcp_servers;
+				DROP TABLE IF EXISTS skills;
+				DROP TABLE IF EXISTS config_backups;
+				DROP TABLE IF EXISTS sync_state;
+				DROP TABLE IF EXISTS skill_repo_sources;
+			`,
+		},
 	}
 	for _, m := range migrations {
 		var done string
@@ -414,91 +322,6 @@ func migrate(db *sql.DB) error {
 		}
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit migration %s: %w", m.id, err)
-		}
-	}
-	db.Exec("ALTER TABLE skill_targets ADD COLUMN variant_id INTEGER NOT NULL DEFAULT 0")
-	db.Exec("ALTER TABLE skills ADD COLUMN current_variant_id INTEGER NOT NULL DEFAULT 0")
-	db.Exec("ALTER TABLE skill_targets ADD COLUMN source_kind TEXT NOT NULL DEFAULT 'global'")
-	db.Exec("ALTER TABLE skill_targets ADD COLUMN local_source_path TEXT NOT NULL DEFAULT ''")
-	db.Exec("ALTER TABLE skill_targets ADD COLUMN local_source_hash TEXT NOT NULL DEFAULT ''")
-	db.Exec("ALTER TABLE skill_targets ADD COLUMN local_origin_tool TEXT NOT NULL DEFAULT ''")
-	db.Exec("ALTER TABLE skills ADD COLUMN source_type TEXT NOT NULL DEFAULT 'manual'")
-	db.Exec("ALTER TABLE skills ADD COLUMN source_label TEXT NOT NULL DEFAULT ''")
-	db.Exec("ALTER TABLE skills ADD COLUMN repo_owner TEXT NOT NULL DEFAULT ''")
-	db.Exec("ALTER TABLE skills ADD COLUMN repo_name TEXT NOT NULL DEFAULT ''")
-	db.Exec("ALTER TABLE skills ADD COLUMN repo_branch TEXT NOT NULL DEFAULT ''")
-	db.Exec("ALTER TABLE skills ADD COLUMN repo_subpath TEXT NOT NULL DEFAULT ''")
-	db.Exec("ALTER TABLE skills ADD COLUMN readme_url TEXT NOT NULL DEFAULT ''")
-	db.Exec("ALTER TABLE skills ADD COLUMN updatable INTEGER NOT NULL DEFAULT 0")
-	db.Exec("ALTER TABLE skills ADD COLUMN last_checked_at DATETIME")
-	db.Exec("ALTER TABLE skills ADD COLUMN last_synced_at DATETIME")
-	if _, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS skill_repo_sources (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			owner TEXT NOT NULL,
-			repo TEXT NOT NULL,
-			branch TEXT NOT NULL DEFAULT 'main',
-			subpath TEXT NOT NULL DEFAULT '',
-			enabled INTEGER NOT NULL DEFAULT 1,
-			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			UNIQUE (owner, repo, branch, subpath)
-		)`); err != nil {
-		return err
-	}
-	return backfillSkillVariants(db)
-}
-
-func backfillSkillVariants(db *sql.DB) error {
-	rows, err := db.Query(`SELECT id, source_path, current_variant_id FROM skills ORDER BY id`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	type skillSeed struct {
-		id               int64
-		sourcePath       string
-		currentVariantID int64
-	}
-	var seeds []skillSeed
-	for rows.Next() {
-		var seed skillSeed
-		if err := rows.Scan(&seed.id, &seed.sourcePath, &seed.currentVariantID); err != nil {
-			return err
-		}
-		seeds = append(seeds, seed)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	for _, seed := range seeds {
-		var variantID int64
-		err := db.QueryRow(`SELECT id FROM skill_variants WHERE skill_id = ? AND source_path = ?`, seed.id, seed.sourcePath).Scan(&variantID)
-		if err == sql.ErrNoRows {
-			result, execErr := db.Exec(`INSERT INTO skill_variants(skill_id, source_path, origin_tool) VALUES(?, ?, 'global')`, seed.id, seed.sourcePath)
-			if execErr != nil {
-				return execErr
-			}
-			variantID, execErr = result.LastInsertId()
-			if execErr != nil {
-				return execErr
-			}
-		} else if err != nil {
-			return err
-		}
-
-		if _, err := db.Exec(`UPDATE skill_targets SET variant_id = ? WHERE skill_id = ? AND variant_id = 0`, variantID, seed.id); err != nil {
-			return err
-		}
-		if seed.currentVariantID == 0 {
-			if _, err := db.Exec(`UPDATE skills SET current_variant_id = ? WHERE id = ?`, variantID, seed.id); err != nil {
-				return err
-			}
-		}
-		if _, err := db.Exec(`UPDATE skill_targets SET source_kind = 'global' WHERE skill_id = ? AND TRIM(source_kind) = ''`, seed.id); err != nil {
-			return err
 		}
 	}
 	return nil
