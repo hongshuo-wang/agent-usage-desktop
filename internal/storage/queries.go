@@ -164,6 +164,57 @@ func (d *DB) InsertPromptBatch(events []*PromptEvent) error {
 
 // Pricing
 
+// PricingSnapshotEntry is one model's immutable per-token prices in a pricing snapshot.
+type PricingSnapshotEntry struct {
+	Model                       string
+	InputCostPerToken           float64
+	OutputCostPerToken          float64
+	CacheReadInputTokenCost     float64
+	CacheCreationInputTokenCost float64
+}
+
+// CreatePricingSnapshot atomically stores a pricing source revision and all of its entries.
+func (d *DB) CreatePricingSnapshot(syncedAt time.Time, source, revision string, entries []PricingSnapshotEntry) (int64, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	result, err := tx.Exec(`INSERT INTO pricing_snapshots(synced_at, source, source_revision) VALUES(?,?,?)`,
+		syncedAt, source, revision)
+	if err != nil {
+		return 0, err
+	}
+	snapshotID, err := result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+
+	stmt, err := tx.Prepare(`INSERT INTO pricing_snapshot_entries(
+		snapshot_id, model, input_cost_per_token, output_cost_per_token,
+		cache_read_input_token_cost, cache_creation_input_token_cost
+	) VALUES(?,?,?,?,?,?)`)
+	if err != nil {
+		return 0, err
+	}
+	defer stmt.Close()
+
+	for _, entry := range entries {
+		if _, err := stmt.Exec(snapshotID, entry.Model, entry.InputCostPerToken, entry.OutputCostPerToken,
+			entry.CacheReadInputTokenCost, entry.CacheCreationInputTokenCost); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return snapshotID, nil
+}
+
 // UpsertPricing inserts or updates per-token pricing for a model.
 func (d *DB) UpsertPricing(model string, inputCost, outputCost, cacheReadCost, cacheCreationCost float64) error {
 	_, err := d.db.Exec(`INSERT INTO pricing(model,input_cost_per_token,output_cost_per_token,

@@ -777,6 +777,215 @@ func TestFreshDatabaseContainsOnlyProductSchema(t *testing.T) {
 	assertDeprecatedConfigTablesAbsent(t, db.db)
 }
 
+func TestFreshDatabaseContainsPricingLedger(t *testing.T) {
+	db := tempDB(t)
+
+	for _, table := range []string{"pricing_snapshots", "pricing_snapshot_entries"} {
+		if !sqliteTableExists(t, db.db, table) {
+			t.Errorf("fresh database missing pricing ledger table %q", table)
+		}
+	}
+
+	for _, column := range []string{
+		"resolved_pricing_key", "pricing_snapshot_id", "pricing_status", "priced_at",
+	} {
+		if !sqliteColumnExists(t, db.db, "usage_records", column) {
+			t.Errorf("fresh database missing usage_records column %q", column)
+		}
+	}
+
+	for _, index := range []string{"idx_usage_pricing_status_timestamp", "idx_usage_pricing_snapshot_id"} {
+		if !sqliteIndexExists(t, db.db, index) {
+			t.Errorf("fresh database missing pricing index %q", index)
+		}
+	}
+
+	if _, err := db.db.Exec(`INSERT INTO usage_records(
+		source, session_id, model, timestamp, pricing_status
+	) VALUES('claude', 'invalid-status', 'model', CURRENT_TIMESTAMP, 'unknown')`); err == nil {
+		t.Fatal("pricing_status accepted a value outside priced, unpriced, legacy")
+	}
+
+	result, err := db.db.Exec(`INSERT INTO usage_records(
+		source, session_id, model, timestamp
+	) VALUES('claude', 'invalid-snapshot', 'model', CURRENT_TIMESTAMP)`)
+	if err != nil {
+		t.Fatalf("insert usage for snapshot constraint: %v", err)
+	}
+	usageID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read inserted usage ID: %v", err)
+	}
+	if _, err := db.db.Exec(`UPDATE usage_records SET pricing_snapshot_id=? WHERE id=?`, 999999, usageID); err == nil {
+		t.Fatal("pricing_snapshot_id accepted a nonexistent pricing snapshot")
+	}
+}
+
+func TestMigration009PreservesLegacyCostWithoutInventingSnapshot(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "pre-009.db")
+	legacy, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open pre-009 database: %v", err)
+	}
+	legacySchema := `
+		CREATE TABLE usage_records (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL, session_id TEXT NOT NULL,
+			model TEXT NOT NULL, input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0,
+			cache_creation_input_tokens INTEGER DEFAULT 0, cache_read_input_tokens INTEGER DEFAULT 0,
+			reasoning_output_tokens INTEGER DEFAULT 0, cost_usd REAL DEFAULT 0, timestamp DATETIME NOT NULL,
+			project TEXT DEFAULT '', git_branch TEXT DEFAULT ''
+		);
+		CREATE TABLE sessions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL, session_id TEXT NOT NULL,
+			project TEXT DEFAULT '', cwd TEXT DEFAULT '', version TEXT DEFAULT '', git_branch TEXT DEFAULT '',
+			start_time DATETIME, prompts INTEGER DEFAULT 0, UNIQUE(source, session_id)
+		);
+		CREATE TABLE prompt_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL, session_id TEXT NOT NULL, timestamp DATETIME NOT NULL
+		);
+		CREATE TABLE file_state (path TEXT PRIMARY KEY, size INTEGER DEFAULT 0, last_offset INTEGER DEFAULT 0, scan_context TEXT DEFAULT '');
+		CREATE TABLE pricing (model TEXT PRIMARY KEY, input_cost_per_token REAL DEFAULT 0, output_cost_per_token REAL DEFAULT 0,
+			cache_read_input_token_cost REAL DEFAULT 0, cache_creation_input_token_cost REAL DEFAULT 0, updated_at DATETIME);
+		CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT DEFAULT '');
+		INSERT INTO usage_records(source, session_id, model, cost_usd, timestamp)
+			VALUES('claude', 'legacy-priced', 'legacy-model', 4.25, '2025-01-01 12:00:00+00:00');
+		INSERT INTO usage_records(source, session_id, model, cost_usd, timestamp)
+			VALUES('claude', 'legacy-zero', 'legacy-model', 0, '2025-01-01 12:01:00+00:00');
+	`
+	if _, err := legacy.Exec(legacySchema); err != nil {
+		legacy.Close()
+		t.Fatalf("seed pre-009 schema: %v", err)
+	}
+	for _, id := range []string{
+		"001_fix_opencode_input_tokens", "002_input_tokens_non_overlapping",
+		"003_prompt_events_rescan", "004_file_state_scan_context",
+		"005_config_manager", "006_skill_variants", "007_session_event_index",
+		"008_remove_config_management",
+	} {
+		if _, err := legacy.Exec(`INSERT INTO meta(key,value) VALUES(?, 'done')`, "migration_"+id); err != nil {
+			legacy.Close()
+			t.Fatalf("seed migration marker %s: %v", id, err)
+		}
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close pre-009 database: %v", err)
+	}
+
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open pre-009 database: %v", err)
+	}
+	defer db.Close()
+
+	var cost float64
+	var status, resolvedKey string
+	var snapshotID sql.NullInt64
+	var pricedAt sql.NullTime
+	if err := db.db.QueryRow(`SELECT cost_usd, pricing_status, resolved_pricing_key,
+		pricing_snapshot_id, priced_at FROM usage_records WHERE session_id='legacy-priced'`).Scan(
+		&cost, &status, &resolvedKey, &snapshotID, &pricedAt,
+	); err != nil {
+		t.Fatalf("read migrated legacy cost: %v", err)
+	}
+	if cost != 4.25 {
+		t.Errorf("legacy cost changed during migration: got %v, want 4.25", cost)
+	}
+	if status != "legacy" {
+		t.Errorf("legacy priced row status = %q, want legacy", status)
+	}
+	if snapshotID.Valid {
+		t.Errorf("legacy priced row invented snapshot ID %d", snapshotID.Int64)
+	}
+	if resolvedKey != "" || pricedAt.Valid {
+		t.Errorf("legacy priced row invented provenance: key=%q priced_at=%v", resolvedKey, pricedAt)
+	}
+
+	var zeroStatus string
+	if err := db.db.QueryRow(`SELECT pricing_status FROM usage_records WHERE session_id='legacy-zero'`).Scan(&zeroStatus); err != nil {
+		t.Fatalf("read migrated zero-cost row: %v", err)
+	}
+	if zeroStatus != "unpriced" {
+		t.Errorf("legacy zero-cost row status = %q, want unpriced", zeroStatus)
+	}
+}
+
+func TestCreatePricingSnapshotPersistsFullLedger(t *testing.T) {
+	db := tempDB(t)
+	syncedAt := time.Date(2025, 4, 5, 6, 7, 8, 0, time.UTC)
+	entries := []PricingSnapshotEntry{
+		{Model: "model-a", InputCostPerToken: 0.1, OutputCostPerToken: 0.2, CacheReadInputTokenCost: 0.03, CacheCreationInputTokenCost: 0.04},
+		{Model: "model-b", InputCostPerToken: 1.1, OutputCostPerToken: 1.2, CacheReadInputTokenCost: 1.03, CacheCreationInputTokenCost: 1.04},
+	}
+
+	snapshotID, err := db.CreatePricingSnapshot(syncedAt, "litellm", "revision-123", entries)
+	if err != nil {
+		t.Fatalf("CreatePricingSnapshot: %v", err)
+	}
+	if snapshotID == 0 {
+		t.Fatal("CreatePricingSnapshot returned zero snapshot ID")
+	}
+
+	var gotSyncedAt time.Time
+	var source, revision string
+	if err := db.db.QueryRow(`SELECT synced_at, source, source_revision FROM pricing_snapshots WHERE id=?`, snapshotID).
+		Scan(&gotSyncedAt, &source, &revision); err != nil {
+		t.Fatalf("read pricing snapshot: %v", err)
+	}
+	if !gotSyncedAt.Equal(syncedAt) || source != "litellm" || revision != "revision-123" {
+		t.Errorf("unexpected snapshot: synced_at=%v source=%q revision=%q", gotSyncedAt, source, revision)
+	}
+
+	rows, err := db.db.Query(`SELECT model, input_cost_per_token, output_cost_per_token,
+		cache_read_input_token_cost, cache_creation_input_token_cost
+		FROM pricing_snapshot_entries WHERE snapshot_id=? ORDER BY model`, snapshotID)
+	if err != nil {
+		t.Fatalf("read snapshot entries: %v", err)
+	}
+	defer rows.Close()
+	var got []PricingSnapshotEntry
+	for rows.Next() {
+		var entry PricingSnapshotEntry
+		if err := rows.Scan(&entry.Model, &entry.InputCostPerToken, &entry.OutputCostPerToken,
+			&entry.CacheReadInputTokenCost, &entry.CacheCreationInputTokenCost); err != nil {
+			t.Fatalf("scan snapshot entry: %v", err)
+		}
+		got = append(got, entry)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate snapshot entries: %v", err)
+	}
+	if len(got) != len(entries) {
+		t.Fatalf("snapshot entry count = %d, want %d", len(got), len(entries))
+	}
+	for i := range entries {
+		if got[i] != entries[i] {
+			t.Errorf("snapshot entry %d = %+v, want %+v", i, got[i], entries[i])
+		}
+	}
+}
+
+func TestCreatePricingSnapshotRollsBackOnEntryFailure(t *testing.T) {
+	db := tempDB(t)
+	entries := []PricingSnapshotEntry{
+		{Model: "duplicate", InputCostPerToken: 0.1},
+		{Model: "duplicate", InputCostPerToken: 0.2},
+	}
+
+	if _, err := db.CreatePricingSnapshot(time.Now(), "litellm", "bad-revision", entries); err == nil {
+		t.Fatal("CreatePricingSnapshot accepted duplicate models")
+	}
+
+	for _, table := range []string{"pricing_snapshots", "pricing_snapshot_entries"} {
+		var count int
+		if err := db.db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
+			t.Fatalf("count %s after failed snapshot: %v", table, err)
+		}
+		if count != 0 {
+			t.Errorf("failed snapshot left %d rows in %s", count, table)
+		}
+	}
+}
+
 func TestMigration007PreservesLegacyData(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "legacy.db")
 	legacy, err := sql.Open("sqlite", dbPath)
@@ -943,6 +1152,39 @@ func sqliteTableExists(t *testing.T, db *sql.DB, table string) bool {
 	var count int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&count); err != nil {
 		t.Fatalf("inspect sqlite table %q: %v", table, err)
+	}
+	return count != 0
+}
+
+func sqliteColumnExists(t *testing.T, db *sql.DB, table, column string) bool {
+	t.Helper()
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		t.Fatalf("inspect sqlite table %q: %v", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue interface{}
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatalf("scan sqlite table %q: %v", table, err)
+		}
+		if name == column {
+			return true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate sqlite table %q: %v", table, err)
+	}
+	return false
+}
+
+func sqliteIndexExists(t *testing.T, db *sql.DB, index string) bool {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?`, index).Scan(&count); err != nil {
+		t.Fatalf("inspect sqlite index %q: %v", index, err)
 	}
 	return count != 0
 }

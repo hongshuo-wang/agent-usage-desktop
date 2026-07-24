@@ -297,6 +297,37 @@ func migrate(db *sql.DB) error {
 				DROP TABLE IF EXISTS skill_repo_sources;
 			`,
 		},
+		{
+			"009_pricing_ledger", `
+				CREATE TABLE pricing_snapshots (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					synced_at DATETIME NOT NULL,
+					source TEXT NOT NULL,
+					source_revision TEXT NOT NULL
+				);
+
+				CREATE TABLE pricing_snapshot_entries (
+					snapshot_id INTEGER NOT NULL,
+					model TEXT NOT NULL,
+					input_cost_per_token REAL NOT NULL,
+					output_cost_per_token REAL NOT NULL,
+					cache_read_input_token_cost REAL NOT NULL,
+					cache_creation_input_token_cost REAL NOT NULL,
+					PRIMARY KEY(snapshot_id, model),
+					FOREIGN KEY(snapshot_id) REFERENCES pricing_snapshots(id) ON DELETE CASCADE
+				);
+
+				ALTER TABLE usage_records ADD COLUMN resolved_pricing_key TEXT NOT NULL DEFAULT '';
+				ALTER TABLE usage_records ADD COLUMN pricing_snapshot_id INTEGER REFERENCES pricing_snapshots(id);
+				ALTER TABLE usage_records ADD COLUMN pricing_status TEXT NOT NULL DEFAULT 'unpriced'
+					CHECK(pricing_status IN ('priced', 'unpriced', 'legacy'));
+				ALTER TABLE usage_records ADD COLUMN priced_at DATETIME;
+
+				UPDATE usage_records SET pricing_status = 'legacy' WHERE cost_usd > 0;
+				CREATE INDEX idx_usage_pricing_status_timestamp ON usage_records(pricing_status, timestamp);
+				CREATE INDEX idx_usage_pricing_snapshot_id ON usage_records(pricing_snapshot_id);
+			`,
+		},
 	}
 	for _, m := range migrations {
 		var done string
