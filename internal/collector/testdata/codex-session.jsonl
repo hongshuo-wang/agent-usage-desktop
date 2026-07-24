@@ -1,0 +1,9 @@
+{"timestamp":"2026-07-15T10:00:50Z","type":"session_meta","payload":{"id":"fixture-codex-session","cwd":"/workspace/fixture-project","cli_version":"1.0.0-fixture"}}
+{"timestamp":"2026-07-15T10:00:51Z","type":"turn_context","payload":{"model":"gpt-5-codex"}}
+{"timestamp":"2026-07-15T10:00:52Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Inspect the fixture project using synthetic data."}]}}
+{"timestamp":"2026-07-15T10:00:53Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I will inspect the fixture project."}]}}
+{"timestamp":"2026-07-15T10:00:54Z","type":"response_item","payload":{"type":"function_call","name":"read_file","call_id":"fixture-tool-codex","arguments":"{\"path\":\"/workspace/fixture-project/README.md\"}"}}
+{"timestamp":"2026-07-15T10:00:55Z","type":"response_item","payload":{"type":"function_call_output","call_id":"fixture-tool-codex","output":"Fixture file content from a synthetic workspace."}}
+{"timestamp":"2026-07-15T10:00:56Z","type":"event_msg","payload":{"type":"fixture_error","message":"Fixture command failed as an intentional test event."}}
+{"timestamp":"2026-07-15T10:00:57Z","type":"fixture_extension","payload":{"note":"Unknown fixture event for forward compatibility."}}
+{"timestamp":"2026-07-15T10:01:01Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":120,"cached_input_tokens":20,"output_tokens":40,"reasoning_output_tokens":15}}}}
