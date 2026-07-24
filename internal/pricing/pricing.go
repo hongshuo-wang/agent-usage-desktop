@@ -1,9 +1,13 @@
 package pricing
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/hongshuo-wang/agent-usage-desktop/internal/storage"
@@ -12,32 +16,44 @@ import (
 const pricingURL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 
 type modelPricing struct {
-	InputCostPerToken              *float64 `json:"input_cost_per_token"`
-	OutputCostPerToken             *float64 `json:"output_cost_per_token"`
-	CacheReadInputTokenCost        *float64 `json:"cache_read_input_token_cost"`
-	CacheCreationInputTokenCost    *float64 `json:"cache_creation_input_token_cost"`
+	InputCostPerToken           *float64 `json:"input_cost_per_token"`
+	OutputCostPerToken          *float64 `json:"output_cost_per_token"`
+	CacheReadInputTokenCost     *float64 `json:"cache_read_input_token_cost"`
+	CacheCreationInputTokenCost *float64 `json:"cache_creation_input_token_cost"`
 }
 
-// Sync fetches model pricing from the litellm GitHub repository and upserts
-// it into the database. Only models relevant to AI coding agents are stored.
+// Sync fetches model pricing from the litellm GitHub repository and stores the
+// full response as one immutable pricing snapshot.
 func Sync(db *storage.DB) error {
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(pricingURL)
+	return syncFromURL(db, client, pricingURL)
+}
+
+func syncFromURL(db *storage.DB, client *http.Client, url string) error {
+	resp, err := client.Get(url)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("pricing request returned %s", resp.Status)
+	}
 
-	var data map[string]json.RawMessage
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
 		return err
 	}
 
-	count := 0
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal(body, &data); err != nil {
+		return fmt.Errorf("decode pricing response: %w", err)
+	}
+
+	entries := make([]storage.PricingSnapshotEntry, 0, len(data))
 	for model, raw := range data {
 		var p modelPricing
 		if err := json.Unmarshal(raw, &p); err != nil {
-			continue
+			return fmt.Errorf("decode pricing entry %q: %w", model, err)
 		}
 		if p.InputCostPerToken == nil || p.OutputCostPerToken == nil {
 			continue
@@ -51,12 +67,27 @@ func Sync(db *storage.DB) error {
 			cacheCreate = *p.CacheCreationInputTokenCost
 		}
 
-		if err := db.UpsertPricing(model, *p.InputCostPerToken, *p.OutputCostPerToken, cacheRead, cacheCreate); err != nil {
-			log.Printf("pricing: error upserting %s: %v", model, err)
-		}
-		count++
+		entries = append(entries, storage.PricingSnapshotEntry{
+			Model:                       model,
+			InputCostPerToken:           *p.InputCostPerToken,
+			OutputCostPerToken:          *p.OutputCostPerToken,
+			CacheReadInputTokenCost:     cacheRead,
+			CacheCreationInputTokenCost: cacheCreate,
+		})
 	}
-	log.Printf("pricing: synced %d models", count)
+	if len(entries) == 0 {
+		return fmt.Errorf("pricing response contains no valid pricing entries")
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Model < entries[j].Model })
+
+	revision := resp.Header.Get("ETag")
+	if revision == "" {
+		revision = fmt.Sprintf("%x", sha256.Sum256(body))
+	}
+	if _, err := db.CreatePricingSnapshot(time.Now().UTC(), "litellm", revision, entries); err != nil {
+		return err
+	}
+	log.Printf("pricing: synced %d models", len(entries))
 	return nil
 }
 

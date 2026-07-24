@@ -313,50 +313,6 @@ func TestPricing(t *testing.T) {
 	}
 }
 
-func TestRecalcCosts(t *testing.T) {
-	db := tempDB(t)
-	ts := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
-
-	// Insert a record with zero cost
-	rec := &UsageRecord{
-		Source:       "claude",
-		SessionID:    "sess-1",
-		Model:        "claude-sonnet-4-20250514",
-		InputTokens:  1000,
-		OutputTokens: 500,
-		CostUSD:      0,
-		Timestamp:    ts,
-	}
-	if err := db.InsertUsage(rec); err != nil {
-		t.Fatalf("InsertUsage: %v", err)
-	}
-
-	// Set up pricing
-	prices := map[string][4]float64{
-		"claude-sonnet-4-20250514": {0.003, 0.015, 0.001, 0.004},
-	}
-
-	calcFn := func(input, output, cc, cr int64, p [4]float64) float64 {
-		return float64(input)*p[0] + float64(output)*p[1]
-	}
-
-	if err := db.RecalcCosts(prices, calcFn); err != nil {
-		t.Fatalf("RecalcCosts: %v", err)
-	}
-
-	// Verify cost was updated
-	from := ts.Add(-time.Hour)
-	to := ts.Add(time.Hour)
-	stats, err := db.GetDashboardStats(from, to, "")
-	if err != nil {
-		t.Fatalf("GetDashboardStats: %v", err)
-	}
-	// 1000*0.003 + 500*0.015 = 3.0 + 7.5 = 10.5
-	if stats.TotalCost < 10.4 || stats.TotalCost > 10.6 {
-		t.Errorf("expected ~10.5, got %f", stats.TotalCost)
-	}
-}
-
 func TestGetCostByModel(t *testing.T) {
 	db := tempDB(t)
 	ts := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)

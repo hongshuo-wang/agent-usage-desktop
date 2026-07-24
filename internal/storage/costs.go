@@ -1,6 +1,12 @@
 package storage
 
-import "strings"
+import (
+	"database/sql"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+)
 
 // CostCalcFunc is a function that calculates USD cost from token counts and per-token prices.
 type CostCalcFunc func(inputTokens, outputTokens, cacheCreation, cacheRead int64, prices [4]float64) float64
@@ -11,13 +17,21 @@ type PricingMatch struct {
 	MatchKind string
 }
 
-// RecalcCosts recalculates costs for all usage records where cost_usd is zero,
-// using fuzzy model name matching against the provided pricing map.
-func (d *DB) RecalcCosts(allPrices map[string][4]float64, calcFn CostCalcFunc) error {
+// PriceUnpricedUsage binds unpriced usage records to the latest pricing snapshot
+// available at the time of each usage event.
+func (d *DB) PriceUnpricedUsage(calcFn CostCalcFunc) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	rows, err := d.db.Query(`SELECT id, model, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens FROM usage_records WHERE cost_usd = 0`)
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query(`SELECT id, model, timestamp, input_tokens, output_tokens,
+		cache_creation_input_tokens, cache_read_input_tokens
+		FROM usage_records WHERE pricing_status = 'unpriced'`)
 	if err != nil {
 		return err
 	}
@@ -26,56 +40,179 @@ func (d *DB) RecalcCosts(allPrices map[string][4]float64, calcFn CostCalcFunc) e
 	type rec struct {
 		id                    int64
 		model                 string
+		timestamp             time.Time
 		input, output, cc, cr int64
 	}
 	var recs []rec
 	for rows.Next() {
 		var r rec
-		if err := rows.Scan(&r.id, &r.model, &r.input, &r.output, &r.cc, &r.cr); err != nil {
+		var timestamp any
+		if err := rows.Scan(&r.id, &r.model, &timestamp, &r.input, &r.output, &r.cc, &r.cr); err != nil {
 			return err
+		}
+		r.timestamp, err = parseDatabaseTime(timestamp)
+		if err != nil {
+			return fmt.Errorf("parse timestamp for usage %d: %w", r.id, err)
 		}
 		recs = append(recs, r)
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	rows.Close()
-
-	if len(recs) == 0 {
-		return nil
+	if err := rows.Close(); err != nil {
+		return err
 	}
 
-	tx, err := d.db.Begin()
+	if len(recs) == 0 {
+		return tx.Commit()
+	}
+	snapshots, err := loadPricingSnapshots(tx)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
 
-	stmt, err := tx.Prepare("UPDATE usage_records SET cost_usd=? WHERE id=?")
+	stmt, err := tx.Prepare(`UPDATE usage_records SET cost_usd=?, resolved_pricing_key=?,
+		pricing_snapshot_id=?, pricing_status='priced', priced_at=?
+		WHERE id=? AND pricing_status='unpriced'`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 
-	updated := 0
+	type snapshotPricing struct {
+		prices map[string][4]float64
+	}
+	snapshotCache := make(map[int64]snapshotPricing)
+	pricedAt := time.Now().UTC()
 	for _, r := range recs {
-		match, ok := matchPricing(r.model, allPrices)
+		snapshotID, ok := latestSnapshotAtOrBefore(snapshots, r.timestamp)
+		if !ok {
+			continue
+		}
+
+		snapshot, ok := snapshotCache[snapshotID]
+		if !ok {
+			prices, err := loadSnapshotPricing(tx, snapshotID)
+			if err != nil {
+				return fmt.Errorf("load pricing snapshot %d: %w", snapshotID, err)
+			}
+			snapshot = snapshotPricing{prices: prices}
+			snapshotCache[snapshotID] = snapshot
+		}
+
+		match, ok := matchPricing(r.model, snapshot.prices)
 		if !ok {
 			continue
 		}
 		cost := calcFn(r.input, r.output, r.cc, r.cr, match.Prices)
-		if cost > 0 {
-			if _, err := stmt.Exec(cost, r.id); err != nil {
-				return err
-			}
-			updated++
+		if _, err := stmt.Exec(cost, match.Key, snapshotID, pricedAt, r.id); err != nil {
+			return fmt.Errorf("price usage %d: %w", r.id, err)
 		}
 	}
 
-	if updated > 0 {
-		return tx.Commit()
+	return tx.Commit()
+}
+
+type pricingSnapshot struct {
+	id       int64
+	syncedAt time.Time
+}
+
+func loadPricingSnapshots(q queryer) ([]pricingSnapshot, error) {
+	rows, err := q.Query(`SELECT id, synced_at FROM pricing_snapshots`)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	defer rows.Close()
+
+	var snapshots []pricingSnapshot
+	for rows.Next() {
+		var snapshot pricingSnapshot
+		var syncedAt any
+		if err := rows.Scan(&snapshot.id, &syncedAt); err != nil {
+			return nil, err
+		}
+		snapshot.syncedAt, err = parseDatabaseTime(syncedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse pricing snapshot %d synced_at: %w", snapshot.id, err)
+		}
+		snapshots = append(snapshots, snapshot)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(snapshots, func(i, j int) bool {
+		if snapshots[i].syncedAt.Equal(snapshots[j].syncedAt) {
+			return snapshots[i].id < snapshots[j].id
+		}
+		return snapshots[i].syncedAt.Before(snapshots[j].syncedAt)
+	})
+	return snapshots, nil
+}
+
+func latestSnapshotAtOrBefore(snapshots []pricingSnapshot, eventTime time.Time) (int64, bool) {
+	index := sort.Search(len(snapshots), func(i int) bool {
+		return snapshots[i].syncedAt.After(eventTime)
+	})
+	if index == 0 {
+		return 0, false
+	}
+	return snapshots[index-1].id, true
+}
+
+func parseDatabaseTime(value any) (time.Time, error) {
+	switch value := value.(type) {
+	case time.Time:
+		return value, nil
+	case []byte:
+		return parseDatabaseTime(string(value))
+	case string:
+		if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+			return parsed, nil
+		}
+		fields := strings.Fields(value)
+		if len(fields) >= 3 {
+			if parsed, err := time.Parse("2006-01-02 15:04:05 -0700", strings.Join(fields[:3], " ")); err == nil {
+				return parsed, nil
+			}
+		}
+		for _, layout := range []string{"2006-01-02 15:04:05.999999999", "2006-01-02"} {
+			if parsed, err := time.ParseInLocation(layout, value, time.UTC); err == nil {
+				return parsed, nil
+			}
+		}
+		return time.Time{}, fmt.Errorf("unsupported timestamp %q", value)
+	default:
+		return time.Time{}, fmt.Errorf("unsupported timestamp type %T", value)
+	}
+}
+
+type queryer interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
+func loadSnapshotPricing(q queryer, snapshotID int64) (map[string][4]float64, error) {
+	rows, err := q.Query(`SELECT model, input_cost_per_token, output_cost_per_token,
+		cache_read_input_token_cost, cache_creation_input_token_cost
+		FROM pricing_snapshot_entries WHERE snapshot_id=?`, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	prices := make(map[string][4]float64)
+	for rows.Next() {
+		var model string
+		var values [4]float64
+		if err := rows.Scan(&model, &values[0], &values[1], &values[2], &values[3]); err != nil {
+			return nil, err
+		}
+		prices[model] = values
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return prices, nil
 }
 
 func matchPricing(model string, allPrices map[string][4]float64) (PricingMatch, bool) {

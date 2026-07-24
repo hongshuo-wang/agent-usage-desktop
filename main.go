@@ -69,10 +69,7 @@ func main() {
 	// Background: sync pricing, scan collectors, then start periodic loops
 	go func() {
 		log.Println("syncing pricing data...")
-		if err := pricing.Sync(db); err != nil {
-			log.Printf("pricing sync failed: %v (continuing without pricing)", err)
-		}
-		recalcCosts(db)
+		syncAndPriceUsage(db)
 
 		type collectorEntry struct {
 			name string
@@ -93,13 +90,13 @@ func main() {
 			if err := ce.c.Scan(); err != nil {
 				log.Printf("%s scan: %v", ce.name, err)
 			}
-			recalcCosts(db)
+			priceUnpricedUsage(db)
 
 			go func(ce collectorEntry) {
 				ticker := time.NewTicker(ce.cfg.ScanInterval)
 				for range ticker.C {
 					ce.c.Scan()
-					recalcCosts(db)
+					priceUnpricedUsage(db)
 				}
 			}(ce)
 		}
@@ -107,8 +104,7 @@ func main() {
 		// Periodic pricing sync
 		ticker := time.NewTicker(cfg.Pricing.SyncInterval)
 		for range ticker.C {
-			pricing.Sync(db)
-			recalcCosts(db)
+			syncAndPriceUsage(db)
 		}
 	}()
 
@@ -116,12 +112,15 @@ func main() {
 	select {}
 }
 
-func recalcCosts(db *storage.DB) {
-	prices, err := db.GetAllPricing()
-	if err != nil {
-		return
+func syncAndPriceUsage(db *storage.DB) {
+	if err := pricing.Sync(db); err != nil {
+		log.Printf("pricing sync failed: %v; pricing unpriced usage from existing historical snapshots", err)
 	}
-	if err := db.RecalcCosts(prices, pricing.CalcCost); err != nil {
-		log.Printf("recalc costs: %v", err)
+	priceUnpricedUsage(db)
+}
+
+func priceUnpricedUsage(db *storage.DB) {
+	if err := db.PriceUnpricedUsage(pricing.CalcCost); err != nil {
+		log.Printf("price unpriced usage: %v", err)
 	}
 }
