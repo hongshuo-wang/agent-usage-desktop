@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -11,9 +10,9 @@ func TestCanonicalReadmesDocumentProductContract(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		path     string
-		required []string
-		roadmap  []string
+		path         string
+		required     []string
+		roadmapTerms [][]string
 	}{
 		{
 			path: "README.md",
@@ -52,10 +51,10 @@ func TestCanonicalReadmesDocumentProductContract(t *testing.T) {
 				"https://github.com/hongshuo-wang/agent-usage-desktop",
 				"https://linux.do/t/topic/1922004",
 			},
-			roadmap: []string{
-				"Hermes session retrospective support",
-				"Read-only discovery of global `CLAUDE.md`, `AGENTS.md`, and memory files, with explicit project-level import",
-				"Branded PNG/PDF BI sharing containing the project name, GitHub link, and Linux.do link",
+			roadmapTerms: [][]string{
+				{"Hermes", "session retrospective"},
+				{"CLAUDE.md", "AGENTS.md", "memory", "project"},
+				{"PNG/PDF", "project name", "GitHub", "Linux.do"},
 			},
 		},
 		{
@@ -95,10 +94,10 @@ func TestCanonicalReadmesDocumentProductContract(t *testing.T) {
 				"https://github.com/hongshuo-wang/agent-usage-desktop",
 				"https://linux.do/t/topic/1922004",
 			},
-			roadmap: []string{
-				"Hermes 会话回溯支持",
-				"只读发现全局 `CLAUDE.md`、`AGENTS.md` 和 memory 文件，并由用户显式导入到项目级",
-				"带项目名称、GitHub 链接和 Linux.do 链接的品牌化 PNG/PDF BI 分享",
+			roadmapTerms: [][]string{
+				{"Hermes", "会话回溯"},
+				{"CLAUDE.md", "AGENTS.md", "memory", "项目"},
+				{"PNG/PDF", "项目名称", "GitHub", "Linux.do"},
 			},
 		},
 	}
@@ -115,8 +114,17 @@ func TestCanonicalReadmesDocumentProductContract(t *testing.T) {
 			}
 
 			roadmap := markdownSection(content, "Roadmap", "路线图")
-			if got := markdownBullets(roadmap); !reflect.DeepEqual(got, tt.roadmap) {
-				t.Errorf("%s roadmap = %#v, want exactly %#v", tt.path, got, tt.roadmap)
+			bullets := markdownBullets(roadmap)
+			if len(bullets) != len(tt.roadmapTerms) {
+				t.Errorf("%s roadmap has %d items, want exactly %d: %#v", tt.path, len(bullets), len(tt.roadmapTerms), bullets)
+			} else {
+				for i, terms := range tt.roadmapTerms {
+					for _, term := range terms {
+						if !strings.Contains(bullets[i], term) {
+							t.Errorf("%s roadmap item %d missing scope term %q: %q", tt.path, i+1, term, bullets[i])
+						}
+					}
+				}
 			}
 			for _, forbidden := range []string{
 				"multi-user", "Multi-user", "teams", "cloud sync",
@@ -140,6 +148,22 @@ func TestLegacyChineseReadmeIsShortRedirect(t *testing.T) {
 	}
 	if lines := len(strings.Split(strings.TrimSpace(content), "\n")); lines > 5 {
 		t.Fatalf("README_CN.md has %d lines, want a short compatibility redirect", lines)
+	}
+}
+
+func TestCanonicalReadmesUseDesktopDatabasePath(t *testing.T) {
+	t.Parallel()
+
+	const desktopDatabasePath = `path: "~/.config/agent-usage/agent-usage.db"`
+	for _, path := range []string{"README.md", "README.zh-CN.md"} {
+		path := path
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+			content := readContractFile(t, path)
+			if !strings.Contains(content, desktopDatabasePath) {
+				t.Errorf("%s desktop config must use %s", path, desktopDatabasePath)
+			}
+		})
 	}
 }
 

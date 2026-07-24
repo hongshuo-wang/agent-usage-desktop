@@ -110,7 +110,7 @@ collectors:
     scan_interval: 60s
 
 storage:
-  path: "./agent-usage.db"
+  path: "~/.config/agent-usage/agent-usage.db"
 
 pricing:
   sync_interval: 1h

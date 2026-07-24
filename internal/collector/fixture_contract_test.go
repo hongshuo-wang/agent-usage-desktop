@@ -17,6 +17,70 @@ const (
 	codexFixtureSessionID  = "fixture-codex-session"
 )
 
+var sensitiveFixtureMarkers = []string{
+	"/users/",
+	`c:\users\`,
+	"c:/users/",
+	"/home/",
+	"apikey",
+	"api_key",
+	"api-key",
+	"authorization",
+	"secret",
+	"client_secret",
+	"access_token",
+	"refresh_token",
+	"private_key",
+	"bearer ",
+	"private key",
+	"sk-",
+	"ghp_",
+	"github_pat_",
+}
+
+func TestSensitiveFixtureMarker(t *testing.T) {
+	t.Parallel()
+
+	for _, safe := range []string{
+		`{"cwd":"/workspace/fixture-project","note":"synthetic fixture"}`,
+		`{"type":"token_count","input_tokens":120,"cached_input_tokens":20,"output_tokens":40,"reasoning_output_tokens":15}`,
+	} {
+		if marker := sensitiveFixtureMarker([]byte(safe)); marker != "" {
+			t.Errorf("safe fixture content matched sensitive marker %q: %s", marker, safe)
+		}
+	}
+
+	for name, content := range map[string]string{
+		"macOS user path":          `{"cwd":"/USERS/Alice/project"}`,
+		"Windows user path":        `{"cwd":"C:\\UsErS\\Alice\\project"}`,
+		"Linux user path":          `{"cwd":"/HOME/alice/project"}`,
+		"apikey":                   `{"apikey":"fixture-value"}`,
+		"apikey in content":        `{"note":"Remove ApIkEy before publishing"}`,
+		"api underscore key":       `{"API_KEY":"fixture-value"}`,
+		"api hyphen key":           `{"api-key":"fixture-value"}`,
+		"authorization":            `{"Authorization":"Basic fixture-value"}`,
+		"authorization in content": `{"note":"Authorization details were removed"}`,
+		"secret in content":        `{"note":"A SECRET value was removed"}`,
+		"bearer credential":        `{"header":"BeArEr fixture-value"}`,
+		"private key":              `{"value":"-----BEGIN PRIVATE KEY-----"}`,
+		"private key field":        `{"private_key":"fixture-value"}`,
+		"client secret":            `{"client_secret":"fixture-value"}`,
+		"access token":             `{"access_token":"fixture-value"}`,
+		"refresh token":            `{"refresh_token":"fixture-value"}`,
+		"OpenAI-style key":         `{"key":"SK-fixture-value"}`,
+		"GitHub token":             `{"token":"GHP_fixture-value"}`,
+		"GitHub fine-grained key":  `{"token":"GITHUB_PAT_fixture-value"}`,
+	} {
+		name, content := name, content
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if marker := sensitiveFixtureMarker([]byte(content)); marker == "" {
+				t.Errorf("sensitive fixture content was accepted: %s", content)
+			}
+		})
+	}
+}
+
 func TestSanitizedSessionFixturesExerciseCollectorsAndSQLite(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "fixture.db")
 	db, err := storage.Open(dbPath)
@@ -93,10 +157,8 @@ func copySessionFixture(t *testing.T, name, destination string) {
 	if !strings.Contains(strings.ToLower(string(data)), "fixture") {
 		t.Fatalf("%s must contain FTS-searchable fixture text", name)
 	}
-	for _, forbidden := range []string{"/Users/", `C:\\Users\\`, "api_key", "secret"} {
-		if strings.Contains(string(data), forbidden) {
-			t.Fatalf("%s contains forbidden private marker %q", name, forbidden)
-		}
+	if marker := sensitiveFixtureMarker(data); marker != "" {
+		t.Fatalf("%s contains forbidden private marker %q", name, marker)
 	}
 	for lineNumber, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 		if !json.Valid([]byte(line)) {
@@ -109,6 +171,17 @@ func copySessionFixture(t *testing.T, name, destination string) {
 	if err := os.WriteFile(destination, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func sensitiveFixtureMarker(data []byte) string {
+	normalized := strings.ToLower(string(data))
+	normalized = strings.ReplaceAll(normalized, `\\`, `\`)
+	for _, marker := range sensitiveFixtureMarkers {
+		if strings.Contains(normalized, marker) {
+			return marker
+		}
+	}
+	return ""
 }
 
 func assertFixtureUsageRows(t *testing.T, dbPath string) {
