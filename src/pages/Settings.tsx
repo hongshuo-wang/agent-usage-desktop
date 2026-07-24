@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { AlertTriangle, Database, RefreshCw, Save } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { fetchAPI } from "../lib/api";
+import { applyOwnedHydration } from "./settingsHydration";
 import type {
   CollectorName,
   CollectorSetting,
@@ -14,6 +15,7 @@ import type {
 type EditableCollector = CollectorSetting & { pathsText: string };
 type ActionState = "idle" | "pending" | "success" | "error";
 type SaveState = ActionState | "restartPending" | "restartError";
+type RebuildState = ActionState | "restartPending" | "restartError";
 
 const COLLECTOR_LABELS: Record<CollectorName, string> = {
   claude: "claudeCode",
@@ -97,11 +99,16 @@ export default function Settings() {
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [confirmRebuild, setConfirmRebuild] = useState(false);
-  const [rebuildState, setRebuildState] = useState<ActionState>("idle");
+  const [rebuildState, setRebuildState] = useState<RebuildState>("idle");
   const [rebuildError, setRebuildError] = useState<string | null>(null);
   const loadControllerRef = useRef<AbortController | null>(null);
   const loadGenerationRef = useRef(0);
   const mountedRef = useRef(false);
+  const desktopHydrationGenerationRef = useRef({
+    costThreshold: 0,
+    autostart: 0,
+    notifications: 0,
+  });
   const rebuildTriggerRef = useRef<HTMLButtonElement>(null);
   const rebuildDialogRef = useRef<HTMLElement>(null);
   const rebuildCancelRef = useRef<HTMLButtonElement>(null);
@@ -139,9 +146,36 @@ export default function Settings() {
   useEffect(() => {
     mountedRef.current = true;
     void loadCollectorSettings();
-    invoke<number>("get_cost_threshold").then(setCostThreshold).catch(() => {});
-    invoke<boolean>("plugin:autostart|is_enabled").then(setAutostart).catch(() => {});
-    invoke<boolean>("get_notifications_enabled").then(setNotificationsEnabled).catch(() => {});
+    const thresholdGeneration = ++desktopHydrationGenerationRef.current.costThreshold;
+    const autostartGeneration = ++desktopHydrationGenerationRef.current.autostart;
+    const notificationsGeneration = ++desktopHydrationGenerationRef.current.notifications;
+    invoke<number>("get_cost_threshold").then((value) => {
+      applyOwnedHydration(
+        mountedRef.current,
+        thresholdGeneration,
+        desktopHydrationGenerationRef.current.costThreshold,
+        value,
+        setCostThreshold,
+      );
+    }).catch(() => {});
+    invoke<boolean>("plugin:autostart|is_enabled").then((value) => {
+      applyOwnedHydration(
+        mountedRef.current,
+        autostartGeneration,
+        desktopHydrationGenerationRef.current.autostart,
+        value,
+        setAutostart,
+      );
+    }).catch(() => {});
+    invoke<boolean>("get_notifications_enabled").then((value) => {
+      applyOwnedHydration(
+        mountedRef.current,
+        notificationsGeneration,
+        desktopHydrationGenerationRef.current.notifications,
+        value,
+        setNotificationsEnabled,
+      );
+    }).catch(() => {});
     return () => {
       mountedRef.current = false;
       loadControllerRef.current?.abort();
@@ -168,6 +202,7 @@ export default function Settings() {
 
   const handleAutostartToggle = async () => {
     if (autostartPending) return;
+    desktopHydrationGenerationRef.current.autostart += 1;
     const confirmed = autostart;
     const next = !confirmed;
     setAutostart(next);
@@ -184,12 +219,14 @@ export default function Settings() {
   };
 
   const handleThresholdChange = (value: number) => {
+    desktopHydrationGenerationRef.current.costThreshold += 1;
     setCostThreshold(value);
     void invoke("set_cost_threshold", { threshold: value }).catch(() => {});
   };
 
   const handleNotificationsToggle = async () => {
     if (notificationsPending) return;
+    desktopHydrationGenerationRef.current.notifications += 1;
     const confirmed = notificationsEnabled;
     const next = !confirmed;
     setNotificationsEnabled(next);
@@ -283,10 +320,22 @@ export default function Settings() {
     setRebuildError(null);
     try {
       await fetchAPI<SessionIndexRebuildResponse>("session-index/rebuild", {}, { method: "POST" });
+    } catch (error) {
+      setRebuildState("error");
+      setRebuildError(errorMessage(error));
+      return;
+    }
+    await restartAfterRebuild();
+  };
+
+  const restartAfterRebuild = async () => {
+    setRebuildState("restartPending");
+    setRebuildError(null);
+    try {
       await invoke<number>("restart_sidecar");
       setRebuildState("success");
     } catch (error) {
-      setRebuildState("error");
+      setRebuildState("restartError");
       setRebuildError(errorMessage(error));
     }
   };
@@ -444,13 +493,21 @@ export default function Settings() {
           type="button"
           ref={rebuildTriggerRef}
           aria-label={t("rebuildSessionIndex")}
-          aria-disabled={rebuildState === "pending"}
-          onClick={() => { if (rebuildState !== "pending") setConfirmRebuild(true); }}
+          aria-disabled={rebuildState === "pending" || rebuildState === "restartPending"}
+          onClick={() => { if (rebuildState !== "pending" && rebuildState !== "restartPending") setConfirmRebuild(true); }}
           className="mt-4 inline-flex items-center gap-2 rounded border border-border px-3 py-2 text-xs font-medium hover:bg-muted aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
         >
-          <Database className="h-4 w-4" /> {rebuildState === "pending" ? t("rebuildingIndex") : t("rebuildSessionIndex")}
+          <Database className="h-4 w-4" /> {rebuildState === "pending" || rebuildState === "restartPending" ? t("rebuildingIndex") : t("rebuildSessionIndex")}
         </button>
         {rebuildState === "success" && <p className="mt-3 text-xs text-green">{t("rebuildStartedAndRestarted")}</p>}
+        {rebuildState === "restartError" && (
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <p className="text-xs text-amber-600">{t("rebuildCompletedRestartFailed")}</p>
+            <button type="button" onClick={() => { void restartAfterRebuild(); }} className="inline-flex items-center gap-2 rounded border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted">
+              <RefreshCw className="h-4 w-4" /> {t("retryRestart")}
+            </button>
+          </div>
+        )}
         {rebuildError && <p className="mt-3 break-words text-xs text-red-500">{rebuildError}</p>}
       </section>
 

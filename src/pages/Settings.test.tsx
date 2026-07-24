@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { fetchAPI } from "../lib/api";
+import * as settingsHydration from "./settingsHydration";
 import Settings from "./Settings";
 
 const changeLanguage = vi.fn();
@@ -154,6 +155,34 @@ describe("application settings", () => {
     expect(restartCalls).toBe(2);
   });
 
+  it("retries only the restart when an index rebuild completed but was not applied", async () => {
+    let restartCalls = 0;
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_cost_threshold") return 10;
+      if (command === "plugin:autostart|is_enabled") return false;
+      if (command === "get_notifications_enabled") return true;
+      if (command === "restart_sidecar") {
+        restartCalls += 1;
+        if (restartCalls === 1) throw new Error("restart rejected");
+        return 9900;
+      }
+      return undefined;
+    });
+    const user = userEvent.setup();
+    render(<Settings />);
+    await user.click(await screen.findByRole("button", { name: "rebuildSessionIndex" }));
+    await user.click(screen.getByRole("button", { name: "confirmRebuild" }));
+
+    expect(await screen.findByText("rebuildCompletedRestartFailed")).toBeVisible();
+    expect(screen.getByText("restart rejected")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "retryRestart" }));
+
+    expect(await screen.findByText("rebuildStartedAndRestarted")).toBeVisible();
+    const rebuildCalls = vi.mocked(fetchAPI).mock.calls.filter(([path]) => path === "session-index/rebuild");
+    expect(rebuildCalls).toHaveLength(1);
+    expect(restartCalls).toBe(2);
+  });
+
   it.each([
     ["success", false],
     ["failure", true],
@@ -229,6 +258,74 @@ describe("application settings", () => {
     autostartUpdate.reject(new Error("autostart rejected"));
     await waitFor(() => expect(autostart).not.toBeChecked());
     expect(screen.getByText("autostartUpdateFailed")).toBeVisible();
+  });
+
+  it("does not let slow desktop hydration overwrite successful user changes", async () => {
+    const initialThreshold = deferred<number>();
+    const initialAutostart = deferred<boolean>();
+    const initialNotifications = deferred<boolean>();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "get_cost_threshold") return initialThreshold.promise;
+      if (command === "plugin:autostart|is_enabled") return initialAutostart.promise;
+      if (command === "get_notifications_enabled") return initialNotifications.promise;
+      return Promise.resolve(undefined);
+    });
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    const autostart = screen.getByRole("switch", { name: "autostart" });
+    const notification = screen.getByRole("switch", { name: "notification" });
+    const threshold = screen.getByRole("spinbutton", { name: "dailyCostThreshold" });
+    await user.click(autostart);
+    await user.click(notification);
+    fireEvent.change(threshold, { target: { value: "25" } });
+    expect(autostart).toBeChecked();
+    expect(notification).not.toBeChecked();
+    expect(threshold).toHaveValue(25);
+
+    await act(async () => {
+      initialAutostart.resolve(false);
+      initialNotifications.resolve(true);
+      initialThreshold.resolve(10);
+      await Promise.all([
+        initialAutostart.promise,
+        initialNotifications.promise,
+        initialThreshold.promise,
+      ]);
+    });
+    expect(autostart).toBeChecked();
+    expect(notification).not.toBeChecked();
+    expect(threshold).toHaveValue(25);
+  });
+
+  it("settles desktop hydration as unmounted without writing state", async () => {
+    const initialThreshold = deferred<number>();
+    const initialAutostart = deferred<boolean>();
+    const initialNotifications = deferred<boolean>();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "get_cost_threshold") return initialThreshold.promise;
+      if (command === "plugin:autostart|is_enabled") return initialAutostart.promise;
+      if (command === "get_notifications_enabled") return initialNotifications.promise;
+      return Promise.resolve(undefined);
+    });
+    const applySpy = vi.spyOn(settingsHydration, "applyOwnedHydration");
+    const view = render(<Settings />);
+    view.unmount();
+
+    await act(async () => {
+      initialThreshold.resolve(10);
+      initialAutostart.resolve(false);
+      initialNotifications.resolve(true);
+      await Promise.all([
+        initialThreshold.promise,
+        initialAutostart.promise,
+        initialNotifications.promise,
+      ]);
+    });
+
+    expect(applySpy).toHaveBeenCalledTimes(3);
+    expect(applySpy.mock.calls.every(([mounted]) => mounted === false)).toBe(true);
+    applySpy.mockRestore();
   });
 
   it("renders a retryable collector settings error", async () => {

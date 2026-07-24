@@ -197,5 +197,6 @@
   "confirmRebuildDetail": "The local event index will be recreated. Original Agent data and usage totals are not deleted.",
   "cancel": "Cancel",
   "confirmRebuild": "Confirm rebuild",
+  "rebuildCompletedRestartFailed": "Index operation completed, but it is not applied because the collector has not restarted",
   "rebuildStartedAndRestarted": "Index rebuild requested and collector restarted"
 }

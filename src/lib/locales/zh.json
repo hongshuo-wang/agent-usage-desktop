@@ -197,5 +197,6 @@
   "confirmRebuildDetail": "本地事件索引将被重新创建，不会删除 Agent 原始数据或用量统计。",
   "cancel": "取消",
   "confirmRebuild": "确认重建",
+  "rebuildCompletedRestartFailed": "索引操作已完成，但采集服务尚未重启，变更还未生效",
   "rebuildStartedAndRestarted": "已请求重建索引，采集服务已重启"
 }
