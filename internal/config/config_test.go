@@ -1,12 +1,84 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
 )
+
+func TestSaveConfigOverwritesExistingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	original := DefaultConfig()
+	original.Server.Port = 1111
+	if err := Save(path, original); err != nil {
+		t.Fatal(err)
+	}
+
+	replacement := DefaultConfig()
+	replacement.Server.Port = 2222
+	if err := Save(path, replacement); err != nil {
+		t.Fatalf("overwrite: %v", err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Server.Port != 2222 {
+		t.Fatalf("port=%d, want 2222", loaded.Server.Port)
+	}
+}
+
+func TestSaveConfigSyncFailurePreservesExistingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	original := []byte("storage:\n  path: old.db\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("sync failed")
+	originalSync := syncConfigFile
+	syncConfigFile = func(*os.File) error { return wantErr }
+	t.Cleanup(func() { syncConfigFile = originalSync })
+
+	err := Save(path, DefaultConfig())
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Save error=%v, want %v", err, wantErr)
+	}
+	got, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("existing config changed after sync failure: %q", got)
+	}
+}
+
+func TestSaveConfigReplaceFailurePreservesExistingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	original := []byte("storage:\n  path: old.db\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("replace failed")
+	originalReplace := replaceConfig
+	replaceConfig = func(_, _ string) error { return wantErr }
+	t.Cleanup(func() { replaceConfig = originalReplace })
+
+	err := Save(path, DefaultConfig())
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Save error=%v, want %v", err, wantErr)
+	}
+	got, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("existing config changed after replace failure: %q", got)
+	}
+}
 
 func TestSaveConfigRoundTripsCollectorSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "config.yaml")

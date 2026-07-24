@@ -12,7 +12,7 @@ tauri-plugin-shell = "2"
 tauri-plugin-single-instance = "2"
 serde_json = "1"
 reqwest = { version = "0.12", features = ["json"] }
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 dirs = "6"
 tauri-plugin-autostart = "2"
 tauri-plugin-notification = "2"

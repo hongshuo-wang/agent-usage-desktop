@@ -9,6 +9,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+var syncConfigFile = func(file *os.File) error {
+	return file.Sync()
+}
+
+var replaceConfig = replaceConfigFile
+
 // Config holds the top-level application configuration.
 type Config struct {
 	Server     ServerConfig     `yaml:"server"`
@@ -153,8 +159,12 @@ func Save(path string, cfg *Config) error {
 		tmp.Close()
 		return err
 	}
+	if err := syncConfigFile(tmp); err != nil {
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	return replaceConfig(tmpName, path)
 }

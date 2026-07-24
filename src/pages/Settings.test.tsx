@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { fetchAPI } from "../lib/api";
@@ -26,6 +27,16 @@ const settings = {
   ],
   pricing_sync_interval: "1h0m0s",
 };
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 function mockDesktopSettings() {
   vi.mocked(invoke).mockImplementation(async (command) => {
@@ -114,6 +125,35 @@ describe("application settings", () => {
     expect(invoke).not.toHaveBeenCalledWith("restart_sidecar");
   });
 
+  it("retries only the restart when settings were saved but not applied", async () => {
+    let restartCalls = 0;
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_cost_threshold") return 10;
+      if (command === "plugin:autostart|is_enabled") return false;
+      if (command === "get_notifications_enabled") return true;
+      if (command === "restart_sidecar") {
+        restartCalls += 1;
+        if (restartCalls === 1) throw new Error("restart rejected");
+        return 9900;
+      }
+      return undefined;
+    });
+    const user = userEvent.setup();
+    render(<Settings />);
+    await user.click(await screen.findByRole("button", { name: "saveCollectorSettings" }));
+
+    expect(await screen.findByText("settingsSavedRestartFailed")).toBeVisible();
+    expect(screen.getByText("restart rejected")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "retryRestart" }));
+
+    expect(await screen.findByText("settingsSavedAndRestarted")).toBeVisible();
+    const putCalls = vi.mocked(fetchAPI).mock.calls.filter(([path, , init]) => (
+      path === "settings/collectors" && init?.method === "PUT"
+    ));
+    expect(putCalls).toHaveLength(1);
+    expect(restartCalls).toBe(2);
+  });
+
   it.each([
     ["success", false],
     ["failure", true],
@@ -158,6 +198,39 @@ describe("application settings", () => {
     expect(invoke).toHaveBeenCalledWith("set_cost_threshold", { threshold: 25 });
   });
 
+  it("serializes preference toggles and rolls back failed updates", async () => {
+    const notificationUpdate = deferred<unknown>();
+    const autostartUpdate = deferred<unknown>();
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "get_cost_threshold") return Promise.resolve(10);
+      if (command === "plugin:autostart|is_enabled") return Promise.resolve(false);
+      if (command === "get_notifications_enabled") return Promise.resolve(true);
+      if (command === "set_notifications_enabled") return notificationUpdate.promise;
+      if (command === "plugin:autostart|enable") return autostartUpdate.promise;
+      return Promise.resolve(undefined);
+    });
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    const notification = await screen.findByRole("switch", { name: "notification" });
+    await user.click(notification);
+    expect(notification).toBeDisabled();
+    fireEvent.click(notification);
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "set_notifications_enabled")).toHaveLength(1);
+    notificationUpdate.reject(new Error("notification rejected"));
+    await waitFor(() => expect(notification).toBeChecked());
+    expect(screen.getByText("notificationUpdateFailed")).toBeVisible();
+
+    const autostart = screen.getByRole("switch", { name: "autostart" });
+    await user.click(autostart);
+    expect(autostart).toBeDisabled();
+    fireEvent.click(autostart);
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "plugin:autostart|enable")).toHaveLength(1);
+    autostartUpdate.reject(new Error("autostart rejected"));
+    await waitFor(() => expect(autostart).not.toBeChecked());
+    expect(screen.getByText("autostartUpdateFailed")).toBeVisible();
+  });
+
   it("renders a retryable collector settings error", async () => {
     let calls = 0;
     vi.mocked(fetchAPI).mockImplementation(async (path) => {
@@ -171,5 +244,85 @@ describe("application settings", () => {
     expect(await screen.findByText("settings offline")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "retry" }));
     expect(await screen.findByRole("switch", { name: "collectorEnabled claudeCode" })).toBeVisible();
+  });
+
+  it("aborts superseded collector loads and ignores stale responses", async () => {
+    const first = deferred<typeof settings>();
+    const second = deferred<typeof settings>();
+    const signals: AbortSignal[] = [];
+    let calls = 0;
+    vi.mocked(fetchAPI).mockImplementation((path, _params, init) => {
+      if (path !== "settings/collectors") return Promise.reject(new Error(`unexpected path ${path}`));
+      signals.push(init?.signal as AbortSignal);
+      calls += 1;
+      return (calls === 1 ? first.promise : second.promise) as never;
+    });
+    render(<StrictMode><Settings /></StrictMode>);
+    await waitFor(() => expect(signals).toHaveLength(2));
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+    expect(signals[0].aborted).toBe(true);
+    expect(signals[1].aborted).toBe(false);
+
+    second.resolve({
+      ...settings,
+      collectors: settings.collectors.map((collector) => (
+        collector.name === "claude" ? { ...collector, enabled: false } : collector
+      )),
+    });
+    expect(await screen.findByRole("switch", { name: "collectorEnabled claudeCode" })).not.toBeChecked();
+    first.resolve(settings);
+    await waitFor(() => expect(screen.getByRole("switch", { name: "collectorEnabled claudeCode" })).not.toBeChecked());
+  });
+
+  it("aborts collector loading on unmount", async () => {
+    const pending = deferred<typeof settings>();
+    let signal: AbortSignal | undefined;
+    vi.mocked(fetchAPI).mockImplementation((_path, _params, init) => {
+      signal = init?.signal as AbortSignal;
+      return pending.promise as never;
+    });
+    const view = render(<Settings />);
+    await waitFor(() => expect(signal).toBeInstanceOf(AbortSignal));
+    view.unmount();
+    expect(signal?.aborted).toBe(true);
+    pending.resolve(settings);
+  });
+
+  it("traps focus in the rebuild dialog and restores it after Escape", async () => {
+    const user = userEvent.setup();
+    render(<Settings />);
+    const trigger = await screen.findByRole("button", { name: "rebuildSessionIndex" });
+    await user.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: "confirmRebuildTitle" });
+    const cancel = within(dialog).getByRole("button", { name: "cancel" });
+    const confirm = within(dialog).getByRole("button", { name: "confirmRebuild" });
+
+    expect(cancel).toHaveFocus();
+    await user.tab();
+    expect(confirm).toHaveFocus();
+    await user.tab();
+    expect(cancel).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(confirm).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("restores focus to the rebuild trigger after confirmation", async () => {
+    const rebuild = deferred<never>();
+    vi.mocked(fetchAPI).mockImplementation((path) => {
+      if (path === "settings/collectors") return Promise.resolve(settings) as never;
+      if (path === "session-index/rebuild") return rebuild.promise;
+      return Promise.reject(new Error(`unexpected path ${path}`));
+    });
+    const user = userEvent.setup();
+    render(<Settings />);
+    const trigger = await screen.findByRole("button", { name: "rebuildSessionIndex" });
+    await user.click(trigger);
+    await user.click(screen.getByRole("button", { name: "confirmRebuild" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
   });
 });

@@ -5,8 +5,6 @@ mod sidecar;
 mod tray;
 
 use sidecar::SidecarState;
-use std::sync::atomic::AtomicU16;
-use std::sync::Mutex;
 use tauri::{Emitter, Listener, Manager};
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_notification::NotificationExt;
@@ -19,10 +17,7 @@ fn main() {
             None,
         ))
         .plugin(tauri_plugin_notification::init())
-        .manage(SidecarState {
-            port: AtomicU16::new(0),
-            child: Mutex::new(None),
-        })
+        .manage(SidecarState::default())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // Focus existing window when second instance is launched
             if let Some(window) = app.get_webview_window("main") {

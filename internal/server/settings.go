@@ -2,8 +2,10 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"strings"
 	"time"
@@ -68,14 +70,29 @@ func (s *Server) handleCollectorSettingsPut(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "config path is not configured", http.StatusServiceUnavailable)
 		return
 	}
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		http.Error(w, "content type must be application/json", http.StatusUnsupportedMediaType)
+		return
+	}
 	var request collectorSettingsResponse
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			http.Error(w, "settings body is too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		badRequest(w, fmt.Errorf("invalid settings: %w", err))
 		return
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			http.Error(w, "settings body is too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		badRequest(w, fmt.Errorf("invalid settings: multiple JSON values"))
 		return
 	}

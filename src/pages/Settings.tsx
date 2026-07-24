@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AlertTriangle, Database, RefreshCw, Save } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -13,6 +13,7 @@ import type {
 
 type EditableCollector = CollectorSetting & { pathsText: string };
 type ActionState = "idle" | "pending" | "success" | "error";
+type SaveState = ActionState | "restartPending" | "restartError";
 
 const COLLECTOR_LABELS: Record<CollectorName, string> = {
   claude: "claudeCode",
@@ -27,15 +28,26 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function Toggle({ checked, label, onChange }: { checked: boolean; label: string; onChange: () => void }) {
+function Toggle({
+  checked,
+  disabled = false,
+  label,
+  onChange,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  label: string;
+  onChange: () => void;
+}) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
       aria-label={label}
+      disabled={disabled}
       onClick={onChange}
-      className={`relative h-6 w-11 shrink-0 rounded-full border transition-colors ${checked ? "border-accent bg-accent" : "border-border bg-muted"}`}
+      className={`relative h-6 w-11 shrink-0 rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${checked ? "border-accent bg-accent" : "border-border bg-muted"}`}
     >
       <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-[left] ${checked ? "left-5" : "left-0.5"}`} />
     </button>
@@ -74,40 +86,71 @@ export default function Settings() {
   const [theme, setTheme] = useState(localStorage.getItem("au-theme") || "system");
   const [costThreshold, setCostThreshold] = useState(10);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const [notificationsPending, setNotificationsPending] = useState(false);
+  const [notificationError, setNotificationError] = useState<string | null>(null);
+  const [autostartPending, setAutostartPending] = useState(false);
+  const [autostartError, setAutostartError] = useState<string | null>(null);
   const [collectors, setCollectors] = useState<EditableCollector[] | null>(null);
   const [pricingInterval, setPricingInterval] = useState("");
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsError, setSettingsError] = useState<string | null>(null);
-  const [saveState, setSaveState] = useState<ActionState>("idle");
+  const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [confirmRebuild, setConfirmRebuild] = useState(false);
   const [rebuildState, setRebuildState] = useState<ActionState>("idle");
   const [rebuildError, setRebuildError] = useState<string | null>(null);
+  const loadControllerRef = useRef<AbortController | null>(null);
+  const loadGenerationRef = useRef(0);
+  const mountedRef = useRef(false);
+  const rebuildTriggerRef = useRef<HTMLButtonElement>(null);
+  const rebuildDialogRef = useRef<HTMLElement>(null);
+  const rebuildCancelRef = useRef<HTMLButtonElement>(null);
 
   const loadCollectorSettings = useCallback(async () => {
+    loadControllerRef.current?.abort();
+    const controller = new AbortController();
+    const generation = ++loadGenerationRef.current;
+    loadControllerRef.current = controller;
+    const isCurrent = () => (
+      mountedRef.current
+      && loadControllerRef.current === controller
+      && loadGenerationRef.current === generation
+      && !controller.signal.aborted
+    );
     setSettingsLoading(true);
     setSettingsError(null);
     try {
-      const response = await fetchAPI<CollectorSettings>("settings/collectors", {});
+      const response = await fetchAPI<CollectorSettings>("settings/collectors", {}, { signal: controller.signal });
+      if (!isCurrent()) return;
       setCollectors(response.collectors.map((collector) => ({
         ...collector,
         pathsText: collector.paths.join("\n"),
       })));
       setPricingInterval(response.pricing_sync_interval);
     } catch (error) {
+      if (!isCurrent()) return;
       setCollectors(null);
       setSettingsError(errorMessage(error));
     } finally {
-      setSettingsLoading(false);
+      if (isCurrent()) setSettingsLoading(false);
     }
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
     void loadCollectorSettings();
     invoke<number>("get_cost_threshold").then(setCostThreshold).catch(() => {});
     invoke<boolean>("plugin:autostart|is_enabled").then(setAutostart).catch(() => {});
     invoke<boolean>("get_notifications_enabled").then(setNotificationsEnabled).catch(() => {});
+    return () => {
+      mountedRef.current = false;
+      loadControllerRef.current?.abort();
+    };
   }, [loadCollectorSettings]);
+
+  useEffect(() => {
+    if (confirmRebuild) rebuildCancelRef.current?.focus();
+  }, [confirmRebuild]);
 
   const handleThemeChange = (value: string) => {
     setTheme(value);
@@ -124,11 +167,19 @@ export default function Settings() {
   };
 
   const handleAutostartToggle = async () => {
+    if (autostartPending) return;
+    const confirmed = autostart;
+    const next = !confirmed;
+    setAutostart(next);
+    setAutostartPending(true);
+    setAutostartError(null);
     try {
-      await invoke(autostart ? "plugin:autostart|disable" : "plugin:autostart|enable");
-      setAutostart((current) => !current);
+      await invoke(next ? "plugin:autostart|enable" : "plugin:autostart|disable");
     } catch (error) {
-      console.error("Autostart toggle failed:", error);
+      setAutostart(confirmed);
+      setAutostartError(errorMessage(error));
+    } finally {
+      setAutostartPending(false);
     }
   };
 
@@ -137,10 +188,21 @@ export default function Settings() {
     void invoke("set_cost_threshold", { threshold: value }).catch(() => {});
   };
 
-  const handleNotificationsToggle = () => {
-    const next = !notificationsEnabled;
+  const handleNotificationsToggle = async () => {
+    if (notificationsPending) return;
+    const confirmed = notificationsEnabled;
+    const next = !confirmed;
     setNotificationsEnabled(next);
-    void invoke("set_notifications_enabled", { enabled: next }).catch(() => {});
+    setNotificationsPending(true);
+    setNotificationError(null);
+    try {
+      await invoke("set_notifications_enabled", { enabled: next });
+    } catch (error) {
+      setNotificationsEnabled(confirmed);
+      setNotificationError(errorMessage(error));
+    } finally {
+      setNotificationsPending(false);
+    }
   };
 
   const updateCollector = (name: CollectorName, update: Partial<EditableCollector>) => {
@@ -168,16 +230,55 @@ export default function Settings() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+    } catch (error) {
+      setSaveState("error");
+      setSaveError(errorMessage(error));
+      return;
+    }
+    await restartAfterSave();
+  };
+
+  const restartAfterSave = async () => {
+    setSaveState("restartPending");
+    setSaveError(null);
+    try {
       await invoke<number>("restart_sidecar");
       setSaveState("success");
     } catch (error) {
-      setSaveState("error");
+      setSaveState("restartError");
       setSaveError(errorMessage(error));
     }
   };
 
-  const rebuildSessionIndex = async () => {
+  const closeRebuildDialog = () => {
     setConfirmRebuild(false);
+    queueMicrotask(() => rebuildTriggerRef.current?.focus());
+  };
+
+  const handleRebuildDialogKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeRebuildDialog();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(
+      rebuildDialogRef.current?.querySelectorAll<HTMLElement>("button:not([disabled])") || [],
+    );
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  const rebuildSessionIndex = async () => {
+    closeRebuildDialog();
     setRebuildState("pending");
     setRebuildError(null);
     try {
@@ -285,13 +386,21 @@ export default function Settings() {
                 type="button"
                 aria-label={t("saveCollectorSettings")}
                 onClick={() => { void saveCollectorSettings(); }}
-                disabled={saveState === "pending"}
+                disabled={saveState === "pending" || saveState === "restartPending"}
                 className="inline-flex h-9 items-center gap-2 rounded bg-accent px-3 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-50"
               >
                 <Save className="h-4 w-4" /> {saveState === "pending" ? t("savingSettings") : t("save")}
               </button>
             </div>
             {saveState === "success" && <p className="pb-3 text-xs text-green">{t("settingsSavedAndRestarted")}</p>}
+            {saveState === "restartError" && (
+              <div className="flex flex-wrap items-center gap-3 pb-3">
+                <p className="text-xs text-amber-600">{t("settingsSavedRestartFailed")}</p>
+                <button type="button" onClick={() => { void restartAfterSave(); }} className="inline-flex items-center gap-2 rounded border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted">
+                  <RefreshCw className="h-4 w-4" /> {t("retryRestart")}
+                </button>
+              </div>
+            )}
             {saveError && <p className="pb-3 break-words text-xs text-red-500">{saveError}</p>}
           </div>
         ) : null}
@@ -302,12 +411,14 @@ export default function Settings() {
         <div className="divide-y divide-border border-t border-border">
           <div className="flex items-center justify-between gap-4 py-4">
             <span className="text-sm">{t("autostart")}</span>
-            <Toggle checked={autostart} label={t("autostart")} onChange={() => { void handleAutostartToggle(); }} />
+            <Toggle checked={autostart} disabled={autostartPending} label={t("autostart")} onChange={() => { void handleAutostartToggle(); }} />
           </div>
+          {autostartError && <p className="py-2 text-xs text-red-500">{t("autostartUpdateFailed")}</p>}
           <div className="flex items-center justify-between gap-4 py-4">
             <span className="text-sm">{t("notification")}</span>
-            <Toggle checked={notificationsEnabled} label={t("notification")} onChange={handleNotificationsToggle} />
+            <Toggle checked={notificationsEnabled} disabled={notificationsPending} label={t("notification")} onChange={() => { void handleNotificationsToggle(); }} />
           </div>
+          {notificationError && <p className="py-2 text-xs text-red-500">{t("notificationUpdateFailed")}</p>}
           <label className="block py-4 text-xs text-muted-foreground">
             <span className="mb-1 block">{t("dailyCostThreshold")}</span>
             <span className="flex items-center gap-2">
@@ -331,10 +442,11 @@ export default function Settings() {
         <p className="mt-1 text-xs text-muted-foreground">{t("sessionIndexDetail")}</p>
         <button
           type="button"
+          ref={rebuildTriggerRef}
           aria-label={t("rebuildSessionIndex")}
-          onClick={() => setConfirmRebuild(true)}
-          disabled={rebuildState === "pending"}
-          className="mt-4 inline-flex items-center gap-2 rounded border border-border px-3 py-2 text-xs font-medium hover:bg-muted disabled:opacity-50"
+          aria-disabled={rebuildState === "pending"}
+          onClick={() => { if (rebuildState !== "pending") setConfirmRebuild(true); }}
+          className="mt-4 inline-flex items-center gap-2 rounded border border-border px-3 py-2 text-xs font-medium hover:bg-muted aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
         >
           <Database className="h-4 w-4" /> {rebuildState === "pending" ? t("rebuildingIndex") : t("rebuildSessionIndex")}
         </button>
@@ -344,7 +456,7 @@ export default function Settings() {
 
       {confirmRebuild && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="presentation">
-          <section role="dialog" aria-modal="true" aria-labelledby="confirm-rebuild-title" className="w-full max-w-md rounded border border-border bg-background p-5 shadow-xl">
+          <section ref={rebuildDialogRef} role="dialog" aria-modal="true" aria-labelledby="confirm-rebuild-title" onKeyDown={handleRebuildDialogKeyDown} className="w-full max-w-md rounded border border-border bg-background p-5 shadow-xl">
             <div className="flex items-start gap-3">
               <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-accent" />
               <div>
@@ -353,7 +465,7 @@ export default function Settings() {
               </div>
             </div>
             <div className="mt-5 flex justify-end gap-2">
-              <button type="button" onClick={() => setConfirmRebuild(false)} className="rounded border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted">{t("cancel")}</button>
+              <button ref={rebuildCancelRef} type="button" onClick={closeRebuildDialog} className="rounded border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted">{t("cancel")}</button>
               <button type="button" aria-label={t("confirmRebuild")} onClick={() => { void rebuildSessionIndex(); }} className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90">{t("confirmRebuild")}</button>
             </div>
           </section>

@@ -104,6 +104,46 @@ func TestSettingsCollectorsPutPersistsAndPreservesPrivateConfig(t *testing.T) {
 	}
 }
 
+func TestSettingsCollectorsPutRequiresJSONContentType(t *testing.T) {
+	handler, _ := settingsFixture(t)
+	for name, contentType := range map[string]string{
+		"missing": "",
+		"wrong":   "text/plain",
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPut, "/api/settings/collectors", strings.NewReader(validSettingsBody))
+			if contentType != "" {
+				req.Header.Set("Content-Type", contentType)
+			}
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != http.StatusUnsupportedMediaType {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestSettingsCollectorsPutAcceptsJSONContentTypeWithCharset(t *testing.T) {
+	handler, _ := settingsFixture(t)
+	req := httptest.NewRequest(http.MethodPut, "/api/settings/collectors", strings.NewReader(validSettingsBody))
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestSettingsCollectorsPutRejectsOversizedBody(t *testing.T) {
+	handler, _ := settingsFixture(t)
+	body := validSettingsBody + strings.Repeat(" ", 1<<20)
+	w := requestSettings(t, handler, http.MethodPut, body)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestSettingsCollectorsRejectsInvalidPayloadWithoutChangingConfig(t *testing.T) {
 	cases := map[string]string{
 		"unknown top field":            strings.Replace(validSettingsBody, `"pricing_sync_interval":"3h"`, `"pricing_sync_interval":"3h","provider":"x"`, 1),
