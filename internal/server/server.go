@@ -218,19 +218,17 @@ func (s *Server) parseTimeRange(r *http.Request) (time.Time, time.Time, int, err
 	}
 
 	var fromTime, toTime time.Time
-	var err error
+	var fromDateOnly, toDateOnly bool
 	if from != "" {
-		fromTime, err = time.Parse("2006-01-02", from)
-		if err != nil {
-			return time.Time{}, time.Time{}, 0, fmt.Errorf("invalid 'from' date %q: expected YYYY-MM-DD", from)
-		}
+		var err error
+		fromTime, fromDateOnly, err = parseRangeBound(from, "from")
+		if err != nil { return time.Time{}, time.Time{}, 0, err }
 	}
 	if to != "" {
-		toTime, err = time.Parse("2006-01-02", to)
-		if err != nil {
-			return time.Time{}, time.Time{}, 0, fmt.Errorf("invalid 'to' date %q: expected YYYY-MM-DD", to)
-		}
-		toTime = toTime.Add(24*time.Hour - time.Second)
+		var err error
+		toTime, toDateOnly, err = parseRangeBound(to, "to")
+		if err != nil { return time.Time{}, time.Time{}, 0, err }
+		if toDateOnly { toTime = toTime.Add(24*time.Hour - time.Second) }
 	}
 	if fromTime.IsZero() {
 		fromTime = time.Now().AddDate(0, -1, 0)
@@ -240,7 +238,7 @@ func (s *Server) parseTimeRange(r *http.Request) (time.Time, time.Time, int, err
 	}
 
 	// Apply timezone offset: convert local day boundaries to UTC
-	if tzOffset != 0 {
+	if tzOffset != 0 && (fromDateOnly || toDateOnly || (from == "" && to == "")) {
 		offset := time.Duration(tzOffset) * time.Minute
 		fromTime = fromTime.Add(offset)
 		toTime = toTime.Add(offset)
@@ -250,6 +248,16 @@ func (s *Server) parseTimeRange(r *http.Request) (time.Time, time.Time, int, err
 		return time.Time{}, time.Time{}, 0, fmt.Errorf("'from' date (%s) is after 'to' date (%s): swap them or correct the range", from, to)
 	}
 	return fromTime, toTime, tzOffset, nil
+}
+
+func parseRangeBound(value, name string) (time.Time, bool, error) {
+	if parsed, err := time.Parse("2006-01-02", value); err == nil {
+		return parsed, true, nil
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return parsed, false, nil
+	}
+	return time.Time{}, false, fmt.Errorf("invalid '%s' date %q: expected YYYY-MM-DD or RFC3339", name, value)
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {

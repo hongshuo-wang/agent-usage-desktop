@@ -29,6 +29,8 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .system-subnav-link { display: block; border-left: 2px solid transparent; padding: .6rem .75rem; color: var(--color-muted-foreground); font-size: .75rem; }
 .system-subnav-link:hover { background: var(--color-muted); color: var(--color-foreground); }
 .system-subnav-link-active { border-left-color: var(--color-accent); color: var(--color-foreground); font-weight: 600; }
+.system-page-layout h2 { line-height: 1.25; }
+.system-page-layout h3 { line-height: 1.35; }
 @media (max-width: 1023px) { .system-page-layout { display: block; } }
 
 .dark {

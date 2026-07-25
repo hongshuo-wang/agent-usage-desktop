@@ -133,6 +133,7 @@ export default function Settings() {
   const [confirmRebuild, setConfirmRebuild] = useState(false);
   const [rebuildState, setRebuildState] = useState<RebuildState>("idle");
   const [rebuildError, setRebuildError] = useState<string | null>(null);
+  const [activeSection, setActiveSection] = useState("data-sources");
   const loadControllerRef = useRef<AbortController | null>(null);
   const loadGenerationRef = useRef(0);
   const mountedRef = useRef(false);
@@ -223,6 +224,29 @@ export default function Settings() {
   useEffect(() => {
     if (pricingCatalogOpen) pricingCatalogCloseRef.current?.focus();
   }, [pricingCatalogOpen]);
+
+  useEffect(() => {
+    const sections = ["data-sources", "pricing", "index-diagnostics", "preferences"]
+      .map((id) => document.getElementById(id))
+      .filter((section): section is HTMLElement => Boolean(section));
+    if (!sections.length || typeof IntersectionObserver === "undefined") return;
+    const root = document.querySelector(".app-main");
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((left, right) => right.intersectionRatio - left.intersectionRatio);
+      if (visible[0]) setActiveSection(visible[0].target.id);
+    }, { root, rootMargin: "-12% 0px -62% 0px", threshold: [0.1, 0.35, 0.7] });
+    sections.forEach((section) => observer.observe(section));
+    return () => observer.disconnect();
+  }, [settingsLoading, pricingCatalogOpen]);
+
+  const scrollToSection = (event: React.MouseEvent<HTMLAnchorElement>, id: string) => {
+    event.preventDefault();
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setActiveSection(id);
+    window.history.replaceState(null, "", `#${id}`);
+  };
 
   const handleThemeChange = (value: string) => {
     setTheme(value);
@@ -466,14 +490,13 @@ export default function Settings() {
     <div className="system-page-layout min-w-0 max-w-6xl pb-8">
       <aside className="system-subnav hidden lg:block">
         <div className="mb-3 text-sm font-semibold">{t("systemWorkspace")}</div>
-        <a href="#data-sources" className="system-subnav-link system-subnav-link-active">{t("dataSources")}</a>
-        <a href="#pricing" className="system-subnav-link">{t("pricing")}</a>
-        <a href="#index-diagnostics" className="system-subnav-link">{t("indexDiagnostics")}</a>
-        <a href="#preferences" className="system-subnav-link">{t("preferences")}</a>
+        {[["data-sources", "dataSources"], ["pricing", "pricing"], ["index-diagnostics", "indexDiagnostics"], ["preferences", "preferences"]].map(([id, label]) => (
+          <a key={id} href={`#${id}`} onClick={(event) => scrollToSection(event, id)} className={`system-subnav-link ${activeSection === id ? "system-subnav-link-active" : ""}`}>{t(label)}</a>
+        ))}
       </aside>
-      <div className="min-w-0 space-y-8">
-      <section id="appearance" className="border-y border-border py-5">
-        <h2 className="mb-4 text-sm font-semibold">{t("appearanceAndLanguage")}</h2>
+      <div className="min-w-0 space-y-5">
+      <section id="appearance" className="border-b border-border pb-5">
+        <h2 className="mb-4 text-base font-semibold tracking-tight">{t("appearanceAndLanguage")}</h2>
         <div className="grid gap-5 sm:grid-cols-2">
           <div>
             <h3 className="mb-2 text-xs font-medium text-muted-foreground">{t("theme")}</h3>
@@ -494,10 +517,10 @@ export default function Settings() {
         </div>
       </section>
 
-      <section id="data-sources" className="border-y border-border py-5">
+      <section id="data-sources" className="border-b border-border pb-5 scroll-mt-5">
         <div className="mb-4">
-          <h2 className="text-sm font-semibold">{t("collectorSettings")}</h2>
-          <p className="mt-1 text-xs text-muted-foreground">{t("collectorSettingsDetail")}</p>
+          <h2 className="text-base font-semibold tracking-tight">{t("collectorSettings")}</h2>
+          <p className="mt-1 text-sm leading-5 text-muted-foreground">{t("collectorSettingsDetail")}</p>
         </div>
         {settingsLoading ? (
           <p className="py-8 text-sm text-muted-foreground">{t("loadingSettings")}</p>
@@ -571,9 +594,9 @@ export default function Settings() {
                 <Save className="h-4 w-4" /> {saveState === "pending" ? t("savingSettings") : t("save")}
               </button>
             </div>
-            <div id="pricing" className="border-t border-border py-4">
-              <h3 className="text-xs font-medium">{t("pricingSourceTitle")}</h3>
-              <p className="mt-1 max-w-2xl text-[10px] leading-4 text-muted-foreground">
+            <div id="pricing" className="scroll-mt-5 border-t border-border pt-4">
+              <h3 className="text-sm font-semibold">{t("pricingSourceTitle")}</h3>
+              <p className="mt-1 max-w-2xl text-sm leading-5 text-muted-foreground">
                 {t("pricingSourceDetail")} {" "}
                   <a
                     href={LITELLM_PRICING_URL}
@@ -746,8 +769,8 @@ export default function Settings() {
         </div>
       )}
 
-      <section id="preferences" className="border-y border-border py-5">
-        <h2 className="mb-4 text-sm font-semibold">{t("desktopPreferences")}</h2>
+      <section id="preferences" className="border-b border-border pb-5 scroll-mt-5">
+        <h2 className="mb-4 text-base font-semibold tracking-tight">{t("desktopPreferences")}</h2>
         <div className="divide-y divide-border border-t border-border">
           <div className="flex items-center justify-between gap-4 py-4">
             <span className="text-sm">{t("autostart")}</span>
@@ -777,9 +800,9 @@ export default function Settings() {
         </div>
       </section>
 
-      <section id="index-diagnostics" className="border-y border-border py-5">
-        <h2 className="text-sm font-semibold">{t("sessionIndex")}</h2>
-        <p className="mt-1 text-xs text-muted-foreground">{t("sessionIndexDetail")}</p>
+      <section id="index-diagnostics" className="border-b border-border pb-5 scroll-mt-5">
+        <h2 className="text-base font-semibold tracking-tight">{t("sessionIndex")}</h2>
+        <p className="mt-1 text-sm leading-5 text-muted-foreground">{t("sessionIndexDetail")}</p>
         <button
           type="button"
           ref={rebuildTriggerRef}

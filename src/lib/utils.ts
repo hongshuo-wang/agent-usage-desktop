@@ -18,6 +18,14 @@ export function localDateStr(d: Date): string {
 
 export type TimePreset = "today" | "thisWeek" | "thisMonth" | "thisYear" | "last3d" | "last7d" | "last30d" | "custom";
 
+export function getTimeWindowRange(hours: number, now = new Date()): { from: string; to: string } {
+  const safeHours = Math.max(1, hours);
+  return {
+    from: new Date(now.getTime() - safeHours * 60 * 60 * 1000).toISOString(),
+    to: now.toISOString(),
+  };
+}
+
 export function getTimeRange(preset: TimePreset, customFrom?: string, customTo?: string): { from: string; to: string } {
   const now = new Date();
   const todayStr = localDateStr(now);

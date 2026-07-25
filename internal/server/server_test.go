@@ -6,9 +6,20 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/hongshuo-wang/agent-usage-desktop/internal/storage"
 )
+
+func TestParseTimeRangeAcceptsRFC3339Bounds(t *testing.T) {
+	db := tempDB(t)
+	srv := New(db, "127.0.0.1:0")
+	req := httptest.NewRequest(http.MethodGet, "/api/stats?from=2026-07-25T08:00:00.000Z&to=2026-07-25T14:00:00.000Z&tz_offset=-480", nil)
+	from, to, _, err := srv.parseTimeRange(req)
+	if err != nil { t.Fatalf("parseTimeRange: %v", err) }
+	if want := 6 * time.Hour; to.Sub(from) != want { t.Fatalf("range = %s, want %s", to.Sub(from), want) }
+	if from.Location() != time.UTC { t.Fatalf("from location = %s, want UTC", from.Location()) }
+}
 
 func tempDB(t *testing.T) *storage.DB {
 	t.Helper()
