@@ -61,7 +61,7 @@ RPM and TPM are locally observed throughput, not provider quota or rate-limit ut
 
 Raw agent files are the source of truth. The local SQLite index can be rebuilt when source files or parser versions change. The default database and configuration stay on this computer.
 
-Session content is never uploaded. The application binds its API to loopback by default. Pricing sync is the only routine network request: it reads model pricing from [litellm's GitHub data](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) and stores an immutable local snapshot. Syncing does not rewrite costs that were already assigned to usage records.
+Session content is never uploaded. The application binds its API to loopback by default. Pricing sync is the only routine network request: it reads model pricing from [LiteLLM's jsDelivr mirror](https://cdn.jsdelivr.net/gh/BerriAI/litellm@main/model_prices_and_context_window.json) and stores an immutable local snapshot. Syncing does not rewrite costs that were already assigned to usage records.
 
 ## Install
 

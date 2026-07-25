@@ -64,6 +64,79 @@ func TestSessionUnknownPriceUsesStoredStatus(t *testing.T) {
 	}
 }
 
+func TestSearchSessionsProjectFallsBackToCWDAndSessionID(t *testing.T) {
+	db := tempDB(t)
+	timestamp := time.Date(2025, 3, 1, 12, 0, 0, 0, time.UTC)
+	if err := db.UpsertSession(&SessionRecord{Source: "claude", SessionID: "cwd-session", CWD: "/work/cwd-project", StartTime: timestamp}); err != nil {
+		t.Fatalf("UpsertSession cwd fallback: %v", err)
+	}
+	if err := db.UpsertSession(&SessionRecord{Source: "claude", SessionID: "windows-session", CWD: `C:\work\windows-project\`, StartTime: timestamp}); err != nil {
+		t.Fatalf("UpsertSession windows cwd fallback: %v", err)
+	}
+	if err := db.UpsertSession(&SessionRecord{Source: "claude", SessionID: "relative-session", CWD: `./relative-project`, StartTime: timestamp}); err != nil {
+		t.Fatalf("UpsertSession relative cwd fallback: %v", err)
+	}
+	if err := db.UpsertSession(&SessionRecord{Source: "claude", SessionID: "usage-project-session", CWD: "/work/cwd-fallback", StartTime: timestamp}); err != nil {
+		t.Fatalf("UpsertSession usage project metadata: %v", err)
+	}
+	if err := db.InsertUsageBatch([]*UsageRecord{
+		{Source: "claude", SessionID: "cwd-session", Model: "model", Timestamp: timestamp},
+		{Source: "claude", SessionID: "id-session", Model: "model", Timestamp: timestamp.Add(time.Second)},
+		{Source: "claude", SessionID: "windows-session", Model: "model", Timestamp: timestamp.Add(2 * time.Second)},
+		{Source: "claude", SessionID: "relative-session", Model: "model", Timestamp: timestamp.Add(3 * time.Second)},
+		{Source: "claude", SessionID: "usage-project-session", Model: "model", Project: "usage-project", Timestamp: timestamp.Add(4 * time.Second)},
+	}); err != nil {
+		t.Fatalf("InsertUsageBatch: %v", err)
+	}
+
+	byProject, err := db.SearchSessions(SessionQuery{From: timestamp.Add(-time.Minute), To: timestamp.Add(time.Minute), Project: "cwd-project", Limit: 10})
+	if err != nil {
+		t.Fatalf("SearchSessions cwd project: %v", err)
+	}
+	if len(byProject) != 1 || byProject[0].SessionID != "cwd-session" || byProject[0].Project != "cwd-project" {
+		t.Fatalf("cwd project search = %+v, want cwd-session with project cwd-project", byProject)
+	}
+
+	byID, err := db.SearchSessions(SessionQuery{From: timestamp.Add(-time.Minute), To: timestamp.Add(time.Minute), Project: "id-session", Limit: 10})
+	if err != nil {
+		t.Fatalf("SearchSessions session ID project: %v", err)
+	}
+	if len(byID) != 1 || byID[0].SessionID != "id-session" || byID[0].Project != "id-session" {
+		t.Fatalf("session ID project search = %+v, want id-session fallback", byID)
+	}
+
+	byWindows, err := db.SearchSessions(SessionQuery{From: timestamp.Add(-time.Minute), To: timestamp.Add(time.Minute), Project: "windows-project", Limit: 10})
+	if err != nil {
+		t.Fatalf("SearchSessions windows project: %v", err)
+	}
+	if len(byWindows) != 1 || byWindows[0].SessionID != "windows-session" || byWindows[0].Project != "windows-project" {
+		t.Fatalf("windows project search = %+v, want windows-session fallback", byWindows)
+	}
+
+	byRelative, err := db.SearchSessions(SessionQuery{From: timestamp.Add(-time.Minute), To: timestamp.Add(time.Minute), Project: "relative-project", Limit: 10})
+	if err != nil {
+		t.Fatalf("SearchSessions relative project: %v", err)
+	}
+	if len(byRelative) != 1 || byRelative[0].SessionID != "relative-session" || byRelative[0].Project != "relative-project" {
+		t.Fatalf("relative project search = %+v, want relative-session fallback", byRelative)
+	}
+
+	byUsageProject, err := db.SearchSessions(SessionQuery{From: timestamp.Add(-time.Minute), To: timestamp.Add(time.Minute), Project: "usage-project", Limit: 10})
+	if err != nil {
+		t.Fatalf("SearchSessions usage project: %v", err)
+	}
+	if len(byUsageProject) != 1 || byUsageProject[0].SessionID != "usage-project-session" || byUsageProject[0].Project != "usage-project" {
+		t.Fatalf("usage project search = %+v, want usage-project-session", byUsageProject)
+	}
+	byCWDWhenUsageProjectExists, err := db.SearchSessions(SessionQuery{From: timestamp.Add(-time.Minute), To: timestamp.Add(time.Minute), Project: "cwd-fallback", Limit: 10})
+	if err != nil {
+		t.Fatalf("SearchSessions cwd with usage project: %v", err)
+	}
+	if len(byCWDWhenUsageProjectExists) != 0 {
+		t.Fatalf("cwd fallback incorrectly matched usage-project session: %+v", byCWDWhenUsageProjectExists)
+	}
+}
+
 func (q *countingSessionQueryer) Query(statement string, args ...interface{}) (*sql.Rows, error) {
 	q.queries++
 	return q.db.Query(statement, args...)

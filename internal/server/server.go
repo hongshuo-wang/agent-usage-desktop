@@ -3,21 +3,26 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"mime"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/hongshuo-wang/agent-usage-desktop/internal/pricing"
 	"github.com/hongshuo-wang/agent-usage-desktop/internal/storage"
 )
 
 // Server serves the REST API.
 type Server struct {
-	db         *storage.DB
-	addr       string
-	configPath string
-	configMu   sync.Mutex
+	db          *storage.DB
+	addr        string
+	configPath  string
+	configMu    sync.Mutex
+	pricingSync func(*storage.DB) error
 }
 
 // Option configures optional server features.
@@ -30,9 +35,19 @@ func WithConfigPath(path string) Option {
 	}
 }
 
+// WithPricingSync replaces the pricing download operation. It is primarily
+// useful for tests; production servers use pricing.Sync by default.
+func WithPricingSync(syncFunc func(*storage.DB) error) Option {
+	return func(server *Server) {
+		if syncFunc != nil {
+			server.pricingSync = syncFunc
+		}
+	}
+}
+
 // New creates a Server that will listen on the given address (host:port).
 func New(db *storage.DB, addr string, options ...Option) *Server {
-	server := &Server{db: db, addr: addr}
+	server := &Server{db: db, addr: addr, pricingSync: pricing.Sync}
 	for _, option := range options {
 		option(server)
 	}
@@ -86,8 +101,96 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/sessions/{source}/{session_id}/events", s.handleSessionEventsRoute)
 	mux.HandleFunc("GET /api/sessions/{source}/{session_id}/events/{event_id}/raw", s.handleSessionRawRoute)
 	mux.HandleFunc("POST /api/session-index/rebuild", s.handleSessionIndexRebuild)
+	mux.HandleFunc("POST /api/pricing/import", s.handlePricingImport)
+	mux.HandleFunc("POST /api/pricing/sync", s.handlePricingSync)
+	mux.HandleFunc("GET /api/pricing/models", s.handlePricingModels)
 
 	return corsMiddleware(mux)
+}
+
+func (s *Server) handlePricingModels(w http.ResponseWriter, _ *http.Request) {
+	catalog, err := s.db.GetLatestPricingCatalog()
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	response := struct {
+		PricingLastSyncedAt *time.Time                     `json:"pricing_last_synced_at"`
+		Source              string                         `json:"source"`
+		Revision            string                         `json:"revision"`
+		Models              []storage.PricingSnapshotEntry `json:"models"`
+	}{Models: []storage.PricingSnapshotEntry{}}
+	if catalog != nil {
+		response.PricingLastSyncedAt = &catalog.SyncedAt
+		response.Source = catalog.Source
+		response.Revision = catalog.Revision
+		response.Models = catalog.Entries
+	}
+	writeJSON(w, response)
+}
+
+func (s *Server) handlePricingSync(w http.ResponseWriter, _ *http.Request) {
+	if err := s.pricingSync(s.db); err != nil {
+		badRequestStatus(w, http.StatusBadGateway, fmt.Errorf("pricing sync failed: %w", err))
+		return
+	}
+	if err := s.db.PriceUnpricedUsageWithHistoricalFallback(pricing.CalcCost); err != nil {
+		badRequestStatus(w, http.StatusInternalServerError, fmt.Errorf("price usage after pricing sync: %w", err))
+		return
+	}
+	status, err := s.db.GetPricingStatus()
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	writeJSON(w, struct {
+		Status              string     `json:"status"`
+		PricingLastSyncedAt *time.Time `json:"pricing_last_synced_at"`
+		UnpricedRecords     int        `json:"unpriced_records"`
+	}{
+		Status:              "ok",
+		PricingLastSyncedAt: status.PricingLastSyncedAt,
+		UnpricedRecords:     status.UnpricedRecords,
+	})
+}
+
+func (s *Server) handlePricingImport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnsupportedMediaType)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Content-Type must be application/json"})
+		return
+	}
+	if r.ContentLength > pricing.MaxPricingImportBytes {
+		badRequestStatus(w, http.StatusRequestEntityTooLarge, fmt.Errorf("pricing file exceeds maximum size of %d bytes", pricing.MaxPricingImportBytes))
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, pricing.MaxPricingImportBytes+1)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		if err == io.ErrUnexpectedEOF || strings.Contains(err.Error(), "request body too large") {
+			badRequestStatus(w, http.StatusRequestEntityTooLarge, fmt.Errorf("pricing file exceeds maximum size of %d bytes", pricing.MaxPricingImportBytes))
+			return
+		}
+		badRequest(w, fmt.Errorf("read pricing file: %w", err))
+		return
+	}
+	if int64(len(body)) > pricing.MaxPricingImportBytes {
+		badRequestStatus(w, http.StatusRequestEntityTooLarge, fmt.Errorf("pricing file exceeds maximum size of %d bytes", pricing.MaxPricingImportBytes))
+		return
+	}
+	result, err := pricing.ImportPricingJSON(s.db, body)
+	if err != nil {
+		badRequest(w, err)
+		return
+	}
+	writeJSON(w, result)
 }
 
 // Start registers HTTP handlers and begins listening. It blocks until the server stops.
@@ -160,8 +263,12 @@ func serverError(w http.ResponseWriter, err error) {
 }
 
 func badRequest(w http.ResponseWriter, err error) {
+	badRequestStatus(w, http.StatusBadRequest, err)
+}
+
+func badRequestStatus(w http.ResponseWriter, status int, err error) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
+	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 }
 

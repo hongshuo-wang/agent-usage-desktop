@@ -80,12 +80,25 @@ func searchSessions(db sessionQueryer, query SessionQuery) ([]SessionSummary, er
 		args = append(args, query.From, query.To, query.Model)
 	}
 	if query.Project != "" {
-		clauses = append(clauses, `(EXISTS (SELECT 1 FROM sessions ps
-			WHERE ps.source=a.source AND ps.session_id=a.session_id AND ps.project=?)
-			OR EXISTS (SELECT 1 FROM usage_records pu
-			WHERE pu.source=a.source AND pu.session_id=a.session_id
-				AND pu.timestamp BETWEEN ? AND ? AND pu.project=?))`)
-		args = append(args, query.Project, query.From, query.To, query.Project)
+		// Match the same fallback order exposed in SessionSummary: an explicit
+		// session project wins, then usage project, cwd basename, and session ID.
+		clauses = append(clauses, `(
+			EXISTS (SELECT 1 FROM sessions ps WHERE ps.source=a.source AND ps.session_id=a.session_id
+				AND (ps.project=? OR (ps.project=''
+					AND NOT EXISTS (SELECT 1 FROM usage_records pu WHERE pu.source=a.source AND pu.session_id=a.session_id
+						AND pu.timestamp BETWEEN ? AND ? AND pu.project!='')
+					AND (rtrim(ps.cwd, '/' || char(92)) LIKE '%' || '/' || ?
+						OR rtrim(ps.cwd, '/' || char(92)) LIKE '%' || char(92) || ?
+						OR rtrim(ps.cwd, '/' || char(92))=? OR ps.session_id=?))))
+			OR (NOT EXISTS (SELECT 1 FROM sessions ps WHERE ps.source=a.source AND ps.session_id=a.session_id AND ps.project!='')
+				AND EXISTS (SELECT 1 FROM usage_records pu WHERE pu.source=a.source AND pu.session_id=a.session_id
+					AND pu.timestamp BETWEEN ? AND ? AND pu.project=?))
+			OR (NOT EXISTS (SELECT 1 FROM sessions ps WHERE ps.source=a.source AND ps.session_id=a.session_id AND ps.project!='')
+				AND NOT EXISTS (SELECT 1 FROM usage_records pu WHERE pu.source=a.source AND pu.session_id=a.session_id
+					AND pu.timestamp BETWEEN ? AND ? AND pu.project!='')
+				AND a.session_id=?))`)
+		args = append(args, query.Project, query.From, query.To, query.Project, query.Project, query.Project, query.Project,
+			query.From, query.To, query.Project, query.From, query.To, query.Project)
 	}
 	search := strings.TrimSpace(query.Search)
 	if search != "" {
@@ -210,10 +223,7 @@ func loadSessionMetadata(db sessionQueryer, query SessionQuery, identities []ses
 			return err
 		}
 		summary := &result[indices[sessionKey{source, sessionID}]]
-		summary.Project, summary.CWD, summary.GitBranch = project, cwd, branch
-		if summary.Project == "" {
-			summary.Project = usageProject
-		}
+		summary.Project, summary.CWD, summary.GitBranch = effectiveProject(project, usageProject, cwd, sessionID), cwd, branch
 		if summary.GitBranch == "" {
 			summary.GitBranch = usageBranch
 		}

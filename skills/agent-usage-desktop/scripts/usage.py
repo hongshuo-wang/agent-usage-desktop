@@ -14,7 +14,7 @@ from pathlib import Path
 
 # ── Pricing: fetched from litellm at runtime ──
 
-LITELLM_URL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+LITELLM_URL = "https://cdn.jsdelivr.net/gh/BerriAI/litellm@main/model_prices_and_context_window.json"
 _pricing_cache = None
 
 # PLACEHOLDER_APPEND_MARKER
@@ -420,4 +420,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

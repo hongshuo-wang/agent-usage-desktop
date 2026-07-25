@@ -20,6 +20,27 @@ var (
 	date    = "unknown"
 )
 
+type collectorEntry struct {
+	name string
+	c    collector.Collector
+	cfg  config.CollectorConfig
+}
+
+// runInitialCollection scans all enabled sources before the first pricing
+// sync, so the initial LiteLLM snapshot can price historical events.
+func runInitialCollection(entries []collectorEntry, sync func()) {
+	for _, ce := range entries {
+		if !ce.cfg.Enabled {
+			continue
+		}
+		log.Printf("scanning %s sessions...", ce.name)
+		if err := ce.c.Scan(); err != nil {
+			log.Printf("%s scan: %v", ce.name, err)
+		}
+	}
+	sync()
+}
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "version" {
 		fmt.Printf("agent-usage-desktop %s (commit: %s, built: %s)\n", version, commit, date)
@@ -66,32 +87,24 @@ func main() {
 	}()
 	log.Printf("server listening on %s", addr)
 
-	// Background: sync pricing, scan collectors, then start periodic loops
+	// Background: scan collectors, sync pricing, then start periodic loops.
 	go func() {
-		log.Println("syncing pricing data...")
-		syncAndPriceUsage(db)
-
-		type collectorEntry struct {
-			name string
-			c    collector.Collector
-			cfg  config.CollectorConfig
-		}
 		collectors := []collectorEntry{
 			{"Claude Code", collector.NewClaudeCollector(db, cfg.Collectors.Claude.Paths), cfg.Collectors.Claude},
 			{"Codex", collector.NewCodexCollector(db, cfg.Collectors.Codex.Paths), cfg.Collectors.Codex},
 			{"OpenClaw", collector.NewOpenClawCollector(db, cfg.Collectors.OpenClaw.Paths), cfg.Collectors.OpenClaw},
 			{"OpenCode", collector.NewOpenCodeCollector(db, cfg.Collectors.OpenCode.Paths), cfg.Collectors.OpenCode},
 		}
+		log.Println("scanning historical sessions before initial pricing sync...")
+		runInitialCollection(collectors, func() {
+			log.Println("syncing pricing data...")
+			syncAndPriceUsage(db)
+		})
+
 		for _, ce := range collectors {
 			if !ce.cfg.Enabled {
 				continue
 			}
-			log.Printf("scanning %s sessions...", ce.name)
-			if err := ce.c.Scan(); err != nil {
-				log.Printf("%s scan: %v", ce.name, err)
-			}
-			priceUnpricedUsage(db)
-
 			go func(ce collectorEntry) {
 				ticker := time.NewTicker(ce.cfg.ScanInterval)
 				for range ticker.C {
@@ -116,7 +129,9 @@ func syncAndPriceUsage(db *storage.DB) {
 	if err := pricing.Sync(db); err != nil {
 		log.Printf("pricing sync failed: %v; pricing unpriced usage from existing historical snapshots", err)
 	}
-	priceUnpricedUsage(db)
+	if err := db.PriceUnpricedUsageWithHistoricalFallback(pricing.CalcCost); err != nil {
+		log.Printf("price unpriced usage with historical fallback: %v", err)
+	}
 }
 
 func priceUnpricedUsage(db *storage.DB) {

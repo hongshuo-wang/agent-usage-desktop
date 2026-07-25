@@ -117,6 +117,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_sidecar_port,
+            commands::open_external_url,
             commands::get_cost_threshold,
             commands::set_cost_threshold,
             commands::get_notifications_enabled,

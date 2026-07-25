@@ -2,6 +2,7 @@ package storage
 
 import (
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -18,14 +19,15 @@ type UsageBreakdown struct {
 
 // GetUsageBreakdown groups range-scoped usage by one predefined dimension.
 func (d *DB) GetUsageBreakdown(from, to time.Time, source, dimension string) ([]UsageBreakdown, error) {
+	if dimension == "project" {
+		return d.getProjectUsageBreakdown(from, to, source)
+	}
 	var dimensionExpression string
 	switch dimension {
 	case "source":
 		dimensionExpression = "u.source"
 	case "model":
 		dimensionExpression = "u.model"
-	case "project":
-		dimensionExpression = "u.project"
 	default:
 		return nil, fmt.Errorf("invalid breakdown dimension %q", dimension)
 	}
@@ -83,5 +85,78 @@ func (d *DB) GetUsageBreakdown(from, to time.Time, source, dimension string) ([]
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	return result, nil
+}
+
+func (d *DB) getProjectUsageBreakdown(from, to time.Time, source string) ([]UsageBreakdown, error) {
+	args := []interface{}{from, to}
+	filter := ""
+	if source != "" {
+		filter = " AND u.source=?"
+		args = append(args, source)
+	}
+	rows, err := d.db.Query(`SELECT u.source, u.session_id, u.project,
+		COALESCE(s.project,''), COALESCE(s.cwd,''),
+		u.input_tokens, u.output_tokens, u.cache_read_input_tokens,
+		u.cache_creation_input_tokens,
+		CASE WHEN u.pricing_status IN ('priced','legacy') THEN u.cost_usd ELSE 0 END,
+		CASE WHEN u.pricing_status='unpriced' THEN 1 ELSE 0 END
+		FROM usage_records u
+		LEFT JOIN sessions s ON s.source=u.source AND s.session_id=u.session_id
+		WHERE u.timestamp BETWEEN ? AND ?`+filter, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	type aggregate struct {
+		item    UsageBreakdown
+		inputs  int64
+		cache   int64
+		session map[string]struct{}
+	}
+	groups := make(map[string]*aggregate)
+	for rows.Next() {
+		var sourceName, sessionID, project, sessionProject, cwd string
+		var input, output, cacheRead, cacheCreate int64
+		var cost float64
+		var unknown int
+		if err := rows.Scan(&sourceName, &sessionID, &project, &sessionProject, &cwd,
+			&input, &output, &cacheRead, &cacheCreate, &cost, &unknown); err != nil {
+			return nil, err
+		}
+		// Session metadata is the canonical project when available; usage-level
+		// metadata is the fallback for records collected without a session row.
+		key := effectiveProject(sessionProject, project, cwd, sessionID)
+		group := groups[key]
+		if group == nil {
+			group = &aggregate{item: UsageBreakdown{Key: key}, session: make(map[string]struct{})}
+			groups[key] = group
+		}
+		group.item.TotalTokens += input + output + cacheRead + cacheCreate
+		group.item.TotalCost += cost
+		group.item.Calls++
+		group.inputs += input + cacheRead + cacheCreate
+		group.cache += cacheRead
+		group.item.UnknownPrice = group.item.UnknownPrice || unknown != 0
+		group.session[sourceName+"\x00"+sessionID] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	result := make([]UsageBreakdown, 0, len(groups))
+	for _, group := range groups {
+		group.item.Sessions = len(group.session)
+		if group.inputs > 0 {
+			group.item.CacheHitRate = float64(group.cache) / float64(group.inputs)
+		}
+		result = append(result, group.item)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].TotalTokens != result[j].TotalTokens {
+			return result[i].TotalTokens > result[j].TotalTokens
+		}
+		return result[i].Key < result[j].Key
+	})
 	return result, nil
 }

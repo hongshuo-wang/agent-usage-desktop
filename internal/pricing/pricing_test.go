@@ -259,6 +259,47 @@ func TestPricingSyncRejectsNonSuccessWithoutSnapshot(t *testing.T) {
 	}
 }
 
+func TestParsePricingJSONReturnsEntriesAndRevision(t *testing.T) {
+	body := []byte(`{"model-a":{"input_cost_per_token":0.1,"output_cost_per_token":0.2,"cache_read_input_token_cost":0.03},"unsupported":{"input_cost_per_token":0.4}}`)
+	entries, revision, err := ParsePricingJSON(body)
+	if err != nil {
+		t.Fatalf("ParsePricingJSON: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Model != "model-a" {
+		t.Fatalf("entries = %#v, want model-a only", entries)
+	}
+	wantRevision := fmt.Sprintf("%x", sha256.Sum256(body))
+	if revision != wantRevision {
+		t.Errorf("revision = %q, want %q", revision, wantRevision)
+	}
+}
+
+func TestImportPricingJSONCreatesSnapshotAndPricesUsage(t *testing.T) {
+	db, ledger := openPricingTestDB(t)
+	if err := db.InsertUsage(&storage.UsageRecord{
+		Source: "claude", SessionID: "import-session", Model: "model-a",
+		InputTokens: 10, OutputTokens: 5, Timestamp: time.Now().Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("InsertUsage: %v", err)
+	}
+	body := []byte(`{"model-a":{"input_cost_per_token":0.1,"output_cost_per_token":0.2}}`)
+	result, err := ImportPricingJSON(db, body)
+	if err != nil {
+		t.Fatalf("ImportPricingJSON: %v", err)
+	}
+	if result.SnapshotID == 0 || result.Entries != 1 {
+		t.Fatalf("result = %#v, want snapshot and one entry", result)
+	}
+	var status string
+	var cost float64
+	if err := ledger.QueryRow(`SELECT pricing_status, cost_usd FROM usage_records WHERE session_id='import-session'`).Scan(&status, &cost); err != nil {
+		t.Fatalf("read usage: %v", err)
+	}
+	if status != "priced" || cost != 2 {
+		t.Errorf("usage = status %q cost %v, want priced and 2", status, cost)
+	}
+}
+
 func TestCalcCost_Basic(t *testing.T) {
 	// prices: [input, output, cache_read, cache_creation]
 	prices := [4]float64{0.003, 0.015, 0.001, 0.004}

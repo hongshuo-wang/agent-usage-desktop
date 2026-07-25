@@ -20,6 +20,18 @@ type PricingMatch struct {
 // PriceUnpricedUsage binds unpriced usage records to the latest pricing snapshot
 // available at the time of each usage event.
 func (d *DB) PriceUnpricedUsage(calcFn CostCalcFunc) error {
+	return d.priceUnpricedUsage(calcFn, false)
+}
+
+// PriceUnpricedUsageWithHistoricalFallback prices records that predate the
+// first known snapshot with the latest available snapshot. This is intended
+// for application startup/sync recovery; the strict PriceUnpricedUsage API
+// continues to reject future snapshots for event-time correctness.
+func (d *DB) PriceUnpricedUsageWithHistoricalFallback(calcFn CostCalcFunc) error {
+	return d.priceUnpricedUsage(calcFn, true)
+}
+
+func (d *DB) priceUnpricedUsage(calcFn CostCalcFunc, allowHistoricalFallback bool) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -86,6 +98,12 @@ func (d *DB) PriceUnpricedUsage(calcFn CostCalcFunc) error {
 	pricedAt := time.Now().UTC()
 	for _, r := range recs {
 		snapshotID, ok := latestSnapshotAtOrBefore(snapshots, r.timestamp)
+		if !ok && allowHistoricalFallback && len(snapshots) > 0 {
+			// Records before the first sync have no event-time snapshot. Use the
+			// newest complete snapshot only in this explicit recovery path.
+			snapshotID = snapshots[len(snapshots)-1].id
+			ok = true
+		}
 		if !ok {
 			continue
 		}

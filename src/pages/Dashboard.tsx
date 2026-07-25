@@ -121,7 +121,9 @@ function BreakdownRows({
               <span className="block font-mono text-xs font-semibold tabular-nums">{fmtTokens(row.total_tokens)}</span>
               {composition ? (
                 <>
-                  <span className="block font-mono text-[10px] tabular-nums text-muted-foreground">{fmtCost(row.total_cost)}</span>
+                  <span className="block font-mono text-[10px] tabular-nums text-muted-foreground">
+                    {row.unknown_price ? `${fmtCost(row.total_cost)}*` : fmtCost(row.total_cost)}
+                  </span>
                   <span className="block font-mono text-[10px] tabular-nums text-muted-foreground">{share.toFixed(1)}%</span>
                   <span className="block text-[10px] text-muted-foreground">{row.sessions} {t("sessions")}</span>
                 </>
@@ -197,7 +199,7 @@ function formatLastIndexed(value: string | null): string {
   return value ? value.slice(0, 16).replace("T", " ") : "";
 }
 
-function ModelTable({ rows, onSelect, t }: {
+function ModelUsageRows({ rows, onSelect, t }: {
   rows: UsageBreakdown[];
   onSelect: (key: string) => void;
   t: (key: string) => string;
@@ -205,41 +207,49 @@ function ModelTable({ rows, onSelect, t }: {
   if (!rows.length) {
     return <div className="py-8 text-center text-xs text-muted-foreground">{t("noUsageData")}</div>;
   }
+
+  const totalTokens = rows.reduce((sum, row) => sum + row.total_tokens, 0);
   return (
-    <div className="min-w-0 overflow-x-auto">
-      <table className="w-full min-w-[34rem] text-xs">
-        <thead className="text-left text-[10px] font-medium text-muted-foreground">
-          <tr>
-            <th className="pb-2 pr-3">{t("model")}</th>
-            <th className="pb-2 pr-3 text-right">{t("tokens")}</th>
-            <th className="pb-2 pr-3 text-right">{t("estimatedCost")}</th>
-            <th className="pb-2 pr-3 text-right">{t("sessions")}</th>
-            <th className="pb-2 text-right">{t("cacheHitRate")}</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border">
-          {rows.slice(0, 8).map((row, index) => (
-            <tr key={row.key || `${index}`} className="hover:bg-muted/40">
-              <td className="py-2 pr-3">
-                <button
-                  type="button"
-                  aria-label={`${t("viewSessionsFor")} ${row.key || t("unknown")}`}
-                  onClick={() => onSelect(row.key)}
-                  className="max-w-[16rem] truncate font-medium hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                >
-                  {row.key || t("unknown")}
-                </button>
-              </td>
-              <td className="py-2 pr-3 text-right font-mono tabular-nums">{fmtTokens(row.total_tokens)}</td>
-              <td className="py-2 pr-3 text-right font-mono tabular-nums">
-                {row.unknown_price ? `${fmtCost(row.total_cost)}*` : fmtCost(row.total_cost)}
-              </td>
-              <td className="py-2 pr-3 text-right font-mono tabular-nums">{row.sessions}</td>
-              <td className="py-2 text-right font-mono tabular-nums">{(row.cache_hit_rate * 100).toFixed(1)}%</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="min-w-0 divide-y divide-border">
+      {rows.slice(0, 8).map((row, index) => {
+        const share = totalTokens > 0 ? (row.total_tokens / totalTokens) * 100 : 0;
+        const displayShare = share > 0 ? share : 0;
+        return (
+          <button
+            key={row.key || `${index}`}
+            type="button"
+            aria-label={`${t("viewSessionsFor")} ${row.key || t("unknown")}`}
+            onClick={() => onSelect(row.key)}
+            className="group grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 px-1 py-2.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <span className="min-w-0">
+              <span className="block truncate text-xs font-medium">{row.key || t("unknown")}</span>
+              <span className="mt-1.5 block h-2 overflow-hidden rounded bg-muted">
+                <span
+                  data-testid="model-usage-share"
+                  role="progressbar"
+                  aria-label={`${row.key || t("unknown")} ${share.toFixed(1)}%`}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round(displayShare)}
+                  className="block h-full rounded bg-accent transition-[width] duration-200"
+                  style={{ width: `${displayShare}%` }}
+                />
+              </span>
+            </span>
+            <span className="text-right">
+              <span className="block font-mono text-xs font-semibold tabular-nums">{fmtTokens(row.total_tokens)}</span>
+              <span className="block font-mono text-[10px] tabular-nums text-muted-foreground">
+                <span>{row.unknown_price ? `${fmtCost(row.total_cost)}*` : fmtCost(row.total_cost)}</span>
+                <span> / {share.toFixed(1)}%</span>
+              </span>
+              <span className="block text-[10px] text-muted-foreground">
+                {`${row.sessions} ${t("sessions")} / ${row.calls} ${t("calls")}`}
+              </span>
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -549,13 +559,8 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <div className="min-w-0 border-t border-border pt-4 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
-                  <BandTitle title={t("agentComposition")} detail={t("tokens")} />
-                  <BreakdownRows
-                    rows={data.sources}
-                    onSelect={(source) => openSessions({ source })}
-                    t={t}
-                    composition
-                  />
+                  <BandTitle title={t("modelUsage")} detail={t("unknownPriceFootnote")} />
+                  <ModelUsageRows rows={data.models} onSelect={(model) => openSessions({ model })} t={t} />
                 </div>
               </div>
             </section>
@@ -563,8 +568,13 @@ export default function Dashboard() {
             <section data-testid="dashboard-band-detail" className="border-y border-border bg-card/20 px-4 py-4">
               <div className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(14rem,0.8fr)_minmax(16rem,1fr)]">
                 <div className="min-w-0">
-                  <BandTitle title={t("modelUsage")} detail={t("unknownPriceFootnote")} />
-                  <ModelTable rows={data.models} onSelect={(model) => openSessions({ model })} t={t} />
+                  <BandTitle title={t("agentComposition")} detail={t("tokens")} />
+                  <BreakdownRows
+                    rows={data.sources}
+                    onSelect={(source) => openSessions({ source })}
+                    t={t}
+                    composition
+                  />
                 </div>
                 <div className="min-w-0 border-t border-border pt-4 xl:border-l xl:border-t-0 xl:pl-5 xl:pt-0">
                   <BandTitle title={t("projectRanking")} detail={t("tokens")} />

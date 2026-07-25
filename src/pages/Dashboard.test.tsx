@@ -79,7 +79,7 @@ const tokenRows = [{
 const breakdowns = {
   source: [
     { key: "claude", total_tokens: 250, total_cost: 0.8, sessions: 4, calls: 9, cache_hit_rate: 0.2, unknown_price: false },
-    { key: "codex", total_tokens: 150, total_cost: 0.4, sessions: 3, calls: 6, cache_hit_rate: 0.1, unknown_price: false },
+    { key: "codex", total_tokens: 150, total_cost: 0.4, sessions: 3, calls: 6, cache_hit_rate: 0.1, unknown_price: true },
   ],
   model: [{ key: "sonnet", total_tokens: 200, total_cost: 0.7, sessions: 3, calls: 8, cache_hit_rate: 0.3, unknown_price: false }],
   project: [{ key: "console", total_tokens: 150, total_cost: 0.5, sessions: 2, calls: 6, cache_hit_rate: 0.4, unknown_price: true }],
@@ -166,6 +166,29 @@ describe("Dashboard overview", () => {
     expect(within(screen.getByTestId("token-components")).getByText("44")).toBeInTheDocument();
     expect(screen.getByText("localObservedThroughput")).toBeInTheDocument();
     expect(screen.getByText("notProviderQuota")).toBeInTheDocument();
+  });
+
+  it("places model usage in analysis and agent composition in detail", async () => {
+    renderDashboard();
+
+    const analysis = await screen.findByTestId("dashboard-band-analysis");
+    const detail = screen.getByTestId("dashboard-band-detail");
+    expect(within(analysis).getByText("modelUsage")).toBeInTheDocument();
+    expect(within(analysis).queryByText("agentComposition")).not.toBeInTheDocument();
+    expect(within(detail).getByText("agentComposition")).toBeInTheDocument();
+    expect(within(detail).queryByText("modelUsage")).not.toBeInTheDocument();
+  });
+
+  it("renders model usage as proportional, accessible bars with pricing details", async () => {
+    renderDashboard();
+
+    const row = await screen.findByRole("button", { name: "viewSessionsFor sonnet" });
+    const bar = within(row).getByTestId("model-usage-share");
+    expect(bar).toHaveAttribute("role", "progressbar");
+    expect(bar).toHaveAttribute("aria-valuenow", "100");
+    expect(bar).toHaveStyle({ width: "100%" });
+    expect(within(row).getByText("$0.7000")).toBeInTheDocument();
+    expect(within(row).getByText("3 sessions / 8 calls")).toBeInTheDocument();
   });
 
   it("uses URL time and source for overview data while showing model and project as clearable context", async () => {
@@ -268,6 +291,12 @@ describe("Dashboard overview", () => {
     expect(within(row).getByText("4 sessions")).toBeInTheDocument();
     expect(within(row).getByText("62.5%")).toBeInTheDocument();
     expect(within(row).getByTestId("composition-share")).toHaveStyle({ width: "62.5%" });
+  });
+
+  it("marks Agent costs that include unpriced usage", async () => {
+    renderDashboard();
+    const row = await screen.findByRole("button", { name: "viewSessionsFor codex" });
+    expect(within(row).getByText("$0.4000*")).toBeInTheDocument();
   });
 
   it("shows local estimate coverage pricing freshness and excluded cost semantics", async () => {

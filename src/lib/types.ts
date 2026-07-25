@@ -154,6 +154,21 @@ export interface SettingsUpdateResponse {
   restart_required: boolean;
 }
 
+export interface PricingModel {
+  model: string;
+  input_cost_per_token: number;
+  output_cost_per_token: number;
+  cache_read_input_token_cost: number;
+  cache_creation_input_token_cost: number;
+}
+
+export interface PricingCatalog {
+  pricing_last_synced_at: string | null;
+  source: string;
+  revision: string;
+  models: PricingModel[];
+}
+
 export interface SessionIndexRebuildResponse {
   status: string;
   sources: number;

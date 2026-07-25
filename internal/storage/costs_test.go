@@ -115,6 +115,101 @@ func TestPriceUnpricedUsageDoesNotUseFutureSnapshot(t *testing.T) {
 	}
 }
 
+func TestPriceUnpricedUsageHistoricalFallbackPricesBeforeFirstSnapshot(t *testing.T) {
+	db := tempDB(t)
+	eventTime := time.Date(2025, 2, 1, 12, 0, 0, 0, time.UTC)
+	if _, err := db.CreatePricingSnapshot(eventTime.Add(time.Hour), "litellm", "initial-sync", []PricingSnapshotEntry{
+		{Model: "model-a", InputCostPerToken: 2, OutputCostPerToken: 3},
+	}); err != nil {
+		t.Fatalf("CreatePricingSnapshot: %v", err)
+	}
+	if err := db.InsertUsage(&UsageRecord{
+		Source: "claude", SessionID: "historical", Model: "model-a", Timestamp: eventTime,
+		InputTokens: 2, OutputTokens: 1,
+	}); err != nil {
+		t.Fatalf("InsertUsage: %v", err)
+	}
+
+	// The strict API must continue to reject a future snapshot for the event.
+	if err := db.PriceUnpricedUsage(func(input, output, _ int64, _ int64, prices [4]float64) float64 {
+		return float64(input)*prices[0] + float64(output)*prices[1]
+	}); err != nil {
+		t.Fatalf("PriceUnpricedUsage: %v", err)
+	}
+	var status string
+	if err := db.db.QueryRow(`SELECT pricing_status FROM usage_records WHERE session_id='historical'`).Scan(&status); err != nil {
+		t.Fatalf("read strict pricing status: %v", err)
+	}
+	if status != "unpriced" {
+		t.Fatalf("strict pricing status = %q, want unpriced", status)
+	}
+
+	if err := db.PriceUnpricedUsageWithHistoricalFallback(func(input, output, _ int64, _ int64, prices [4]float64) float64 {
+		return float64(input)*prices[0] + float64(output)*prices[1]
+	}); err != nil {
+		t.Fatalf("PriceUnpricedUsageWithHistoricalFallback: %v", err)
+	}
+	var cost float64
+	if err := db.db.QueryRow(`SELECT cost_usd FROM usage_records WHERE session_id='historical'`).Scan(&cost); err != nil {
+		t.Fatalf("read fallback cost: %v", err)
+	}
+	if cost != 7 {
+		t.Errorf("historical fallback cost = %v, want 7", cost)
+	}
+}
+
+func TestPriceUnpricedUsageWithoutSnapshotRemainsUnpriced(t *testing.T) {
+	db := tempDB(t)
+	eventTime := time.Date(2025, 2, 1, 12, 0, 0, 0, time.UTC)
+	if err := db.InsertUsage(&UsageRecord{
+		Source: "claude", SessionID: "no-snapshot", Model: "model-a", Timestamp: eventTime,
+		InputTokens: 1, OutputTokens: 1,
+	}); err != nil {
+		t.Fatalf("InsertUsage: %v", err)
+	}
+	if err := db.PriceUnpricedUsageWithHistoricalFallback(func(_, _ int64, _, _ int64, _ [4]float64) float64 { return 99 }); err != nil {
+		t.Fatalf("PriceUnpricedUsageWithHistoricalFallback: %v", err)
+	}
+	var status string
+	if err := db.db.QueryRow(`SELECT pricing_status FROM usage_records WHERE session_id='no-snapshot'`).Scan(&status); err != nil {
+		t.Fatalf("read pricing status: %v", err)
+	}
+	if status != "unpriced" {
+		t.Errorf("pricing status = %q, want unpriced", status)
+	}
+}
+
+func TestPriceUnpricedUsageKeepsUnmatchedModelUnpriced(t *testing.T) {
+	db := tempDB(t)
+	eventTime := time.Date(2025, 2, 1, 12, 0, 0, 0, time.UTC)
+	if _, err := db.CreatePricingSnapshot(eventTime.Add(-time.Hour), "litellm", "known-model", []PricingSnapshotEntry{
+		{Model: "known-model", InputCostPerToken: 1, OutputCostPerToken: 2},
+	}); err != nil {
+		t.Fatalf("CreatePricingSnapshot: %v", err)
+	}
+	if err := db.InsertUsage(&UsageRecord{
+		Source: "claude", SessionID: "unmatched", Model: "not-in-snapshot", Timestamp: eventTime,
+		InputTokens: 10, OutputTokens: 5,
+	}); err != nil {
+		t.Fatalf("InsertUsage: %v", err)
+	}
+	if err := db.PriceUnpricedUsage(func(_, _ int64, _, _ int64, _ [4]float64) float64 { return 99 }); err != nil {
+		t.Fatalf("PriceUnpricedUsage: %v", err)
+	}
+
+	var cost float64
+	var key, status string
+	var snapshotID, pricedAt any
+	if err := db.db.QueryRow(`SELECT cost_usd, resolved_pricing_key, pricing_snapshot_id, pricing_status, priced_at
+		FROM usage_records WHERE session_id=?`, "unmatched").Scan(&cost, &key, &snapshotID, &status, &pricedAt); err != nil {
+		t.Fatalf("read unmatched usage: %v", err)
+	}
+	if cost != 0 || key != "" || snapshotID != nil || status != "unpriced" || pricedAt != nil {
+		t.Errorf("unmatched usage was priced: cost=%v key=%q snapshot=%v status=%q priced_at=%v",
+			cost, key, snapshotID, status, pricedAt)
+	}
+}
+
 func TestPriceUsageNeverRewritesPricedOrLegacyRows(t *testing.T) {
 	db := tempDB(t)
 	eventTime := time.Date(2025, 2, 1, 12, 0, 0, 0, time.UTC)

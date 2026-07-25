@@ -13,7 +13,11 @@ import (
 	"github.com/hongshuo-wang/agent-usage-desktop/internal/storage"
 )
 
-const pricingURL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+const pricingURL = "https://cdn.jsdelivr.net/gh/BerriAI/litellm@main/model_prices_and_context_window.json"
+
+// MaxPricingImportBytes bounds uploaded pricing documents while leaving ample
+// room for the current LiteLLM model catalog and future growth.
+const MaxPricingImportBytes int64 = 64 << 20
 
 type modelPricing struct {
 	InputCostPerToken           *float64 `json:"input_cost_per_token"`
@@ -22,7 +26,7 @@ type modelPricing struct {
 	CacheCreationInputTokenCost *float64 `json:"cache_creation_input_token_cost"`
 }
 
-// Sync fetches model pricing from the litellm GitHub repository and stores the
+// Sync fetches model pricing from the LiteLLM jsDelivr mirror and stores the
 // full response as one immutable pricing snapshot.
 func Sync(db *storage.DB) error {
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -39,21 +43,44 @@ func syncFromURL(db *storage.DB, client *http.Client, url string) error {
 		return fmt.Errorf("pricing request returned %s", resp.Status)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxPricingImportBytes+1))
 	if err != nil {
 		return err
 	}
+	if int64(len(body)) > MaxPricingImportBytes {
+		return fmt.Errorf("pricing response exceeds maximum size of %d bytes", MaxPricingImportBytes)
+	}
 
+	entries, bodyRevision, err := ParsePricingJSON(body)
+	if err != nil {
+		return fmt.Errorf("decode pricing response: %w", err)
+	}
+
+	revision := resp.Header.Get("ETag")
+	if revision == "" {
+		revision = bodyRevision
+	}
+	if _, err := db.CreatePricingSnapshot(time.Now().UTC(), "litellm", revision, entries); err != nil {
+		return err
+	}
+	log.Printf("pricing: synced %d models", len(entries))
+	return nil
+}
+
+// ParsePricingJSON validates and extracts the token pricing entries from a
+// LiteLLM model_prices_and_context_window.json document. The returned revision
+// is a stable SHA-256 hash of the exact document bytes.
+func ParsePricingJSON(body []byte) ([]storage.PricingSnapshotEntry, string, error) {
 	var data map[string]json.RawMessage
 	if err := json.Unmarshal(body, &data); err != nil {
-		return fmt.Errorf("decode pricing response: %w", err)
+		return nil, "", err
 	}
 
 	entries := make([]storage.PricingSnapshotEntry, 0, len(data))
 	for model, raw := range data {
 		var p modelPricing
 		if err := json.Unmarshal(raw, &p); err != nil {
-			return fmt.Errorf("decode pricing entry %q: %w", model, err)
+			return nil, "", fmt.Errorf("decode pricing entry %q: %w", model, err)
 		}
 		if p.InputCostPerToken == nil || p.OutputCostPerToken == nil {
 			continue
@@ -76,19 +103,38 @@ func syncFromURL(db *storage.DB, client *http.Client, url string) error {
 		})
 	}
 	if len(entries) == 0 {
-		return fmt.Errorf("pricing response contains no valid pricing entries")
+		return nil, "", fmt.Errorf("pricing response contains no valid pricing entries")
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Model < entries[j].Model })
+	return entries, fmt.Sprintf("%x", sha256.Sum256(body)), nil
+}
 
-	revision := resp.Header.Get("ETag")
-	if revision == "" {
-		revision = fmt.Sprintf("%x", sha256.Sum256(body))
+// ImportResult describes a manually imported pricing snapshot.
+type ImportResult struct {
+	SnapshotID int64  `json:"snapshot_id"`
+	Entries    int    `json:"entries"`
+	Revision   string `json:"revision"`
+}
+
+// ImportPricingJSON stores an uploaded LiteLLM pricing document as an
+// immutable snapshot and immediately retries pricing all unpriced usage.
+func ImportPricingJSON(db *storage.DB, body []byte) (ImportResult, error) {
+	if int64(len(body)) > MaxPricingImportBytes {
+		return ImportResult{}, fmt.Errorf("pricing document exceeds maximum size of %d bytes", MaxPricingImportBytes)
 	}
-	if _, err := db.CreatePricingSnapshot(time.Now().UTC(), "litellm", revision, entries); err != nil {
-		return err
+	entries, revision, err := ParsePricingJSON(body)
+	if err != nil {
+		return ImportResult{}, err
 	}
-	log.Printf("pricing: synced %d models", len(entries))
-	return nil
+	snapshotID, err := db.CreatePricingSnapshot(time.Now().UTC(), "litellm", revision, entries)
+	if err != nil {
+		return ImportResult{}, err
+	}
+	if err := db.PriceUnpricedUsageWithHistoricalFallback(CalcCost); err != nil {
+		return ImportResult{}, fmt.Errorf("price usage after pricing import: %w", err)
+	}
+	log.Printf("pricing: imported %d models", len(entries))
+	return ImportResult{SnapshotID: snapshotID, Entries: len(entries), Revision: revision}, nil
 }
 
 // CalcCost computes the USD cost for a single API call given token counts and

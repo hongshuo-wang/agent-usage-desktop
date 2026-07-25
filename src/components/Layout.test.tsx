@@ -32,4 +32,18 @@ describe("Layout", () => {
       "/settings",
     ]);
   });
+
+  it("keeps the header fixed while making the main content vertically scrollable", () => {
+    localStorage.setItem("au-theme", "light");
+    render(
+      <MemoryRouter>
+        <Layout>
+          <div style={{ minHeight: "1200px" }}>long settings content</div>
+        </Layout>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("banner")).toHaveClass("sticky");
+    expect(screen.getByRole("main")).toHaveClass("overflow-y-auto");
+  });
 });

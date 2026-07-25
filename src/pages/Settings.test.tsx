@@ -62,6 +62,14 @@ describe("application settings", () => {
     vi.mocked(fetchAPI).mockImplementation(async (path, _params, init) => {
       if (path === "settings/collectors" && init?.method === "PUT") return { restart_required: true } as never;
       if (path === "settings/collectors") return settings as never;
+      if (path === "pricing/import" && init?.method === "POST") return { imported_models: 1, repriced_records: 1 } as never;
+      if (path === "pricing/sync" && init?.method === "POST") return { imported_models: 1, repriced_records: 1 } as never;
+      if (path === "pricing/models") return {
+        pricing_last_synced_at: "2026-07-25T08:00:00Z",
+        source: "litellm",
+        revision: "revision-1",
+        models: [{ model: "gpt-test", input_cost_per_token: 0.000001, output_cost_per_token: 0.000002, cache_read_input_token_cost: 0, cache_creation_input_token_cost: 0 }],
+      } as never;
       if (path === "session-index/rebuild") return { status: "rebuild_required", sources: 4 } as never;
       throw new Error(`unexpected path ${path}`);
     });
@@ -83,6 +91,96 @@ describe("application settings", () => {
     expect(screen.getByRole("spinbutton", { name: "dailyCostThreshold" })).toHaveValue(10);
 
     expect(screen.queryByText(/hermes|provider|mcp|skills|backup|account|team/i)).not.toBeInTheDocument();
+  });
+
+  it("provides the official LiteLLM source and imports a selected pricing JSON file", async () => {
+    const user = userEvent.setup();
+    render(<Settings />);
+
+    await screen.findByRole("button", { name: "saveCollectorSettings" });
+    const sourceLink = screen.getByRole("link", { name: "pricingSourceLink" });
+    expect(sourceLink).toHaveAttribute(
+      "href",
+      "https://cdn.jsdelivr.net/gh/BerriAI/litellm@main/model_prices_and_context_window.json",
+    );
+    expect(sourceLink).toHaveAttribute("target", "_blank");
+
+    const file = new File([JSON.stringify({ "gpt-test": { input_cost_per_token: 1 } })], "model-prices.json", {
+      type: "application/json",
+    });
+    await user.upload(screen.getByLabelText("pricingFile"), file);
+    await user.click(screen.getByRole("button", { name: "importPricing" }));
+
+    await waitFor(() => expect(screen.getByText("pricingImported")).toBeVisible());
+    const importCall = vi.mocked(fetchAPI).mock.calls.find(([path, , init]) => (
+      path === "pricing/import" && init?.method === "POST"
+    ));
+    expect(importCall).toBeDefined();
+    expect(importCall?.[2]?.headers).toEqual({ "Content-Type": "application/json" });
+    expect(importCall?.[2]?.body).toBe(await file.text());
+  });
+
+  it("refreshes pricing from the configured source and shows completion", async () => {
+    const user = userEvent.setup();
+    render(<Settings />);
+    await screen.findByRole("button", { name: "saveCollectorSettings" });
+
+    await user.click(screen.getByRole("button", { name: "refreshPricing" }));
+
+    await waitFor(() => expect(screen.getByText("pricingRefreshed")).toBeVisible());
+    const syncCall = vi.mocked(fetchAPI).mock.calls.find(([path, , init]) => (
+      path === "pricing/sync" && init?.method === "POST"
+    ));
+    expect(syncCall).toBeDefined();
+    expect(syncCall?.[1]).toEqual({});
+    expect(syncCall?.[2]?.body).toBeUndefined();
+  });
+
+  it("opens a model pricing dialog after loading the latest catalog", async () => {
+    const user = userEvent.setup();
+    render(<Settings />);
+    await screen.findByRole("button", { name: "saveCollectorSettings" });
+
+    await user.click(screen.getByRole("button", { name: "viewPricing" }));
+
+    expect(await screen.findByRole("dialog", { name: "pricingCatalogTitle" })).toBeVisible();
+    expect(screen.getByText("gpt-test")).toBeVisible();
+    expect(screen.getByText("pricingInputPrice")).toBeVisible();
+    expect(screen.getByRole("button", { name: "closePricingCatalog" })).toBeVisible();
+    expect(vi.mocked(fetchAPI)).toHaveBeenCalledWith("pricing/models", {});
+  });
+
+  it("shows a refresh error and keeps the action retryable", async () => {
+    vi.mocked(fetchAPI).mockImplementation(async (path, _params, init) => {
+      if (path === "settings/collectors") return settings as never;
+      if (path === "pricing/sync" && init?.method === "POST") throw new Error("pricing source unavailable");
+      throw new Error(`unexpected path ${path}`);
+    });
+    const user = userEvent.setup();
+    render(<Settings />);
+    await screen.findByRole("button", { name: "saveCollectorSettings" });
+
+    await user.click(screen.getByRole("button", { name: "refreshPricing" }));
+
+    expect(await screen.findByText(/pricing source unavailable/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "refreshPricing" })).toBeEnabled();
+  });
+
+  it("shows an import error and keeps the selected file available for retry", async () => {
+    vi.mocked(fetchAPI).mockImplementation(async (path, _params, init) => {
+      if (path === "settings/collectors") return settings as never;
+      if (path === "pricing/import" && init?.method === "POST") throw new Error("invalid pricing JSON");
+      throw new Error(`unexpected path ${path}`);
+    });
+    const user = userEvent.setup();
+    render(<Settings />);
+    await screen.findByRole("button", { name: "saveCollectorSettings" });
+    const file = new File(["not json"], "model-prices.json", { type: "application/json" });
+    await user.upload(screen.getByLabelText("pricingFile"), file);
+    await user.click(screen.getByRole("button", { name: "importPricing" }));
+
+    expect(await screen.findByText(/invalid pricing JSON/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "importPricing" })).toBeEnabled();
   });
 
   it("saves edited collector settings and restarts only after the PUT succeeds", async () => {

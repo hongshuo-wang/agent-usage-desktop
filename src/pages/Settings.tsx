@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, Database, RefreshCw, Save } from "lucide-react";
+import { AlertTriangle, Database, Eye, RefreshCw, Save, Search, Upload, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { fetchAPI } from "../lib/api";
 import { applyOwnedHydration } from "./settingsHydration";
@@ -9,6 +9,7 @@ import type {
   CollectorSetting,
   CollectorSettings,
   SessionIndexRebuildResponse,
+  PricingCatalog,
   SettingsUpdateResponse,
 } from "../lib/types";
 
@@ -25,9 +26,21 @@ const COLLECTOR_LABELS: Record<CollectorName, string> = {
 };
 
 const FULL_RETROSPECTIVE = new Set<CollectorName>(["claude", "codex"]);
+const LITELLM_PRICING_URL = "https://cdn.jsdelivr.net/gh/BerriAI/litellm@main/model_prices_and_context_window.json";
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function formatPricePerMillion(pricePerToken: number): string {
+  return `$${(pricePerToken * 1_000_000).toFixed(4)}`;
+}
+
+function openPricingSource(event: React.MouseEvent<HTMLAnchorElement>) {
+  event.preventDefault();
+  void invoke("open_external_url", { url: LITELLM_PRICING_URL }).catch(() => {
+    window.open(LITELLM_PRICING_URL, "_blank", "noopener,noreferrer");
+  });
 }
 
 function Toggle({
@@ -94,6 +107,17 @@ export default function Settings() {
   const [autostartError, setAutostartError] = useState<string | null>(null);
   const [collectors, setCollectors] = useState<EditableCollector[] | null>(null);
   const [pricingInterval, setPricingInterval] = useState("");
+  const [pricingFile, setPricingFile] = useState<File | null>(null);
+  const [pricingImportState, setPricingImportState] = useState<ActionState>("idle");
+  const [pricingImportError, setPricingImportError] = useState<string | null>(null);
+  const [pricingSyncState, setPricingSyncState] = useState<ActionState>("idle");
+  const [pricingSyncError, setPricingSyncError] = useState<string | null>(null);
+  const [pricingCatalogOpen, setPricingCatalogOpen] = useState(false);
+  const [pricingCatalogState, setPricingCatalogState] = useState<ActionState>("idle");
+  const [pricingCatalog, setPricingCatalog] = useState<PricingCatalog | null>(null);
+  const [pricingCatalogError, setPricingCatalogError] = useState<string | null>(null);
+  const [pricingCatalogSearch, setPricingCatalogSearch] = useState("");
+  const pricingFileInputRef = useRef<HTMLInputElement>(null);
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
@@ -112,6 +136,8 @@ export default function Settings() {
   const rebuildTriggerRef = useRef<HTMLButtonElement>(null);
   const rebuildDialogRef = useRef<HTMLElement>(null);
   const rebuildCancelRef = useRef<HTMLButtonElement>(null);
+  const pricingCatalogDialogRef = useRef<HTMLElement>(null);
+  const pricingCatalogCloseRef = useRef<HTMLButtonElement>(null);
 
   const loadCollectorSettings = useCallback(async () => {
     loadControllerRef.current?.abort();
@@ -185,6 +211,10 @@ export default function Settings() {
   useEffect(() => {
     if (confirmRebuild) rebuildCancelRef.current?.focus();
   }, [confirmRebuild]);
+
+  useEffect(() => {
+    if (pricingCatalogOpen) pricingCatalogCloseRef.current?.focus();
+  }, [pricingCatalogOpen]);
 
   const handleThemeChange = (value: string) => {
     setTheme(value);
@@ -284,6 +314,82 @@ export default function Settings() {
     } catch (error) {
       setSaveState("restartError");
       setSaveError(errorMessage(error));
+    }
+  };
+
+  const importPricing = async () => {
+    if (!pricingFile || pricingImportState === "pending") return;
+    setPricingImportState("pending");
+    setPricingImportError(null);
+    try {
+      const body = await pricingFile.text();
+      await fetchAPI("pricing/import", {}, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+      });
+      setPricingImportState("success");
+      setPricingFile(null);
+      if (pricingFileInputRef.current) pricingFileInputRef.current.value = "";
+    } catch (error) {
+      setPricingImportState("error");
+      setPricingImportError(errorMessage(error));
+    }
+  };
+
+  const refreshPricing = async () => {
+    if (pricingSyncState === "pending") return;
+    setPricingSyncState("pending");
+    setPricingSyncError(null);
+    try {
+      await fetchAPI("pricing/sync", {}, { method: "POST" });
+      setPricingSyncState("success");
+    } catch (error) {
+      setPricingSyncState("error");
+      const message = errorMessage(error);
+      setPricingSyncError(message.includes("404") ? t("pricingRefreshEndpointUnavailable") : message);
+    }
+  };
+
+  const openPricingCatalog = async () => {
+    setPricingCatalogOpen(true);
+    setPricingCatalogState("pending");
+    setPricingCatalogError(null);
+    setPricingCatalogSearch("");
+    try {
+      const response = await fetchAPI<PricingCatalog>("pricing/models", {});
+      setPricingCatalog(response);
+      setPricingCatalogState("success");
+    } catch (error) {
+      setPricingCatalogState("error");
+      setPricingCatalogError(errorMessage(error));
+    }
+  };
+
+  const closePricingCatalog = () => {
+    setPricingCatalogOpen(false);
+    setPricingCatalogSearch("");
+  };
+
+  const handlePricingCatalogKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closePricingCatalog();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(
+      pricingCatalogDialogRef.current?.querySelectorAll<HTMLElement>("button:not([disabled]), input:not([disabled])") || [],
+    );
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
     }
   };
 
@@ -441,6 +547,80 @@ export default function Settings() {
                 <Save className="h-4 w-4" /> {saveState === "pending" ? t("savingSettings") : t("save")}
               </button>
             </div>
+            <div className="border-t border-border py-4">
+              <h3 className="text-xs font-medium">{t("pricingSourceTitle")}</h3>
+              <p className="mt-1 max-w-2xl text-[10px] leading-4 text-muted-foreground">
+                {t("pricingSourceDetail")} {" "}
+                  <a
+                    href={LITELLM_PRICING_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={openPricingSource}
+                    className="text-accent underline underline-offset-2 hover:text-accent/80"
+                >
+                  {t("pricingSourceLink")}
+                </a>
+              </p>
+              <div className="mt-3 flex min-w-0 flex-wrap items-end gap-3">
+                <button
+                  type="button"
+                  aria-label={t("refreshPricing")}
+                  onClick={() => { void refreshPricing(); }}
+                  disabled={pricingSyncState === "pending"}
+                  className="inline-flex h-9 items-center gap-2 rounded border border-border px-3 text-xs font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <RefreshCw className={`h-4 w-4 ${pricingSyncState === "pending" ? "animate-spin" : ""}`} />
+                  {pricingSyncState === "pending" ? t("refreshingPricing") : t("refreshPricing")}
+                </button>
+                <label className="min-w-0 flex-1 text-[10px] text-muted-foreground sm:min-w-64">
+                  <span className="mb-1 block">{t("pricingFile")}</span>
+                  <input
+                    ref={pricingFileInputRef}
+                    type="file"
+                    accept=".json,application/json"
+                    aria-label={t("pricingFile")}
+                    onChange={(event) => {
+                      setPricingFile(event.target.files?.[0] ?? null);
+                      setPricingImportState("idle");
+                      setPricingImportError(null);
+                    }}
+                    className="block h-9 w-full min-w-0 cursor-pointer rounded border border-border bg-card px-2 py-1.5 text-xs text-foreground file:mr-2 file:rounded file:border-0 file:bg-muted file:px-2 file:py-1 file:text-xs file:font-medium"
+                  />
+                </label>
+                <button
+                  type="button"
+                  aria-label={t("importPricing")}
+                  onClick={() => { void importPricing(); }}
+                  disabled={!pricingFile || pricingImportState === "pending"}
+                  className="inline-flex h-9 items-center gap-2 rounded border border-border px-3 text-xs font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Upload className="h-4 w-4" />
+                  {pricingImportState === "pending" ? t("importingPricing") : t("importPricing")}
+                </button>
+                <button
+                  type="button"
+                  aria-label={t("viewPricing")}
+                  onClick={() => { void openPricingCatalog(); }}
+                  disabled={pricingCatalogState === "pending"}
+                  className="inline-flex h-9 items-center gap-2 rounded border border-border px-3 text-xs font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Eye className="h-4 w-4" />
+                  {pricingCatalogState === "pending" ? t("loadingPricing") : t("viewPricing")}
+                </button>
+              </div>
+              {pricingImportState === "success" && <p className="mt-2 text-xs text-green">{t("pricingImported")}</p>}
+              {pricingImportError && (
+                <p className="mt-2 break-words text-xs text-red-500">
+                  {t("pricingImportFailed")}: {pricingImportError}
+                </p>
+              )}
+              {pricingSyncState === "success" && <p className="mt-2 text-xs text-green">{t("pricingRefreshed")}</p>}
+              {pricingSyncError && (
+                <p className="mt-2 break-words text-xs text-red-500">
+                  {t("pricingRefreshFailed")}: {pricingSyncError}
+                </p>
+              )}
+            </div>
             {saveState === "success" && <p className="pb-3 text-xs text-green">{t("settingsSavedAndRestarted")}</p>}
             {saveState === "restartError" && (
               <div className="flex flex-wrap items-center gap-3 pb-3">
@@ -454,6 +634,78 @@ export default function Settings() {
           </div>
         ) : null}
       </section>
+
+      {pricingCatalogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closePricingCatalog(); }}>
+          <section
+            ref={pricingCatalogDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="pricing-catalog-title"
+            onKeyDown={handlePricingCatalogKeyDown}
+            className="flex max-h-[min(80vh,46rem)] w-full max-w-5xl flex-col overflow-hidden rounded border border-border bg-background shadow-xl"
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-border p-5">
+              <div>
+                <h2 id="pricing-catalog-title" className="text-sm font-semibold">{t("pricingCatalogTitle")}</h2>
+                <p className="mt-1 text-xs text-muted-foreground">{t("pricingCatalogDetail")}</p>
+              </div>
+              <button ref={pricingCatalogCloseRef} type="button" aria-label={t("closePricingCatalog")} onClick={closePricingCatalog} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 p-5">
+              {pricingCatalogState === "pending" && <p className="py-10 text-center text-sm text-muted-foreground">{t("loadingPricing")}</p>}
+              {pricingCatalogState === "error" && <p className="break-words py-10 text-center text-sm text-red-500">{pricingCatalogError}</p>}
+              {pricingCatalogState === "success" && pricingCatalog && (
+                <>
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
+                    <span>{t("pricingModelCount", { count: pricingCatalog.models.length })}</span>
+                    <label className="relative min-w-52 flex-1 sm:max-w-xs">
+                      <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                      <input
+                        type="search"
+                        aria-label={t("searchPricingModels")}
+                        value={pricingCatalogSearch}
+                        onChange={(event) => setPricingCatalogSearch(event.target.value)}
+                        placeholder={t("searchPricingModels")}
+                        className="h-8 w-full rounded border border-border bg-card pl-7 pr-2 text-xs text-foreground outline-none focus:border-accent"
+                      />
+                    </label>
+                  </div>
+                  <div className="max-h-[55vh] overflow-auto rounded border border-border">
+                    <table className="w-full min-w-[46rem] text-left text-xs">
+                      <thead className="sticky top-0 bg-muted text-muted-foreground">
+                        <tr>
+                          <th className="px-3 py-2 font-medium">{t("model")}</th>
+                          <th className="px-3 py-2 text-right font-medium">{t("pricingInputPrice")}</th>
+                          <th className="px-3 py-2 text-right font-medium">{t("pricingOutputPrice")}</th>
+                          <th className="px-3 py-2 text-right font-medium">{t("pricingCacheReadPrice")}</th>
+                          <th className="px-3 py-2 text-right font-medium">{t("pricingCacheCreatePrice")}</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {pricingCatalog.models.filter((entry) => entry.model.toLowerCase().includes(pricingCatalogSearch.trim().toLowerCase())).map((entry) => (
+                          <tr key={entry.model} className="hover:bg-muted/50">
+                            <td className="max-w-[24rem] truncate px-3 py-2 font-mono" title={entry.model}>{entry.model}</td>
+                            <td className="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums">{formatPricePerMillion(entry.input_cost_per_token)}</td>
+                            <td className="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums">{formatPricePerMillion(entry.output_cost_per_token)}</td>
+                            <td className="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums">{formatPricePerMillion(entry.cache_read_input_token_cost)}</td>
+                            <td className="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums">{formatPricePerMillion(entry.cache_creation_input_token_cost)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {pricingCatalog.models.filter((entry) => entry.model.toLowerCase().includes(pricingCatalogSearch.trim().toLowerCase())).length === 0 && (
+                      <p className="py-10 text-center text-sm text-muted-foreground">{t("noPricingModels")}</p>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
 
       <section className="border-y border-border py-5">
         <h2 className="mb-4 text-sm font-semibold">{t("desktopPreferences")}</h2>

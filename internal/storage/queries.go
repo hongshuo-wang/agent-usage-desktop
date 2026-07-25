@@ -166,11 +166,19 @@ func (d *DB) InsertPromptBatch(events []*PromptEvent) error {
 
 // PricingSnapshotEntry is one model's immutable per-token prices in a pricing snapshot.
 type PricingSnapshotEntry struct {
-	Model                       string
-	InputCostPerToken           float64
-	OutputCostPerToken          float64
-	CacheReadInputTokenCost     float64
-	CacheCreationInputTokenCost float64
+	Model                       string  `json:"model"`
+	InputCostPerToken           float64 `json:"input_cost_per_token"`
+	OutputCostPerToken          float64 `json:"output_cost_per_token"`
+	CacheReadInputTokenCost     float64 `json:"cache_read_input_token_cost"`
+	CacheCreationInputTokenCost float64 `json:"cache_creation_input_token_cost"`
+}
+
+// PricingCatalog is the latest complete pricing snapshot and its provenance.
+type PricingCatalog struct {
+	SyncedAt time.Time
+	Source   string
+	Revision string
+	Entries  []PricingSnapshotEntry
 }
 
 // CreatePricingSnapshot atomically stores a pricing source revision and all of its entries.
@@ -261,4 +269,46 @@ func (d *DB) GetAllPricing() (map[string][4]float64, error) {
 		return nil, err
 	}
 	return m, nil
+}
+
+// GetLatestPricingCatalog returns the most recently synced immutable pricing
+// snapshot. A nil catalog means no pricing snapshot has been imported yet.
+func (d *DB) GetLatestPricingCatalog() (*PricingCatalog, error) {
+	var catalog PricingCatalog
+	var rawSyncedAt any
+	err := d.db.QueryRow(`SELECT synced_at, source, source_revision
+		FROM pricing_snapshots ORDER BY synced_at DESC, id DESC LIMIT 1`).Scan(
+		&rawSyncedAt, &catalog.Source, &catalog.Revision)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	catalog.SyncedAt, err = parseDatabaseTime(rawSyncedAt)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := d.db.Query(`SELECT model, input_cost_per_token, output_cost_per_token,
+		cache_read_input_token_cost, cache_creation_input_token_cost
+		FROM pricing_snapshot_entries
+		WHERE snapshot_id=(SELECT id FROM pricing_snapshots ORDER BY synced_at DESC, id DESC LIMIT 1)
+		ORDER BY model`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	catalog.Entries = make([]PricingSnapshotEntry, 0)
+	for rows.Next() {
+		var entry PricingSnapshotEntry
+		if err := rows.Scan(&entry.Model, &entry.InputCostPerToken, &entry.OutputCostPerToken,
+			&entry.CacheReadInputTokenCost, &entry.CacheCreationInputTokenCost); err != nil {
+			return nil, err
+		}
+		catalog.Entries = append(catalog.Entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return &catalog, nil
 }

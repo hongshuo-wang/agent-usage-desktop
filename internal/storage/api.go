@@ -31,6 +31,33 @@ type DashboardStats struct {
 	CacheHitRate        float64    `json:"cache_hit_rate"`
 }
 
+// PricingStatus reports the latest local pricing snapshot and records that
+// still have no matching price.
+type PricingStatus struct {
+	PricingLastSyncedAt *time.Time `json:"pricing_last_synced_at"`
+	UnpricedRecords     int        `json:"unpriced_records"`
+}
+
+// GetPricingStatus returns pricing freshness and current unpriced usage count.
+func (d *DB) GetPricingStatus() (*PricingStatus, error) {
+	status := &PricingStatus{}
+	if err := d.db.QueryRow(`SELECT COUNT(*) FROM usage_records WHERE pricing_status='unpriced'`).Scan(&status.UnpricedRecords); err != nil {
+		return nil, err
+	}
+	var lastSyncedAt any
+	if err := d.db.QueryRow(`SELECT MAX(synced_at) FROM pricing_snapshots`).Scan(&lastSyncedAt); err != nil {
+		return nil, err
+	}
+	if lastSyncedAt != nil {
+		parsed, err := parseDatabaseTime(lastSyncedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse latest pricing sync: %w", err)
+		}
+		status.PricingLastSyncedAt = &parsed
+	}
+	return status, nil
+}
+
 // CostByModel represents total cost for a single model.
 type CostByModel struct {
 	Model string  `json:"model"`
@@ -235,11 +262,11 @@ func (d *DB) GetSessions(from, to time.Time, source string) ([]SessionInfo, erro
 		sessionSourceFilter = " AND s.source=?"
 		args = append(args, source)
 	}
-	rows, err := d.db.Query(`SELECT s.session_id, s.source, s.project, s.cwd, s.git_branch,
+	rows, err := d.db.Query(`SELECT s.session_id, s.source, COALESCE(NULLIF(s.project,''), NULLIF(u.project,''), ''), s.cwd, s.git_branch,
 		COALESCE(s.start_time,''), COALESCE(p.prompts,0),
 		COALESCE(u.cost,0), COALESCE(u.tokens,0)
 		FROM sessions s
-		LEFT JOIN (SELECT source, session_id, SUM(CASE WHEN pricing_status IN ('priced','legacy') THEN cost_usd ELSE 0 END) as cost, SUM(input_tokens+cache_read_input_tokens+cache_creation_input_tokens+output_tokens) as tokens
+		LEFT JOIN (SELECT source, session_id, MAX(NULLIF(project,'')) as project, SUM(CASE WHEN pricing_status IN ('priced','legacy') THEN cost_usd ELSE 0 END) as cost, SUM(input_tokens+cache_read_input_tokens+cache_creation_input_tokens+output_tokens) as tokens
 			FROM usage_records WHERE timestamp BETWEEN ? AND ?`+sf+` GROUP BY source, session_id) u
 		ON s.source = u.source AND s.session_id = u.session_id
 		LEFT JOIN (SELECT source, session_id, COUNT(*) as prompts
@@ -261,6 +288,7 @@ func (d *DB) GetSessions(from, to time.Time, source string) ([]SessionInfo, erro
 		if err := rows.Scan(&s.SessionID, &s.Source, &s.Project, &s.CWD, &s.GitBranch, &s.StartTime, &s.Prompts, &s.TotalCost, &s.Tokens); err != nil {
 			return nil, err
 		}
+		s.Project = effectiveProject(s.Project, "", s.CWD, s.SessionID)
 		result = append(result, s)
 	}
 	if err := rows.Err(); err != nil {

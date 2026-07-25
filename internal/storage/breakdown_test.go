@@ -109,6 +109,39 @@ func TestUsageBreakdownRejectsUnknownDimension(t *testing.T) {
 	}
 }
 
+func TestUsageBreakdownProjectFallsBackToSessionCWDAndID(t *testing.T) {
+	db := tempDB(t)
+	base := time.Date(2025, 3, 1, 12, 0, 0, 0, time.UTC)
+	if err := db.UpsertSession(&SessionRecord{Source: "claude", SessionID: "cwd-session", CWD: "/work/cwd-project"}); err != nil {
+		t.Fatalf("UpsertSession cwd fallback: %v", err)
+	}
+	if err := db.UpsertSession(&SessionRecord{Source: "claude", SessionID: "mixed-session", Project: "session-project", CWD: "/work/other-project"}); err != nil {
+		t.Fatalf("UpsertSession mixed metadata: %v", err)
+	}
+	if err := db.InsertUsageBatch([]*UsageRecord{
+		{Source: "claude", SessionID: "cwd-session", Model: "model", Timestamp: base, InputTokens: 3},
+		{Source: "claude", SessionID: "id-session", Model: "model", Timestamp: base.Add(time.Second), InputTokens: 2},
+		{Source: "claude", SessionID: "explicit-session", Model: "model", Project: "explicit-project", Timestamp: base.Add(2 * time.Second), InputTokens: 1},
+		{Source: "claude", SessionID: "mixed-session", Model: "model", Project: "usage-project", Timestamp: base.Add(3 * time.Second), InputTokens: 4},
+	}); err != nil {
+		t.Fatalf("InsertUsageBatch: %v", err)
+	}
+
+	rows, err := db.GetUsageBreakdown(base.Add(-time.Minute), base.Add(time.Minute), "", "project")
+	if err != nil {
+		t.Fatalf("GetUsageBreakdown: %v", err)
+	}
+	for key, wantTokens := range map[string]int64{"cwd-project": 3, "id-session": 2, "explicit-project": 1, "session-project": 4} {
+		row := findBreakdown(t, rows, key)
+		if row.TotalTokens != wantTokens {
+			t.Errorf("breakdown[%q].TotalTokens = %d, want %d", key, row.TotalTokens, wantTokens)
+		}
+	}
+	if len(rows) != 4 {
+		t.Fatalf("breakdown rows = %+v, want 4 project keys", rows)
+	}
+}
+
 func findBreakdown(t *testing.T, rows []UsageBreakdown, key string) UsageBreakdown {
 	t.Helper()
 	for _, row := range rows {

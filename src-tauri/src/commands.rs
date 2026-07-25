@@ -1,6 +1,10 @@
 use crate::sidecar::SidecarState;
 use std::sync::atomic::Ordering;
-use tauri::{Manager, State};
+use tauri::{AppHandle, Manager, State};
+use tauri_plugin_shell::ShellExt;
+
+const LITELLM_PRICING_URL: &str =
+    "https://cdn.jsdelivr.net/gh/BerriAI/litellm@main/model_prices_and_context_window.json";
 
 fn read_settings(app: &tauri::AppHandle) -> serde_json::Value {
     let path = app.path().app_data_dir().unwrap().join("settings.json");
@@ -21,6 +25,17 @@ fn write_settings(app: &tauri::AppHandle, settings: &serde_json::Value) -> Resul
 #[tauri::command]
 pub fn get_sidecar_port(state: State<SidecarState>) -> u16 {
     state.port.load(Ordering::Relaxed)
+}
+
+#[tauri::command]
+#[allow(deprecated)]
+pub fn open_external_url(app: AppHandle, url: String) -> Result<(), String> {
+    if url != LITELLM_PRICING_URL {
+        return Err("external URL is not allowed".into());
+    }
+    app.shell()
+        .open(url, None)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -58,6 +73,11 @@ pub async fn restart_sidecar(app: tauri::AppHandle) -> Result<u16, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn external_url_command_is_exposed() {
+        let _ = super::open_external_url;
+    }
+
     #[test]
     fn restart_sidecar_command_is_exposed() {
         let _ = super::restart_sidecar;

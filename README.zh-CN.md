@@ -61,7 +61,7 @@ RPM 和 TPM 是本机观测到的吞吐量，不代表供应商配额或限流�
 
 Agent 原始文件是事实来源。源文件或解析器版本变化时，SQLite 索引可以重建。默认数据库和配置都保留在这台电脑上。
 
-应用不会上传会话内容，默认只在 loopback 地址提供 API。价格同步是唯一的常规网络请求：应用从 [litellm 的 GitHub 数据](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)读取模型价格并保存不可变的本地快照。同步不会重写已经按事件分配的历史费用。
+应用不会上传会话内容，默认只在 loopback 地址提供 API。价格同步是唯一的常规网络请求：应用从 [LiteLLM 的 jsDelivr 镜像](https://cdn.jsdelivr.net/gh/BerriAI/litellm@main/model_prices_and_context_window.json)读取模型价格并保存不可变的本地快照。同步不会重写已经按事件分配的历史费用。
 
 ## 安装
 
