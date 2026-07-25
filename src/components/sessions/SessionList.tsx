@@ -2,6 +2,7 @@ import { Search } from "lucide-react";
 import type { SessionSummary } from "../../lib/types";
 import { fmtCost, fmtTokens, relativeTime } from "../../lib/utils";
 import { humanizeSessionTitle } from "../../lib/sessionPresentation";
+import { presentProjectKey } from "../../lib/queryPresentation";
 
 type Translate = (key: string) => string;
 
@@ -92,6 +93,10 @@ export default function SessionList({
             {sessions.map((session) => {
               const key = sessionIdentity(session);
               const selected = selectedKey === key;
+              const rawProject = session.project || session.cwd || session.session_id;
+              const projectPresentation = presentProjectKey(rawProject);
+              const sessionTitle = humanizeSessionTitle(session.title, session.project, session.cwd, session.session_id);
+              const displayTitle = presentProjectKey(sessionTitle).label === "unnamedProject" ? t("unnamedProject") : sessionTitle;
               return (
                 <li key={key} data-testid="session-list-item">
                   <button
@@ -101,14 +106,14 @@ export default function SessionList({
                     className={`w-full min-w-0 px-3 py-3 text-left transition-colors ${selected ? "bg-accent-dim" : "hover:bg-muted/50"}`}
                   >
                     <div className="flex min-w-0 items-start justify-between gap-2">
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium">{humanizeSessionTitle(session.title, session.project, session.cwd, session.session_id)}</span>
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium" title={projectPresentation.detail || displayTitle}>{displayTitle}</span>
                       <time className="shrink-0 text-[10px] text-muted-foreground" dateTime={session.last_activity}>
                         {relativeTime(session.last_activity, t)}
                       </time>
                     </div>
                     <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
                       <span className="shrink-0 uppercase">{session.source}</span>
-                      <span className="truncate">{session.project || session.cwd || session.session_id}</span>
+                      <span className="truncate" title={projectPresentation.detail || rawProject}>{projectPresentation.label === "unnamedProject" ? t("unnamedProject") : projectPresentation.label}</span>
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px] text-muted-foreground">
                       <span>{fmtTokens(session.total_tokens)} {t("tokens")}</span>

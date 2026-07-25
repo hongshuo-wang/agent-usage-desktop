@@ -191,16 +191,13 @@ describe("Dashboard overview", () => {
     expect(within(row).getByText("3 sessions / 8 calls")).toBeInTheDocument();
   });
 
-  it("uses URL time and source for overview data while showing model and project as clearable context", async () => {
+  it("uses URL time and source for overview data while keeping model and project as query context", async () => {
     localStorage.setItem("au-preset", "last30d");
     localStorage.setItem("au-source", "codex");
     renderDashboard("/?preset=custom&from=2025-01-01&to=2025-01-03&source=claude&model=sonnet&project=console");
 
-    const context = await screen.findByTestId("drilldown-context");
-    expect(within(context).getByText("drillDownContext")).toBeInTheDocument();
     expect(screen.getByTestId("time-range-selector")).toHaveTextContent("custom");
-    expect(context).toHaveTextContent("sonnet");
-    expect(context).toHaveTextContent("console");
+    expect(screen.getByText("overviewFilterLimitation")).toBeInTheDocument();
     await waitFor(() => expect(fetchAPI).toHaveBeenCalledWith("stats", expect.objectContaining({
       from: "2025-01-01",
       to: "2025-01-03",
@@ -212,9 +209,7 @@ describe("Dashboard overview", () => {
       expect(params).not.toHaveProperty("project");
     }
 
-    await userEvent.setup().click(screen.getByRole("button", { name: "clearModelFilter sonnet" }));
-    expect(screen.queryByRole("button", { name: "clearModelFilter sonnet" })).not.toBeInTheDocument();
-    expect(screen.getByText("console")).toBeInTheDocument();
+    expect(screen.queryByTestId("drilldown-context")).not.toBeInTheDocument();
   });
 
   it.each([

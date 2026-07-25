@@ -17,10 +17,14 @@ vi.mock("react-i18next", () => ({
 }));
 
 vi.mock("../components/TimeRangeSelector", () => ({
-  default: ({ source, onSourceChange }: { source: string; onSourceChange: (source: string) => void }) => (
+  default: ({ source, onSourceChange, filters, onFiltersApply }: { source: string; onSourceChange: (source: string) => void; filters?: { model: string; project: string }; onFiltersApply?: (next: unknown) => void }) => (
     <div data-testid="time-range-selector">
       <output>{source || "allSources"}</output>
       <button type="button" onClick={() => onSourceChange("codex")}>chooseCodex</button>
+      {filters && onFiltersApply && <>
+        <input aria-label="queryModel" value={filters.model} onChange={(event) => onFiltersApply({ ...filters, model: event.target.value })} />
+        <input aria-label="queryProject" value={filters.project} onChange={(event) => onFiltersApply({ ...filters, project: event.target.value })} />
+      </>}
     </div>
   ),
 }));
@@ -214,8 +218,8 @@ describe("session retrospective center", () => {
   it("sends user-editable model and project filters to the backend and allows clearing them", async () => {
     renderSessions("/sessions?from=2026-07-01&to=2026-07-03&model=sonnet&project=console");
     const initialListSignal = vi.mocked(fetchAPI).mock.calls.find(([path]) => path === "sessions")?.[2]?.signal;
-    const modelInput = await screen.findByRole("textbox", { name: "modelFilter" });
-    const projectInput = screen.getByRole("textbox", { name: "projectFilter" });
+    const modelInput = await screen.findByRole("textbox", { name: "queryModel" });
+    const projectInput = screen.getByRole("textbox", { name: "queryProject" });
     expect(modelInput).toHaveValue("sonnet");
     expect(projectInput).toHaveValue("console");
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
+import { Info } from "lucide-react";
 import ChartCard from "../components/ChartCard";
 import TimeRangeSelector from "../components/TimeRangeSelector";
 import { fetchAPI } from "../lib/api";
@@ -18,8 +19,9 @@ import {
   getUsageRequestParams,
   persistUsageFilters,
 } from "../lib/usageFilters";
-import { CHART_COLORS, fmtCost, fmtTokens, getTimeRange, type TimePreset } from "../lib/utils";
+import { CHART_COLORS, fmtCost, fmtTokens, getTimeRange, getTimeWindowRange, type TimePreset } from "../lib/utils";
 import { buildThroughputView, type ThroughputViewMode } from "../lib/throughputScale";
+import { presentProjectKey } from "../lib/queryPresentation";
 
 type DashboardData = {
   stats: DashboardStats;
@@ -83,12 +85,14 @@ function BreakdownRows({
   t,
   compact = false,
   composition = false,
+  projectLabels = false,
 }: {
   rows: UsageBreakdown[];
   onSelect: (key: string) => void;
   t: (key: string) => string;
   compact?: boolean;
   composition?: boolean;
+  projectLabels?: boolean;
 }) {
   if (!rows.length) {
     return <div className="py-8 text-center text-xs text-muted-foreground">{t("noUsageData")}</div>;
@@ -98,18 +102,21 @@ function BreakdownRows({
   return (
     <div className="min-w-0 divide-y divide-border">
       {rows.slice(0, compact ? 6 : 8).map((row, index) => {
+        const projectPresentation = projectLabels ? presentProjectKey(row.key) : { label: row.key };
+        const visibleKey = projectPresentation.label === "unnamedProject" ? t("unnamedProject") : projectPresentation.label;
         const share = totalTokens > 0 ? (row.total_tokens / totalTokens) * 100 : 0;
         const barWidth = composition ? share : (row.total_tokens / maxTokens) * 100;
         return (
           <button
             key={row.key || `${index}`}
             type="button"
-            aria-label={`${t("viewSessionsFor")} ${row.key || t("unknown")}`}
+            aria-label={`${t("viewSessionsFor")} ${visibleKey || t("unknown")}`}
             onClick={() => onSelect(row.key)}
             className="group grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 px-1 py-2 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
             <span className="min-w-0">
-              <span className="block truncate text-xs font-medium">{row.key || t("unknown")}</span>
+              <span className="block truncate text-xs font-medium" title={projectPresentation.detail || row.key}>{visibleKey || t("unknown")}</span>
+              {projectPresentation.detail && <span className="block truncate text-[10px] text-muted-foreground" title={projectPresentation.detail}>{projectPresentation.detail}</span>}
               <span className="mt-1 block h-1 overflow-hidden rounded bg-muted">
                 <span
                   data-testid={composition ? "composition-share" : undefined}
@@ -154,18 +161,28 @@ function ThroughputMatrix({ throughput, t }: {
     ["throughput-peak", t("peakRolling60s"), throughput.peak_rolling_60s],
     ["throughput-p95", t("p95Rolling60s"), throughput.p95_rolling_60s],
   ] as const;
+  const columns = [
+    ["window", t("window"), t("throughputWindowHelp")],
+    ["rpm", t("rpm"), t("rpmHelp")],
+    ["total_tpm", t("totalTPM"), t("totalTPMHelp")],
+    ["input", t("input"), t("inputTPMHelp")],
+    ["cache_read", t("cacheRead"), t("cacheReadTPMHelp")],
+    ["cache_create", t("cacheCreate"), t("cacheCreateTPMHelp")],
+    ["output", t("output"), t("outputTPMHelp")],
+  ] as const;
   return (
     <div data-testid="throughput-matrix" className="min-w-0 overflow-x-auto">
       <table className="w-full min-w-[32rem] text-[10px]">
         <thead className="text-left text-muted-foreground">
           <tr>
-            <th className="pb-1.5 pr-2">{t("window")}</th>
-            <th className="pb-1.5 pr-2 text-right">{t("rpm")}</th>
-            <th className="pb-1.5 pr-2 text-right">{t("totalTPM")}</th>
-            <th className="pb-1.5 pr-2 text-right">{t("input")}</th>
-            <th className="pb-1.5 pr-2 text-right">{t("cacheRead")}</th>
-            <th className="pb-1.5 pr-2 text-right">{t("cacheCreate")}</th>
-            <th className="pb-1.5 text-right">{t("output")}</th>
+            {columns.map(([key, label, help], index) => (
+              <th key={key} className={`pb-1.5 ${index < columns.length - 1 ? "pr-2" : ""} ${index ? "text-right" : ""}`}>
+                <span className="inline-flex items-center gap-1" title={help}>
+                  {label}{index > 0 && <span className="text-[9px] font-normal">({key === "rpm" ? "req/min" : "tok/min"})</span>}
+                  <Info aria-hidden="true" className="h-3 w-3 shrink-0 opacity-60" />
+                </span>
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody className="divide-y divide-border font-mono tabular-nums">
@@ -261,6 +278,10 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const [filters, setFilters] = useState<UsageFilters>(() => getInitialUsageFilters(location.search));
   const [granularity, setGranularity] = useState(() => localStorage.getItem("au-granularity") || "1h");
+  const [timeWindowHours, setTimeWindowHours] = useState<number | null>(() => {
+    const stored = Number(localStorage.getItem("au-time-window-hours") || "0");
+    return stored > 0 ? stored : null;
+  });
   const [data, setData] = useState<DashboardData | null>(null);
   const [throughput, setThroughput] = useState<ThroughputResult>(EMPTY_THROUGHPUT);
   const [throughputModel, setThroughputModel] = useState("");
@@ -286,13 +307,14 @@ export default function Dashboard() {
 
   const fetchData = useCallback(async () => {
     const generation = ++overviewGenerationRef.current;
-    const request = { ...getUsageRequestParams(filters), granularity };
+    const request = getUsageRequestParams(filters);
+    const trendRequest = { ...request, granularity };
     setLoading(true);
     setError(null);
     try {
       const [stats, tokens, sources, models, projects, collectionStatus] = await Promise.all([
         fetchAPI<DashboardStats>("stats", request),
-        fetchAPI<TokensRow[]>("tokens-over-time", request),
+        fetchAPI<TokensRow[]>("tokens-over-time", trendRequest),
         fetchAPI<UsageBreakdown[]>("usage-breakdown", { ...request, dimension: "source" }),
         fetchAPI<UsageBreakdown[]>("usage-breakdown", { ...request, dimension: "model" }),
         fetchAPI<UsageBreakdown[]>("usage-breakdown", { ...request, dimension: "project" }),
@@ -350,6 +372,8 @@ export default function Dashboard() {
   useEffect(() => { void fetchThroughput(); }, [fetchThroughput]);
 
   const updatePreset = (preset: TimePreset) => {
+    setTimeWindowHours(null);
+    localStorage.removeItem("au-time-window-hours");
     setFilters((current) => ({
       ...current,
       preset,
@@ -357,16 +381,36 @@ export default function Dashboard() {
     }));
   };
 
+  const updateTimeWindow = (hours: number | null) => {
+    setTimeWindowHours(hours);
+    if (hours) {
+      setFilters((current) => ({ ...current, preset: "custom", ...getTimeWindowRange(hours) }));
+      localStorage.setItem("au-time-window-hours", String(hours));
+    } else {
+      localStorage.removeItem("au-time-window-hours");
+    }
+  };
+
   const updateGranularity = (value: string) => {
     setGranularity(value);
     localStorage.setItem("au-granularity", value);
   };
 
-  const clearContext = (key: "model" | "project") => {
-    setFilters((current) => ({ ...current, [key]: "" }));
+  const applyQueryFilters = (next: UsageFilters) => {
+    setTimeWindowHours(null);
+    localStorage.removeItem("au-time-window-hours");
+    setFilters(next);
     const query = new URLSearchParams(location.search);
-    query.delete(key);
+    for (const key of ["from", "to", "source", "model", "project"] as const) {
+      if (next[key]) query.set(key, next[key]);
+      else query.delete(key);
+    }
     navigate({ pathname: location.pathname, search: query.toString() }, { replace: true });
+  };
+
+  const clearAllQueryFilters = () => {
+    const range = getTimeRange("last7d");
+    applyQueryFilters({ ...filters, ...range, preset: "last7d", source: "", model: "", project: "" });
   };
 
   const openSessions = (overrides: Partial<UsageFilters>) => {
@@ -374,7 +418,7 @@ export default function Dashboard() {
   };
 
   const tokenOption = useMemo(() => ({
-    tooltip: { trigger: "axis" },
+    tooltip: { trigger: "axis", confine: true },
     legend: { type: "scroll", top: 0, left: "center" },
     grid: { left: 8, right: 8, top: 30, bottom: 4, containLabel: true },
     xAxis: { type: "category", data: data?.tokens.map((row) => row.date) || [], axisLabel: { hideOverlap: true, fontSize: 11 } },
@@ -390,7 +434,7 @@ export default function Dashboard() {
   const throughputView = useMemo(() => buildThroughputView(throughput.series, throughputMode), [throughput.series, throughputMode]);
 
   const throughputOption = useMemo(() => ({
-    tooltip: { trigger: "axis" },
+    tooltip: { trigger: "axis", confine: true },
     legend: { type: "scroll", top: 0, left: "center" },
     grid: { left: 8, right: 8, top: 30, bottom: 4, containLabel: true },
     xAxis: { type: "category", data: throughput.series.map((point) => point.minute), axisLabel: { hideOverlap: true, fontSize: 10 } },
@@ -413,6 +457,9 @@ export default function Dashboard() {
   }), [throughput, throughputView.ceiling, t]);
 
   const stats = data?.stats;
+  const rangeDetail = timeWindowHours
+    ? t(`window_${timeWindowHours}h`)
+    : `${filters.from} ${t("to")} ${filters.to}`;
   const collectionNeedsAttention = Boolean(data?.collectionStatus && data.collectionStatus.status !== "available");
   const noUsage = Boolean(data && !data.stats.total_calls && !data.stats.total_tokens
     && !data.sources.length && !data.models.length && !data.projects.length);
@@ -424,6 +471,8 @@ export default function Dashboard() {
         onPresetChange={updatePreset}
         granularity={granularity}
         onGranularityChange={updateGranularity}
+        timeWindowHours={timeWindowHours}
+        onTimeWindowChange={updateTimeWindow}
         source={filters.source}
         onSourceChange={(source) => setFilters((current) => ({ ...current, source }))}
         onRefresh={() => { void fetchData(); void fetchThroughput(); }}
@@ -431,6 +480,9 @@ export default function Dashboard() {
         customTo={filters.to}
         onCustomFromChange={(from) => setFilters((current) => ({ ...current, preset: "custom", from }))}
         onCustomToChange={(to) => setFilters((current) => ({ ...current, preset: "custom", to }))}
+        filters={filters}
+        onFiltersApply={applyQueryFilters}
+        onClearFilters={clearAllQueryFilters}
       />
 
       {data?.collectionStatus && collectionNeedsAttention && (
@@ -457,34 +509,7 @@ export default function Dashboard() {
         </aside>
       )}
 
-      {(filters.model || filters.project) && (
-        <aside data-testid="drilldown-context" className="flex min-w-0 flex-wrap items-center gap-2 border-l-2 border-accent px-3 py-1.5 text-xs">
-          <span className="font-medium text-muted-foreground">{t("drillDownContext")}</span>
-          {filters.model && (
-            <span className="inline-flex max-w-full items-center gap-1 rounded border border-border bg-card px-2 py-1">
-              <span className="truncate">{t("modelFilter")}: {filters.model}</span>
-              <button
-                type="button"
-                aria-label={`${t("clearModelFilter")} ${filters.model}`}
-                onClick={() => clearContext("model")}
-                className="h-5 w-5 shrink-0 rounded text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-              >x</button>
-            </span>
-          )}
-          {filters.project && (
-            <span className="inline-flex max-w-full items-center gap-1 rounded border border-border bg-card px-2 py-1">
-              <span className="truncate">{t("projectFilter")}: {filters.project}</span>
-              <button
-                type="button"
-                aria-label={`${t("clearProjectFilter")} ${filters.project}`}
-                onClick={() => clearContext("project")}
-                className="h-5 w-5 shrink-0 rounded text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-              >x</button>
-            </span>
-          )}
-          <span className="text-muted-foreground">{t("overviewFiltersNote")}</span>
-        </aside>
-      )}
+      {(filters.model || filters.project) && <p className="px-1 text-[11px] text-muted-foreground">{t("overviewFilterLimitation")}</p>}
 
       <main aria-busy={loading} className="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto pb-4">
         {loading && !data ? (
@@ -506,7 +531,7 @@ export default function Dashboard() {
         ) : data && stats ? (
           <>
             <section data-testid="dashboard-band-core" className="border-y border-border bg-card/30 px-4 py-4">
-              <BandTitle title={t("coreMetrics")} detail={`${filters.from} ${t("to")} ${filters.to}`} />
+              <BandTitle title={t("coreMetrics")} detail={rangeDetail} />
               <div className="grid grid-cols-2 gap-x-4 gap-y-4 lg:grid-cols-5">
                 <Metric label={t("totalTokens")} value={fmtTokens(stats.total_tokens)} detail={`${stats.total_calls} ${t("apiCalls")}`} />
                 <Metric label={t("localCostEstimate")} value={fmtCost(stats.total_cost)} />
@@ -519,7 +544,18 @@ export default function Dashboard() {
             <section data-testid="dashboard-band-analysis" className="border-y border-border px-4 py-4">
               <div className="grid min-w-0 grid-cols-1 gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(16rem,1fr)]">
                 <div className="min-w-0">
-                  <BandTitle title={t("tokenTrend")} detail={t("clickDateForSessions")} />
+                  <header className="mb-3 flex min-w-0 flex-wrap items-end justify-between gap-2">
+                    <div className="min-w-0">
+                      <h2 className="truncate text-sm font-semibold">{t("tokenTrend")}</h2>
+                      <p className="truncate text-xs text-muted-foreground">{t("clickDateForSessions")}</p>
+                    </div>
+                    <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                      <span>{t("trendGranularity")}</span>
+                      <select aria-label={t("trendGranularity")} value={granularity} onChange={(event) => updateGranularity(event.target.value)} className="h-8 rounded-md border border-border bg-card px-2 text-xs text-foreground">
+                        {["1m", "30m", "1h", "6h", "12h", "1d", "1w", "1M"].map((value) => <option key={value} value={value}>{t(`gran_${value}`)}</option>)}
+                      </select>
+                    </label>
+                  </header>
                   <ChartCard
                     title={t("tokenUsage")}
                     option={tokenOption}
@@ -570,6 +606,7 @@ export default function Dashboard() {
                     onSelect={(project) => openSessions({ project })}
                     t={t}
                     compact
+                    projectLabels
                   />
                 </div>
                 <div

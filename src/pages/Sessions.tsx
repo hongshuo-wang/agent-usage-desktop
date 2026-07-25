@@ -7,7 +7,7 @@ import SessionTimeline from "../components/sessions/SessionTimeline";
 import TimeRangeSelector from "../components/TimeRangeSelector";
 import { fetchAPI, fetchRaw } from "../lib/api";
 import type { RawEventResponse, SessionEvent, SessionSummary, UsageFilters } from "../lib/types";
-import { DEFAULT_USAGE_FILTERS, getInitialUsageFilters, persistUsageFilters } from "../lib/usageFilters";
+import { buildSessionsSearch, DEFAULT_USAGE_FILTERS, getInitialUsageFilters, persistUsageFilters } from "../lib/usageFilters";
 import { getTimeRange, type TimePreset } from "../lib/utils";
 
 const SESSION_PAGE_SIZE = 50;
@@ -290,6 +290,12 @@ export default function Sessions() {
     navigate({ pathname: "/sessions", search: "" }, { replace: true });
   };
 
+  const applyQueryFilters = (next: UsageFilters) => {
+    setFilters(next);
+    setDrilldown({ from: next.from, to: next.to, source: next.source, model: next.model, project: next.project });
+    navigate({ pathname: "/sessions", search: buildSessionsSearch(next) }, { replace: true });
+  };
+
   const selectedKey = selected ? sessionIdentity(selected) : null;
   const contextItems = useMemo(() => Object.entries(drilldown).filter(([, value]) => value), [drilldown]);
 
@@ -353,32 +359,10 @@ export default function Sessions() {
         customTo={filters.to}
         onCustomFromChange={(from) => setFilters((current) => ({ ...current, preset: "custom", from }))}
         onCustomToChange={(to) => setFilters((current) => ({ ...current, preset: "custom", to }))}
+        filters={filters}
+        onFiltersApply={applyQueryFilters}
+        onClearFilters={clearAllFilters}
       />
-
-      <div className="flex min-w-0 flex-wrap items-end gap-3 px-1" data-testid="session-model-project-filters">
-        <label className="flex min-w-48 flex-1 flex-col gap-1 text-[10px] text-muted-foreground sm:max-w-64">
-          <span>{t("modelFilter")}</span>
-          <input
-            type="text"
-            aria-label={t("modelFilter")}
-            value={filters.model}
-            onChange={(event) => setFilters((current) => ({ ...current, model: event.target.value }))}
-            autoComplete="off"
-            className="h-8 min-w-0 rounded border border-border bg-card px-2.5 text-xs text-foreground outline-none focus:border-accent"
-          />
-        </label>
-        <label className="flex min-w-48 flex-1 flex-col gap-1 text-[10px] text-muted-foreground sm:max-w-64">
-          <span>{t("projectFilter")}</span>
-          <input
-            type="text"
-            aria-label={t("projectFilter")}
-            value={filters.project}
-            onChange={(event) => setFilters((current) => ({ ...current, project: event.target.value }))}
-            autoComplete="off"
-            className="h-8 min-w-0 rounded border border-border bg-card px-2.5 text-xs text-foreground outline-none focus:border-accent"
-          />
-        </label>
-      </div>
 
       {hasDrilldown(drilldown) && (
         <aside data-testid="session-filter-context" className="flex min-w-0 flex-wrap items-center gap-2 border-y border-border px-3 py-2 text-xs">
