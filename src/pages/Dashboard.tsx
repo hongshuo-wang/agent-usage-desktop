@@ -399,7 +399,12 @@ export default function Dashboard() {
       { type: "value", name: "RPM", position: "right", splitLine: { show: false } },
     ],
     series: [
-      { name: t("input"), type: "bar", stack: "tpm", yAxisIndex: 0, data: throughput.series.map((point) => point.input_tpm), color: CHART_COLORS[0] },
+      { name: t("input"), type: "bar", stack: "tpm", yAxisIndex: 0, data: throughput.series.map((point) => point.input_tpm), color: CHART_COLORS[0], markPoint: throughputMode === "trend" ? {
+        symbol: "pin",
+        symbolSize: 34,
+        label: { formatter: t("throughputHighUsage"), fontSize: 9 },
+        data: throughputView.peakIndices.map((index) => ({ coord: [index, throughputView.ceiling], value: throughput.series[index]?.total_tpm })),
+      } : undefined },
       { name: t("cacheRead"), type: "bar", stack: "tpm", yAxisIndex: 0, data: throughput.series.map((point) => point.cache_read_tpm), color: CHART_COLORS[3] },
       { name: t("cacheCreate"), type: "bar", stack: "tpm", yAxisIndex: 0, data: throughput.series.map((point) => point.cache_create_tpm), color: CHART_COLORS[2] },
       { name: t("output"), type: "bar", stack: "tpm", yAxisIndex: 0, data: throughput.series.map((point) => point.output_tpm), color: CHART_COLORS[1] },

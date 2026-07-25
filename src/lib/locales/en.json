@@ -113,6 +113,7 @@
   "throughputTrendMode": "Trend",
   "throughputAbsoluteMode": "Actual",
   "throughputTrendTitle": "Observed throughput · high-usage periods",
+  "throughputHighUsage": "High usage",
   "localObserved": "Measured from local usage events",
   "collectionIndexStatus": "Local index status",
   "lastIndexUpdate": "Last index update",

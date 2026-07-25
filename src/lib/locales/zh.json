@@ -113,6 +113,7 @@
   "throughputTrendMode": "趋势",
   "throughputAbsoluteMode": "真实值",
   "throughputTrendTitle": "本地观测吞吐趋势 · 高峰时段",
+  "throughputHighUsage": "高峰时段",
   "localObserved": "根据本地用量事件计算",
   "collectionIndexStatus": "本地索引状态",
   "lastIndexUpdate": "最后索引更新",
