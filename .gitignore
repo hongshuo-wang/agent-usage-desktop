@@ -52,8 +52,5 @@ src-tauri/src-tauri/
 .superpowers/
 .worktrees/
 
-# Keep executable implementation plans versioned even if a global ignore excludes docs/.
-!docs/
-!docs/superpowers/
-!docs/superpowers/plans/
-!docs/superpowers/plans/*.md
+# Local planning and design artifacts stay out of the repository.
+docs/
