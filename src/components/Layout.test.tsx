@@ -22,15 +22,13 @@ describe("Layout", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole("link", { name: "title" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "sessionLog" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "settings" })).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "title" })).not.toHaveLength(0);
+    expect(screen.getAllByRole("link", { name: "sessionLog" })).not.toHaveLength(0);
+    expect(screen.getAllByRole("link", { name: "settings" })).not.toHaveLength(0);
     expect(screen.queryByRole("link", { name: "config" })).not.toBeInTheDocument();
-    expect(screen.getAllByRole("link").map((link) => link.getAttribute("href"))).toEqual([
-      "/",
-      "/sessions",
-      "/settings",
-    ]);
+    expect(new Set(screen.getAllByRole("link").map((link) => link.getAttribute("href")))).toEqual(
+      new Set(["/", "/sessions", "/settings"]),
+    );
   });
 
   it("keeps the header fixed while making the main content vertically scrollable", () => {

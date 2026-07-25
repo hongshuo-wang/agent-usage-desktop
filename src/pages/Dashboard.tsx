@@ -19,6 +19,7 @@ import {
   persistUsageFilters,
 } from "../lib/usageFilters";
 import { CHART_COLORS, fmtCost, fmtTokens, getTimeRange, type TimePreset } from "../lib/utils";
+import { buildThroughputView, type ThroughputViewMode } from "../lib/throughputScale";
 
 type DashboardData = {
   stats: DashboardStats;
@@ -263,6 +264,9 @@ export default function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [throughput, setThroughput] = useState<ThroughputResult>(EMPTY_THROUGHPUT);
   const [throughputModel, setThroughputModel] = useState("");
+  const [throughputMode, setThroughputMode] = useState<ThroughputViewMode>(() => (
+    localStorage.getItem("au-throughput-mode") === "absolute" ? "absolute" : "trend"
+  ));
   const [loading, setLoading] = useState(true);
   const [throughputLoading, setThroughputLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -383,13 +387,15 @@ export default function Dashboard() {
     ],
   }), [data?.tokens, t]);
 
+  const throughputView = useMemo(() => buildThroughputView(throughput.series, throughputMode), [throughput.series, throughputMode]);
+
   const throughputOption = useMemo(() => ({
     tooltip: { trigger: "axis" },
     legend: { type: "scroll", top: 0, left: "center" },
     grid: { left: 8, right: 8, top: 30, bottom: 4, containLabel: true },
     xAxis: { type: "category", data: throughput.series.map((point) => point.minute), axisLabel: { hideOverlap: true, fontSize: 10 } },
     yAxis: [
-      { type: "value", name: "TPM" },
+      { type: "value", name: "TPM", max: throughputView.ceiling || undefined },
       { type: "value", name: "RPM", position: "right", splitLine: { show: false } },
     ],
     series: [
@@ -399,12 +405,10 @@ export default function Dashboard() {
       { name: t("output"), type: "bar", stack: "tpm", yAxisIndex: 0, data: throughput.series.map((point) => point.output_tpm), color: CHART_COLORS[1] },
       { name: t("rpm"), type: "line", yAxisIndex: 1, data: throughput.series.map((point) => point.rpm), color: CHART_COLORS[5], smooth: true },
     ],
-  }), [throughput, t]);
+  }), [throughput, throughputView.ceiling, t]);
 
   const stats = data?.stats;
-  const pricingCoverage = stats && stats.total_calls > 0
-    ? Math.min(1, Math.max(0, (stats.total_calls - stats.unpriced_records) / stats.total_calls))
-    : 0;
+  const collectionNeedsAttention = Boolean(data?.collectionStatus && data.collectionStatus.status !== "available");
   const noUsage = Boolean(data && !data.stats.total_calls && !data.stats.total_tokens
     && !data.sources.length && !data.models.length && !data.projects.length);
 
@@ -424,13 +428,13 @@ export default function Dashboard() {
         onCustomToChange={(to) => setFilters((current) => ({ ...current, preset: "custom", to }))}
       />
 
-      {data?.collectionStatus && (
+      {data?.collectionStatus && collectionNeedsAttention && (
         <aside
           data-testid="collection-index-status"
-          className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-y border-border bg-card/30 px-3 py-2 text-xs"
+          className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs"
         >
           <span className="font-medium">{t("collectionIndexStatus")}</span>
-          <span className="font-medium text-accent">{t(COLLECTION_STATUS_KEYS[data.collectionStatus.status])}</span>
+          <span className="font-medium text-amber-600">{t(COLLECTION_STATUS_KEYS[data.collectionStatus.status])}</span>
           <span className="text-muted-foreground">{t("lastIndexUpdate")}</span>
           {data.collectionStatus.last_indexed_at ? (
             <time dateTime={data.collectionStatus.last_indexed_at} className="font-mono tabular-nums">
@@ -442,6 +446,9 @@ export default function Dashboard() {
           <span className="ml-auto text-muted-foreground">
             {data.collectionStatus.source_count} {t("indexedSources")} / {data.collectionStatus.file_count} {t("indexedFiles")} / {data.collectionStatus.malformed_lines} {t("malformedLines")}
           </span>
+          <button type="button" onClick={() => navigate("/settings?section=index")} className="font-medium text-amber-700 underline underline-offset-2 hover:text-foreground">
+            {t("openSystemDiagnostics")}
+          </button>
         </aside>
       )}
 
@@ -501,31 +508,6 @@ export default function Dashboard() {
                 <Metric label={t("sessions")} value={String(stats.total_sessions)} />
                 <Metric label={t("userMessages")} value={String(stats.total_prompts)} />
                 <Metric label={t("cacheHitRate")} value={`${(stats.cache_hit_rate * 100).toFixed(1)}%`} />
-              </div>
-              <div
-                data-testid="pricing-coverage"
-                className="mt-4 grid min-w-0 gap-2 border-t border-border pt-3 text-xs sm:grid-cols-2 lg:grid-cols-[auto_minmax(0,1fr)_auto] lg:items-center lg:gap-4"
-              >
-                <span className="flex min-w-0 items-baseline gap-2">
-                  <span className="text-muted-foreground">{t("pricingCoverage")}</span>
-                  <strong className="font-mono tabular-nums">{(pricingCoverage * 100).toFixed(1)}%</strong>
-                </span>
-                <span className="flex min-w-0 flex-col gap-1 text-muted-foreground sm:items-end lg:items-start">
-                  <span>{stats.unpriced_records} {t("unpricedRecordsCostExcluded")}</span>
-                  {stats.legacy_cost_usd > 0 && (
-                    <span>{fmtCost(stats.legacy_cost_usd)} {t("legacyCostUntraceable")}</span>
-                  )}
-                </span>
-                <span className="flex min-w-0 items-baseline gap-2 sm:col-span-2 lg:col-span-1 lg:justify-self-end">
-                  <span className="text-muted-foreground">{t("lastPricingSync")}</span>
-                  {stats.pricing_last_synced_at ? (
-                    <time dateTime={stats.pricing_last_synced_at} className="font-mono tabular-nums">
-                      {formatLastIndexed(stats.pricing_last_synced_at)}
-                    </time>
-                  ) : (
-                    <span className="text-muted-foreground">{t("notAvailable")}</span>
-                  )}
-                </span>
               </div>
             </section>
 
@@ -594,26 +576,39 @@ export default function Dashboard() {
                       <h2 className="truncate text-sm font-semibold">{t("localObservedThroughput")}</h2>
                       <p className="truncate text-xs text-muted-foreground">{t("notProviderQuota")}</p>
                     </div>
-                    <label className="flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground">
-                      <span>{t("throughputModel")}</span>
-                      <select
-                        aria-label={t("throughputModel")}
-                        value={throughputModel}
-                        onChange={(event) => setThroughputModel(event.target.value)}
-                        className="max-w-36 rounded border border-border bg-card px-2 py-1 text-xs text-foreground"
-                      >
-                        <option value="">{t("allModels")}</option>
-                        {data.models.filter((row) => row.key).map((row) => (
-                          <option key={row.key} value={row.key}>{row.key}</option>
+                    <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+                      <div className="inline-flex rounded-md border border-border bg-card p-0.5" aria-label={t("throughputScaleMode")}>
+                        {(["trend", "absolute"] as const).map((mode) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            aria-pressed={throughputMode === mode}
+                            onClick={() => { setThroughputMode(mode); localStorage.setItem("au-throughput-mode", mode); }}
+                            className={`px-2 py-1 text-[10px] font-medium ${throughputMode === mode ? "rounded bg-foreground text-background" : "text-muted-foreground hover:text-foreground"}`}
+                          >{t(mode === "trend" ? "throughputTrendMode" : "throughputAbsoluteMode")}</button>
                         ))}
-                      </select>
-                    </label>
+                      </div>
+                      <label className="flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground">
+                        <span>{t("throughputModel")}</span>
+                        <select
+                          aria-label={t("throughputModel")}
+                          value={throughputModel}
+                          onChange={(event) => setThroughputModel(event.target.value)}
+                          className="max-w-36 rounded-md border border-border bg-card px-2 py-1 text-xs text-foreground"
+                        >
+                          <option value="">{t("allModels")}</option>
+                          {data.models.filter((row) => row.key).map((row) => (
+                            <option key={row.key} value={row.key}>{row.key}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
                   </header>
                   <ThroughputMatrix throughput={throughput} t={t} />
                   {throughputError && (
                     <p className="mt-2 break-words text-xs text-red-500">{throughputError}</p>
                   )}
-                  <ChartCard title={t("observedTPMTrend")} option={throughputOption} className="mt-3 h-40" />
+                  <ChartCard title={t("observedTPMTrend")} option={throughputOption} className="mt-3 h-48" />
                 </div>
               </div>
             </section>

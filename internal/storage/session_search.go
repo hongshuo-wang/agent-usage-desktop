@@ -310,6 +310,10 @@ func loadSessionEventSummaries(db sessionQueryer, query SessionQuery, identities
 				ORDER BY e.timestamp, e.raw_offset, e.raw_index, e.id) AS title_rank
 		FROM session_events e JOIN selected x ON x.source=e.source AND x.session_id=e.session_id
 		WHERE e.event_type='user_message' AND e.content!=''
+			AND e.content NOT LIKE '<environment_context>%'
+			AND e.content NOT LIKE '<permissions instructions>%'
+			AND e.content NOT LIKE '<collaboration_mode%'
+			AND e.content NOT LIKE '# AGENTS.md instructions%'
 	)
 	SELECT x.source, x.session_id, COALESCE(ec.tool_calls,0), COALESCE(ec.errors,0),
 		COALESCE(rt.content,'')

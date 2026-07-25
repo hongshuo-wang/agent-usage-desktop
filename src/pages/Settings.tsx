@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, Database, Eye, RefreshCw, Save, Search, Upload, X } from "lucide-react";
+import { AlertTriangle, Database, Eye, RefreshCw, Save, Search, Star, StarOff, Upload, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { fetchAPI } from "../lib/api";
 import { applyOwnedHydration } from "./settingsHydration";
@@ -117,6 +117,14 @@ export default function Settings() {
   const [pricingCatalog, setPricingCatalog] = useState<PricingCatalog | null>(null);
   const [pricingCatalogError, setPricingCatalogError] = useState<string | null>(null);
   const [pricingCatalogSearch, setPricingCatalogSearch] = useState("");
+  const [pinnedModels, setPinnedModels] = useState<string[]>(() => {
+    try {
+      const value = JSON.parse(localStorage.getItem("au-pinned-models") || "[]");
+      return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+    } catch {
+      return [];
+    }
+  });
   const pricingFileInputRef = useRef<HTMLInputElement>(null);
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsError, setSettingsError] = useState<string | null>(null);
@@ -371,6 +379,14 @@ export default function Settings() {
     setPricingCatalogSearch("");
   };
 
+  const togglePinnedModel = (model: string) => {
+    setPinnedModels((current) => {
+      const next = current.includes(model) ? current.filter((item) => item !== model) : [...current, model];
+      localStorage.setItem("au-pinned-models", JSON.stringify(next));
+      return next;
+    });
+  };
+
   const handlePricingCatalogKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -447,8 +463,16 @@ export default function Settings() {
   };
 
   return (
-    <div className="min-w-0 max-w-5xl space-y-8 pb-8">
-      <section className="border-y border-border py-5">
+    <div className="system-page-layout min-w-0 max-w-6xl pb-8">
+      <aside className="system-subnav hidden lg:block">
+        <div className="mb-3 text-sm font-semibold">{t("systemWorkspace")}</div>
+        <a href="#data-sources" className="system-subnav-link system-subnav-link-active">{t("dataSources")}</a>
+        <a href="#pricing" className="system-subnav-link">{t("pricing")}</a>
+        <a href="#index-diagnostics" className="system-subnav-link">{t("indexDiagnostics")}</a>
+        <a href="#preferences" className="system-subnav-link">{t("preferences")}</a>
+      </aside>
+      <div className="min-w-0 space-y-8">
+      <section id="appearance" className="border-y border-border py-5">
         <h2 className="mb-4 text-sm font-semibold">{t("appearanceAndLanguage")}</h2>
         <div className="grid gap-5 sm:grid-cols-2">
           <div>
@@ -470,7 +494,7 @@ export default function Settings() {
         </div>
       </section>
 
-      <section className="border-y border-border py-5">
+      <section id="data-sources" className="border-y border-border py-5">
         <div className="mb-4">
           <h2 className="text-sm font-semibold">{t("collectorSettings")}</h2>
           <p className="mt-1 text-xs text-muted-foreground">{t("collectorSettingsDetail")}</p>
@@ -547,7 +571,7 @@ export default function Settings() {
                 <Save className="h-4 w-4" /> {saveState === "pending" ? t("savingSettings") : t("save")}
               </button>
             </div>
-            <div className="border-t border-border py-4">
+            <div id="pricing" className="border-t border-border py-4">
               <h3 className="text-xs font-medium">{t("pricingSourceTitle")}</h3>
               <p className="mt-1 max-w-2xl text-[10px] leading-4 text-muted-foreground">
                 {t("pricingSourceDetail")} {" "}
@@ -643,15 +667,15 @@ export default function Settings() {
             aria-modal="true"
             aria-labelledby="pricing-catalog-title"
             onKeyDown={handlePricingCatalogKeyDown}
-            className="flex max-h-[min(80vh,46rem)] w-full max-w-5xl flex-col overflow-hidden rounded border border-border bg-background shadow-xl"
+            className="flex h-[min(88vh,56rem)] w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-border bg-background shadow-xl"
           >
             <div className="flex items-start justify-between gap-4 border-b border-border p-5">
               <div>
                 <h2 id="pricing-catalog-title" className="text-sm font-semibold">{t("pricingCatalogTitle")}</h2>
                 <p className="mt-1 text-xs text-muted-foreground">{t("pricingCatalogDetail")}</p>
               </div>
-              <button ref={pricingCatalogCloseRef} type="button" aria-label={t("closePricingCatalog")} onClick={closePricingCatalog} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground">
-                <X className="h-4 w-4" />
+              <button ref={pricingCatalogCloseRef} type="button" aria-label={t("closePricingCatalog")} onClick={closePricingCatalog} className="icon-button shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground">
+                <X className="h-5 w-5" />
               </button>
             </div>
             <div className="min-h-0 flex-1 p-5">
@@ -677,6 +701,7 @@ export default function Settings() {
                     <table className="w-full min-w-[46rem] text-left text-xs">
                       <thead className="sticky top-0 bg-muted text-muted-foreground">
                         <tr>
+                          <th className="w-12 px-3 py-2 font-medium">{t("pinned")}</th>
                           <th className="px-3 py-2 font-medium">{t("model")}</th>
                           <th className="px-3 py-2 text-right font-medium">{t("pricingInputPrice")}</th>
                           <th className="px-3 py-2 text-right font-medium">{t("pricingOutputPrice")}</th>
@@ -685,8 +710,22 @@ export default function Settings() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-border">
-                        {pricingCatalog.models.filter((entry) => entry.model.toLowerCase().includes(pricingCatalogSearch.trim().toLowerCase())).map((entry) => (
+                        {pricingCatalog.models
+                          .filter((entry) => entry.model.toLowerCase().includes(pricingCatalogSearch.trim().toLowerCase()))
+                          .sort((left, right) => Number(pinnedModels.includes(right.model)) - Number(pinnedModels.includes(left.model)))
+                          .map((entry) => (
                           <tr key={entry.model} className="hover:bg-muted/50">
+                            <td className="px-3 py-2">
+                              <button
+                                type="button"
+                                aria-label={`${t(pinnedModels.includes(entry.model) ? "unpinModel" : "pinModel")} ${entry.model}`}
+                                aria-pressed={pinnedModels.includes(entry.model)}
+                                onClick={() => togglePinnedModel(entry.model)}
+                                className="icon-button h-7 w-7 text-muted-foreground hover:text-accent"
+                              >
+                                {pinnedModels.includes(entry.model) ? <Star className="h-4 w-4 fill-current" /> : <StarOff className="h-4 w-4" />}
+                              </button>
+                            </td>
                             <td className="max-w-[24rem] truncate px-3 py-2 font-mono" title={entry.model}>{entry.model}</td>
                             <td className="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums">{formatPricePerMillion(entry.input_cost_per_token)}</td>
                             <td className="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums">{formatPricePerMillion(entry.output_cost_per_token)}</td>
@@ -707,7 +746,7 @@ export default function Settings() {
         </div>
       )}
 
-      <section className="border-y border-border py-5">
+      <section id="preferences" className="border-y border-border py-5">
         <h2 className="mb-4 text-sm font-semibold">{t("desktopPreferences")}</h2>
         <div className="divide-y divide-border border-t border-border">
           <div className="flex items-center justify-between gap-4 py-4">
@@ -738,7 +777,7 @@ export default function Settings() {
         </div>
       </section>
 
-      <section className="border-y border-border py-5">
+      <section id="index-diagnostics" className="border-y border-border py-5">
         <h2 className="text-sm font-semibold">{t("sessionIndex")}</h2>
         <p className="mt-1 text-xs text-muted-foreground">{t("sessionIndexDetail")}</p>
         <button
@@ -780,6 +819,7 @@ export default function Settings() {
           </section>
         </div>
       )}
+      </div>
     </div>
   );
 }

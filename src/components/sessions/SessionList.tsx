@@ -1,6 +1,7 @@
 import { Search } from "lucide-react";
 import type { SessionSummary } from "../../lib/types";
 import { fmtCost, fmtTokens, relativeTime } from "../../lib/utils";
+import { humanizeSessionTitle } from "../../lib/sessionPresentation";
 
 type Translate = (key: string) => string;
 
@@ -100,7 +101,7 @@ export default function SessionList({
                     className={`w-full min-w-0 px-3 py-3 text-left transition-colors ${selected ? "bg-accent-dim" : "hover:bg-muted/50"}`}
                   >
                     <div className="flex min-w-0 items-start justify-between gap-2">
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium">{session.title}</span>
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium">{humanizeSessionTitle(session.title, session.project, session.cwd, session.session_id)}</span>
                       <time className="shrink-0 text-[10px] text-muted-foreground" dateTime={session.last_activity}>
                         {relativeTime(session.last_activity, t)}
                       </time>

@@ -299,18 +299,12 @@ describe("Dashboard overview", () => {
     expect(within(row).getByText("$0.4000*")).toBeInTheDocument();
   });
 
-  it("shows local estimate coverage pricing freshness and excluded cost semantics", async () => {
+  it("keeps pricing coverage details out of the daily overview", async () => {
     renderDashboard();
 
     const core = await screen.findByTestId("dashboard-band-core");
     expect(within(core).getByText("localCostEstimate")).toBeInTheDocument();
-    const coverage = within(core).getByTestId("pricing-coverage");
-    expect(within(coverage).getByText("pricingCoverage")).toBeInTheDocument();
-    expect(within(coverage).getByText("89.5%")).toBeInTheDocument();
-    expect(within(coverage).getByText("2 unpricedRecordsCostExcluded")).toBeInTheDocument();
-    expect(within(coverage).getByText("$0.2345 legacyCostUntraceable")).toBeInTheDocument();
-    expect(within(coverage).getByText("lastPricingSync")).toBeInTheDocument();
-    expect(within(coverage).getByText("2025-01-02 05:06")).toBeInTheDocument();
+    expect(within(core).queryByTestId("pricing-coverage")).not.toBeInTheDocument();
     expect(en.localCostEstimate).toBe("Local cost estimate");
     expect(en.unpricedRecordsCostExcluded).toContain("cost is not included");
     expect(en.legacyCostUntraceable).toContain("source is not traceable");
@@ -319,15 +313,11 @@ describe("Dashboard overview", () => {
     expect(zh.legacyCostUntraceable).toContain("无法追溯");
   });
 
-  it("shows durable local index status and last indexed time", async () => {
+  it("hides healthy index status from the daily overview", async () => {
     renderDashboard();
 
-    const status = await screen.findByTestId("collection-index-status");
-    expect(within(status).getByText("collectionIndexStatus")).toBeInTheDocument();
-    expect(within(status).getByText("collectionStatusAvailable")).toBeInTheDocument();
-    expect(within(status).getByText("lastIndexUpdate")).toBeInTheDocument();
-    expect(within(status).getByText("2025-01-02 03:04")).toBeInTheDocument();
-    expect(within(status).queryByText(/collector ready/i)).not.toBeInTheDocument();
+    await screen.findByTestId("dashboard-band-core");
+    expect(screen.queryByTestId("collection-index-status")).not.toBeInTheDocument();
   });
 
   it("keeps newer overview data when an older request succeeds later", async () => {

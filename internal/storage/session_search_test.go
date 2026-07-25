@@ -231,3 +231,28 @@ func TestSearchSessionsKeepsFirstTitleOutsideSelectedRange(t *testing.T) {
 		t.Fatalf("sessions = %+v, want all-time first user-message title", sessions)
 	}
 }
+
+func TestSearchSessionsSkipsSyntheticContextWhenChoosingTitle(t *testing.T) {
+	db := tempDB(t)
+	timestamp := time.Date(2025, 7, 24, 1, 0, 0, 0, time.UTC)
+	if err := db.InsertUsage(&UsageRecord{Source: "codex", SessionID: "synthetic-title", Model: "test-model", Timestamp: timestamp}); err != nil {
+		t.Fatalf("InsertUsage: %v", err)
+	}
+	_, err := db.UpsertSessionSourceWithEvents(&SessionSource{
+		Source: "codex", SessionID: "synthetic-title", Path: "/sessions/synthetic-title.jsonl",
+		ParserVersion: "v1", CoverageStatus: "complete", SourceStatus: "available",
+	}, []SessionEventRecord{
+		{Source: "codex", SessionID: "synthetic-title", EventType: "user_message", Timestamp: timestamp, Content: "<environment_context> <cwd>/work</cwd>", RawOffset: 0},
+		{Source: "codex", SessionID: "synthetic-title", EventType: "user_message", Timestamp: timestamp.Add(time.Second), Content: "重构首页吞吐图", RawOffset: 100},
+	})
+	if err != nil {
+		t.Fatalf("UpsertSessionSourceWithEvents: %v", err)
+	}
+	sessions, err := db.SearchSessions(SessionQuery{From: timestamp.Add(-time.Minute), To: timestamp.Add(time.Minute), Limit: 10})
+	if err != nil {
+		t.Fatalf("SearchSessions: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].Title != "重构首页吞吐图" {
+		t.Fatalf("sessions = %+v, want human title", sessions)
+	}
+}
