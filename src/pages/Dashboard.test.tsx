@@ -168,6 +168,15 @@ describe("Dashboard overview", () => {
     expect(screen.getByText("notProviderQuota")).toBeInTheDocument();
   });
 
+  it("separates overview bands with space and surfaces instead of horizontal rules", async () => {
+    renderDashboard();
+
+    await screen.findByTestId("dashboard-band-core");
+    for (const band of screen.getAllByTestId(/^dashboard-band-/)) {
+      expect(band).not.toHaveClass("border-y");
+    }
+  });
+
   it("places model usage in analysis and agent composition in detail", async () => {
     renderDashboard();
 

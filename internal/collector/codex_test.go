@@ -36,7 +36,7 @@ func TestCodexCollectorEventIndexContextAppendAndPartialTail(t *testing.T) {
 		t.Fatalf("message locators = %+v", events[1:])
 	}
 	source, err := db.GetSessionSourceByPath(path)
-	if err != nil || source == nil || source.SessionID != "codex-events" || source.ParserVersion != "codex-events-v1" || source.CoverageStatus != "complete" {
+	if err != nil || source == nil || source.SessionID != "codex-events" || source.ParserVersion != "codex-events-v3" || source.CoverageStatus != "complete" {
 		t.Fatalf("source = %+v, %v", source, err)
 	}
 	from := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -141,7 +141,7 @@ func TestCodexCollectorRebuildMissingAndLargeRecord(t *testing.T) {
 		t.Fatalf("parser rebuild events = %+v", events)
 	}
 	source, _ = db.GetSessionSourceByPath(path)
-	if source == nil || source.ParserVersion != "codex-events-v1" {
+	if source == nil || source.ParserVersion != "codex-events-v3" {
 		t.Fatalf("parser rebuild source = %+v", source)
 	}
 	replacement := strings.Replace(old, "old", "new", 1)
@@ -265,6 +265,41 @@ func TestCodexCollectorSameSessionIDRemainsSeparateFromClaude(t *testing.T) {
 	}
 	if _, err := os.Stat(claudePath); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCodexCollectorTransportArtifactsDoNotInflatePrompts(t *testing.T) {
+	db := tempDB(t)
+	root := t.TempDir()
+	content := strings.Join([]string{
+		`{"timestamp":"2026-01-02T03:04:05Z","type":"session_meta","payload":{"id":"codex-transport","cwd":"/synthetic/workspace"}}`,
+		`{"timestamp":"2026-01-02T03:04:06Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<user_shell_command>\n<command>npm test</command>\n</user_shell_command>"}]}}`,
+		`{"timestamp":"2026-01-02T03:04:07Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,synthetic"},{"type":"input_text","text":"<image name=[Image #1] path=\"/tmp/synthetic.png\">"}]}}`,
+		`{"timestamp":"2026-01-02T03:04:08Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,synthetic"},{"type":"input_text","text":"<image name=[Image #2] path=\"/tmp/synthetic-2.png\">"},{"type":"input_text","text":"[Image #2]Explain the screenshot"}]}}`,
+	}, "\n") + "\n"
+	path := filepath.Join(root, "transport.jsonl")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCodexCollector(db, []string{root}).Scan(); err != nil {
+		t.Fatal(err)
+	}
+
+	events, err := db.ListSessionEvents("codex", "codex-transport", 20, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Content != "Explain the screenshot" {
+		t.Fatalf("displayable events = %+v, want only semantic text", events)
+	}
+	from := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	to := from.Add(24 * time.Hour)
+	stats, err := db.GetDashboardStats(from, to, "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.TotalPrompts != 2 {
+		t.Fatalf("prompt count = %d, want image-only and image-with-text prompts", stats.TotalPrompts)
 	}
 }
 

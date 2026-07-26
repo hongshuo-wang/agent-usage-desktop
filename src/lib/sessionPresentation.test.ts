@@ -21,11 +21,16 @@ const event = (event_type: SessionEvent["event_type"], content = ""): SessionEve
 describe("session presentation", () => {
   it("falls back from synthetic context titles", () => {
     expect(humanizeSessionTitle("<environment_context> <cwd>/work</cwd>", "agent-usage", "/work/agent-usage", "id")).toBe("agent-usage");
+    expect(humanizeSessionTitle("<user_shell_command>npm test</user_shell_command>", "agent-usage", "/work/agent-usage", "id")).toBe("agent-usage");
+    expect(humanizeSessionTitle('<image name=[Image #1] path="/tmp/synthetic.png">', "agent-usage", "/work/agent-usage", "id")).toBe("agent-usage");
+    expect(humanizeSessionTitle("[Image #1]Explain the screenshot", "agent-usage", "/work/agent-usage", "id")).toBe("Explain the screenshot");
     expect(humanizeSessionTitle("Real request", "agent-usage", "/work/agent-usage", "id")).toBe("Real request");
   });
 
   it("keeps conversation, tools and errors readable while hiding technical events", () => {
     expect(isReadableSessionEvent(event("user_message", "hello"))).toBe(true);
+    expect(isReadableSessionEvent(event("user_message", "<user_shell_command>npm test</user_shell_command>"))).toBe(false);
+    expect(isReadableSessionEvent(event("user_message", '<image name=[Image #1] path="/tmp/synthetic.png">'))).toBe(false);
     expect(isReadableSessionEvent(event("assistant_message", "answer"))).toBe(true);
     expect(isReadableSessionEvent(event("tool_call"))).toBe(true);
     expect(isReadableSessionEvent(event("error", "failed"))).toBe(true);

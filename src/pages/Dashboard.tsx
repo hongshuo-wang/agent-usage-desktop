@@ -19,7 +19,7 @@ import {
   getUsageRequestParams,
   persistUsageFilters,
 } from "../lib/usageFilters";
-import { CHART_COLORS, fmtCost, fmtTokens, getTimeRange, getTimeWindowRange, type TimePreset } from "../lib/utils";
+import { CHART_COLORS, fmtCost, fmtTokens, getTimeRange, type TimePreset } from "../lib/utils";
 import { buildThroughputView, type ThroughputViewMode } from "../lib/throughputScale";
 import { presentProjectKey } from "../lib/queryPresentation";
 
@@ -45,9 +45,9 @@ function Skeleton({ className = "" }: { className?: string }) {
 
 function DashboardSkeleton() {
   return (
-    <div className="space-y-4 min-w-0 overflow-hidden" aria-label="loading">
+    <div className="min-w-0 space-y-4 overflow-hidden" aria-label="loading">
       {["core", "analysis", "detail"].map((band, index) => (
-        <section key={band} className="border-y border-border px-4 py-4">
+        <section key={band} className={index % 2 === 0 ? "bg-card/30 px-4 py-4" : "px-4 py-4"}>
           <Skeleton className="mb-4 h-4 w-32" />
           <div className={`grid gap-3 ${index === 0 ? "grid-cols-2 lg:grid-cols-5" : "grid-cols-1 lg:grid-cols-3"}`}>
             {[1, 2, 3, 4, 5].slice(0, index === 0 ? 5 : 3).map((item) => (
@@ -100,7 +100,7 @@ function BreakdownRows({
   const maxTokens = Math.max(...rows.map((row) => row.total_tokens), 1);
   const totalTokens = rows.reduce((sum, row) => sum + row.total_tokens, 0);
   return (
-    <div className="min-w-0 divide-y divide-border">
+    <div className="min-w-0 space-y-1">
       {rows.slice(0, compact ? 6 : 8).map((row, index) => {
         const projectPresentation = projectLabels ? presentProjectKey(row.key) : { label: row.key };
         const visibleKey = projectPresentation.label === "unnamedProject" ? t("unnamedProject") : projectPresentation.label;
@@ -112,7 +112,7 @@ function BreakdownRows({
             type="button"
             aria-label={`${t("viewSessionsFor")} ${visibleKey || t("unknown")}`}
             onClick={() => onSelect(row.key)}
-            className="group grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 px-1 py-2 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            className="group grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
             <span className="min-w-0">
               <span className="block truncate text-xs font-medium" title={projectPresentation.detail || row.key}>{visibleKey || t("unknown")}</span>
@@ -228,7 +228,7 @@ function ModelUsageRows({ rows, onSelect, t }: {
 
   const totalTokens = rows.reduce((sum, row) => sum + row.total_tokens, 0);
   return (
-    <div className="min-w-0 divide-y divide-border">
+    <div className="min-w-0 space-y-1">
       {rows.slice(0, 8).map((row, index) => {
         const share = totalTokens > 0 ? (row.total_tokens / totalTokens) * 100 : 0;
         const displayShare = share > 0 ? share : 0;
@@ -238,7 +238,7 @@ function ModelUsageRows({ rows, onSelect, t }: {
             type="button"
             aria-label={`${t("viewSessionsFor")} ${row.key || t("unknown")}`}
             onClick={() => onSelect(row.key)}
-            className="group grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 px-1 py-2.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            className="group grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 rounded-md px-2 py-2.5 text-left transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
             <span className="min-w-0">
               <span className="block truncate text-xs font-medium">{row.key || t("unknown")}</span>
@@ -278,10 +278,6 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const [filters, setFilters] = useState<UsageFilters>(() => getInitialUsageFilters(location.search));
   const [granularity, setGranularity] = useState(() => localStorage.getItem("au-granularity") || "1h");
-  const [timeWindowHours, setTimeWindowHours] = useState<number | null>(() => {
-    const stored = Number(localStorage.getItem("au-time-window-hours") || "0");
-    return stored > 0 ? stored : null;
-  });
   const [data, setData] = useState<DashboardData | null>(null);
   const [throughput, setThroughput] = useState<ThroughputResult>(EMPTY_THROUGHPUT);
   const [throughputModel, setThroughputModel] = useState("");
@@ -372,23 +368,11 @@ export default function Dashboard() {
   useEffect(() => { void fetchThroughput(); }, [fetchThroughput]);
 
   const updatePreset = (preset: TimePreset) => {
-    setTimeWindowHours(null);
-    localStorage.removeItem("au-time-window-hours");
     setFilters((current) => ({
       ...current,
       preset,
       ...getTimeRange(preset, current.from, current.to),
     }));
-  };
-
-  const updateTimeWindow = (hours: number | null) => {
-    setTimeWindowHours(hours);
-    if (hours) {
-      setFilters((current) => ({ ...current, preset: "custom", ...getTimeWindowRange(hours) }));
-      localStorage.setItem("au-time-window-hours", String(hours));
-    } else {
-      localStorage.removeItem("au-time-window-hours");
-    }
   };
 
   const updateGranularity = (value: string) => {
@@ -397,8 +381,6 @@ export default function Dashboard() {
   };
 
   const applyQueryFilters = (next: UsageFilters) => {
-    setTimeWindowHours(null);
-    localStorage.removeItem("au-time-window-hours");
     setFilters(next);
     const query = new URLSearchParams(location.search);
     for (const key of ["from", "to", "source", "model", "project"] as const) {
@@ -457,9 +439,7 @@ export default function Dashboard() {
   }), [throughput, throughputView.ceiling, t]);
 
   const stats = data?.stats;
-  const rangeDetail = timeWindowHours
-    ? t(`window_${timeWindowHours}h`)
-    : `${filters.from} ${t("to")} ${filters.to}`;
+  const rangeDetail = `${filters.from} ${t("to")} ${filters.to}`;
   const collectionNeedsAttention = Boolean(data?.collectionStatus && data.collectionStatus.status !== "available");
   const noUsage = Boolean(data && !data.stats.total_calls && !data.stats.total_tokens
     && !data.sources.length && !data.models.length && !data.projects.length);
@@ -471,8 +451,6 @@ export default function Dashboard() {
         onPresetChange={updatePreset}
         granularity={granularity}
         onGranularityChange={updateGranularity}
-        timeWindowHours={timeWindowHours}
-        onTimeWindowChange={updateTimeWindow}
         source={filters.source}
         onSourceChange={(source) => setFilters((current) => ({ ...current, source }))}
         onRefresh={() => { void fetchData(); void fetchThroughput(); }}
@@ -515,7 +493,7 @@ export default function Dashboard() {
         {loading && !data ? (
           <DashboardSkeleton />
         ) : error ? (
-          <section className="border-y border-red-500/30 px-4 py-12 text-center">
+          <section className="bg-red-500/5 px-4 py-12 text-center">
             <p className="break-words text-sm text-red-500">{error}</p>
             <button
               type="button"
@@ -524,13 +502,13 @@ export default function Dashboard() {
             >{t("retry")}</button>
           </section>
         ) : noUsage ? (
-          <section className="border-y border-border px-4 py-16 text-center">
+          <section className="bg-card/30 px-4 py-16 text-center">
             <h2 className="text-sm font-semibold">{t("noUsageData")}</h2>
             <p className="mt-1 text-xs text-muted-foreground">{t("noUsageDataDetail")}</p>
           </section>
         ) : data && stats ? (
           <>
-            <section data-testid="dashboard-band-core" className="border-y border-border bg-card/30 px-4 py-4">
+            <section data-testid="dashboard-band-core" className="bg-card/40 px-4 py-4">
               <BandTitle title={t("coreMetrics")} detail={rangeDetail} />
               <div className="grid grid-cols-2 gap-x-4 gap-y-4 lg:grid-cols-5">
                 <Metric label={t("totalTokens")} value={fmtTokens(stats.total_tokens)} detail={`${stats.total_calls} ${t("apiCalls")}`} />
@@ -541,7 +519,7 @@ export default function Dashboard() {
               </div>
             </section>
 
-            <section data-testid="dashboard-band-analysis" className="border-y border-border px-4 py-4">
+            <section data-testid="dashboard-band-analysis" className="px-4 py-4">
               <div className="grid min-w-0 grid-cols-1 gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(16rem,1fr)]">
                 <div className="min-w-0">
                   <header className="mb-3 flex min-w-0 flex-wrap items-end justify-between gap-2">
@@ -567,28 +545,28 @@ export default function Dashboard() {
                       },
                     }}
                   />
-                  <div data-testid="token-components" className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded border border-border bg-border sm:grid-cols-4">
+                  <div data-testid="token-components" className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
                     {[
                       [t("input"), stats.input_tokens],
                       [t("output"), stats.output_tokens],
                       [t("cacheRead"), stats.cache_read],
                       [t("cacheCreate"), stats.cache_create],
                     ].map(([label, value]) => (
-                      <div key={String(label)} className="min-w-0 bg-card px-3 py-2">
+                      <div key={String(label)} className="min-w-0 rounded-md bg-muted/55 px-3 py-2">
                         <div className="truncate text-[10px] text-muted-foreground">{label}</div>
                         <div className="truncate font-mono text-sm font-semibold tabular-nums">{fmtTokens(Number(value))}</div>
                       </div>
                     ))}
                   </div>
                 </div>
-                <div className="min-w-0 border-t border-border pt-4 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
+                <div className="min-w-0 pt-1 lg:pl-2">
                   <BandTitle title={t("modelUsage")} detail={t("unknownPriceFootnote")} />
                   <ModelUsageRows rows={data.models} onSelect={(model) => openSessions({ model })} t={t} />
                 </div>
               </div>
             </section>
 
-            <section data-testid="dashboard-band-detail" className="border-y border-border bg-card/20 px-4 py-4">
+            <section data-testid="dashboard-band-detail" className="bg-card/25 px-4 py-4">
               <div className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(14rem,0.8fr)_minmax(16rem,1fr)]">
                 <div className="min-w-0">
                   <BandTitle title={t("agentComposition")} detail={t("tokens")} />
@@ -599,7 +577,7 @@ export default function Dashboard() {
                     composition
                   />
                 </div>
-                <div className="min-w-0 border-t border-border pt-4 xl:border-l xl:border-t-0 xl:pl-5 xl:pt-0">
+                <div className="min-w-0 pt-1 xl:pl-2">
                   <BandTitle title={t("projectRanking")} detail={t("tokens")} />
                   <BreakdownRows
                     rows={data.projects}
@@ -611,7 +589,7 @@ export default function Dashboard() {
                 </div>
                 <div
                   aria-busy={throughputLoading}
-                  className="min-w-0 border-t border-border pt-4 xl:border-l xl:border-t-0 xl:pl-5 xl:pt-0"
+                  className="min-w-0 pt-1 xl:pl-2"
                 >
                   <header className="mb-3 flex min-w-0 flex-wrap items-end justify-between gap-2">
                     <div className="min-w-0">

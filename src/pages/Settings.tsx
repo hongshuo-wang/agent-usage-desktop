@@ -134,6 +134,8 @@ export default function Settings() {
   const [rebuildState, setRebuildState] = useState<RebuildState>("idle");
   const [rebuildError, setRebuildError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState("data-sources");
+  const programmaticSectionRef = useRef<string | null>(null);
+  const sectionNavigationTimerRef = useRef<number | null>(null);
   const loadControllerRef = useRef<AbortController | null>(null);
   const loadGenerationRef = useRef(0);
   const mountedRef = useRef(false);
@@ -214,6 +216,7 @@ export default function Settings() {
     return () => {
       mountedRef.current = false;
       loadControllerRef.current?.abort();
+      if (sectionNavigationTimerRef.current !== null) window.clearTimeout(sectionNavigationTimerRef.current);
     };
   }, [loadCollectorSettings]);
 
@@ -232,6 +235,7 @@ export default function Settings() {
     if (!sections.length || typeof IntersectionObserver === "undefined") return;
     const root = document.querySelector(".app-main");
     const observer = new IntersectionObserver((entries) => {
+      if (programmaticSectionRef.current) return;
       const visible = entries
         .filter((entry) => entry.isIntersecting)
         .sort((left, right) => right.intersectionRatio - left.intersectionRatio);
@@ -243,9 +247,23 @@ export default function Settings() {
 
   const scrollToSection = (event: React.MouseEvent<HTMLAnchorElement>, id: string) => {
     event.preventDefault();
-    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (sectionNavigationTimerRef.current !== null) window.clearTimeout(sectionNavigationTimerRef.current);
+    programmaticSectionRef.current = id;
+    const section = document.getElementById(id);
+    const scrollRoot = document.querySelector<HTMLElement>(".app-main");
+    if (section && scrollRoot) {
+      const top = scrollRoot.scrollTop + section.getBoundingClientRect().top
+        - scrollRoot.getBoundingClientRect().top - 16;
+      scrollRoot.scrollTo({ top: Math.max(0, top), behavior: "auto" });
+    } else {
+      section?.scrollIntoView({ behavior: "auto", block: "start" });
+    }
     setActiveSection(id);
     window.history.replaceState(null, "", `#${id}`);
+    sectionNavigationTimerRef.current = window.setTimeout(() => {
+      if (programmaticSectionRef.current === id) programmaticSectionRef.current = null;
+      sectionNavigationTimerRef.current = null;
+    }, 150);
   };
 
   const handleThemeChange = (value: string) => {
@@ -494,30 +512,8 @@ export default function Settings() {
           <a key={id} href={`#${id}`} onClick={(event) => scrollToSection(event, id)} className={`system-subnav-link ${activeSection === id ? "system-subnav-link-active" : ""}`}>{t(label)}</a>
         ))}
       </aside>
-      <div className="min-w-0 space-y-5">
-      <section id="appearance" className="border-b border-border pb-5">
-        <h2 className="mb-4 text-base font-semibold tracking-tight">{t("appearanceAndLanguage")}</h2>
-        <div className="grid gap-5 sm:grid-cols-2">
-          <div>
-            <h3 className="mb-2 text-xs font-medium text-muted-foreground">{t("theme")}</h3>
-            <SegmentedControl
-              value={theme}
-              options={["light", "dark", "system"].map((value) => ({ value, label: t(value) }))}
-              onChange={handleThemeChange}
-            />
-          </div>
-          <div>
-            <h3 className="mb-2 text-xs font-medium text-muted-foreground">{t("language")}</h3>
-            <SegmentedControl
-              value={i18n.language}
-              options={[{ value: "en", label: "English" }, { value: "zh", label: "中文" }]}
-              onChange={handleLangChange}
-            />
-          </div>
-        </div>
-      </section>
-
-      <section id="data-sources" className="border-b border-border pb-5 scroll-mt-5">
+      <div className="min-w-0 space-y-10">
+      <section id="data-sources" className="scroll-mt-5">
         <div className="mb-4">
           <h2 className="text-base font-semibold tracking-tight">{t("collectorSettings")}</h2>
           <p className="mt-1 text-sm leading-5 text-muted-foreground">{t("collectorSettingsDetail")}</p>
@@ -532,11 +528,11 @@ export default function Settings() {
             </button>
           </div>
         ) : collectors ? (
-          <div className="divide-y divide-border border-t border-border">
+          <div className="space-y-2">
             {collectors.map((collector) => {
               const label = t(COLLECTOR_LABELS[collector.name]);
               return (
-                <div key={collector.name} className="grid min-w-0 gap-4 py-4 lg:grid-cols-[12rem_minmax(0,1fr)_12rem]">
+                <div key={collector.name} className="grid min-w-0 gap-4 rounded-md bg-card/55 px-3 py-4 lg:grid-cols-[12rem_minmax(0,1fr)_12rem]">
                   <div className="flex items-start justify-between gap-3 lg:block">
                     <div>
                       <h3 className="text-sm font-medium">{label}</h3>
@@ -573,7 +569,7 @@ export default function Settings() {
                 </div>
               );
             })}
-            <div className="flex min-w-0 flex-wrap items-end justify-between gap-4 py-4">
+            <div className="flex min-w-0 flex-wrap items-end justify-between gap-4 pt-3">
               <label className="min-w-48 text-[10px] text-muted-foreground">
                 <span className="mb-1 block">{t("pricingSyncInterval")}</span>
                 <input
@@ -594,8 +590,22 @@ export default function Settings() {
                 <Save className="h-4 w-4" /> {saveState === "pending" ? t("savingSettings") : t("save")}
               </button>
             </div>
-            <div id="pricing" className="scroll-mt-5 border-t border-border pt-4">
-              <h3 className="text-sm font-semibold">{t("pricingSourceTitle")}</h3>
+            {saveState === "success" && <p className="pb-3 text-xs text-green">{t("settingsSavedAndRestarted")}</p>}
+            {saveState === "restartError" && (
+              <div className="flex flex-wrap items-center gap-3 pb-3">
+                <p className="text-xs text-amber-600">{t("settingsSavedRestartFailed")}</p>
+                <button type="button" onClick={() => { void restartAfterSave(); }} className="inline-flex items-center gap-2 rounded border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted">
+                  <RefreshCw className="h-4 w-4" /> {t("retryRestart")}
+                </button>
+              </div>
+            )}
+            {saveError && <p className="pb-3 break-words text-xs text-red-500">{saveError}</p>}
+          </div>
+        ) : null}
+      </section>
+
+      <section id="pricing" className="scroll-mt-5">
+              <h2 className="text-base font-semibold tracking-tight">{t("pricingSourceTitle")}</h2>
               <p className="mt-1 max-w-2xl text-sm leading-5 text-muted-foreground">
                 {t("pricingSourceDetail")} {" "}
                   <a
@@ -667,19 +677,6 @@ export default function Settings() {
                   {t("pricingRefreshFailed")}: {pricingSyncError}
                 </p>
               )}
-            </div>
-            {saveState === "success" && <p className="pb-3 text-xs text-green">{t("settingsSavedAndRestarted")}</p>}
-            {saveState === "restartError" && (
-              <div className="flex flex-wrap items-center gap-3 pb-3">
-                <p className="text-xs text-amber-600">{t("settingsSavedRestartFailed")}</p>
-                <button type="button" onClick={() => { void restartAfterSave(); }} className="inline-flex items-center gap-2 rounded border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted">
-                  <RefreshCw className="h-4 w-4" /> {t("retryRestart")}
-                </button>
-              </div>
-            )}
-            {saveError && <p className="pb-3 break-words text-xs text-red-500">{saveError}</p>}
-          </div>
-        ) : null}
       </section>
 
       {pricingCatalogOpen && (
@@ -769,38 +766,7 @@ export default function Settings() {
         </div>
       )}
 
-      <section id="preferences" className="border-b border-border pb-5 scroll-mt-5">
-        <h2 className="mb-4 text-base font-semibold tracking-tight">{t("desktopPreferences")}</h2>
-        <div className="divide-y divide-border border-t border-border">
-          <div className="flex items-center justify-between gap-4 py-4">
-            <span className="text-sm">{t("autostart")}</span>
-            <Toggle checked={autostart} disabled={autostartPending} label={t("autostart")} onChange={() => { void handleAutostartToggle(); }} />
-          </div>
-          {autostartError && <p className="py-2 text-xs text-red-500">{t("autostartUpdateFailed")}</p>}
-          <div className="flex items-center justify-between gap-4 py-4">
-            <span className="text-sm">{t("notification")}</span>
-            <Toggle checked={notificationsEnabled} disabled={notificationsPending} label={t("notification")} onChange={() => { void handleNotificationsToggle(); }} />
-          </div>
-          {notificationError && <p className="py-2 text-xs text-red-500">{t("notificationUpdateFailed")}</p>}
-          <label className="block py-4 text-xs text-muted-foreground">
-            <span className="mb-1 block">{t("dailyCostThreshold")}</span>
-            <span className="flex items-center gap-2">
-              <input
-                type="number"
-                aria-label={t("dailyCostThreshold")}
-                value={costThreshold}
-                min={0}
-                step={1}
-                onChange={(event) => handleThresholdChange(Number(event.target.value))}
-                className="h-9 w-28 rounded border border-border bg-card px-2.5 font-mono text-sm text-foreground"
-              />
-              <span>USD</span>
-            </span>
-          </label>
-        </div>
-      </section>
-
-      <section id="index-diagnostics" className="border-b border-border pb-5 scroll-mt-5">
+      <section id="index-diagnostics" className="scroll-mt-5">
         <h2 className="text-base font-semibold tracking-tight">{t("sessionIndex")}</h2>
         <p className="mt-1 text-sm leading-5 text-muted-foreground">{t("sessionIndexDetail")}</p>
         <button
@@ -823,6 +789,58 @@ export default function Settings() {
           </div>
         )}
         {rebuildError && <p className="mt-3 break-words text-xs text-red-500">{rebuildError}</p>}
+      </section>
+
+      <section id="preferences" className="scroll-mt-5">
+        <h2 className="mb-4 text-base font-semibold tracking-tight">{t("desktopPreferences")}</h2>
+        <div className="pb-5">
+          <h3 className="mb-4 text-sm font-semibold">{t("appearanceAndLanguage")}</h3>
+          <div className="grid gap-5 sm:grid-cols-2">
+            <div>
+              <h4 className="mb-2 text-xs font-medium text-muted-foreground">{t("theme")}</h4>
+              <SegmentedControl
+                value={theme}
+                options={["light", "dark", "system"].map((value) => ({ value, label: t(value) }))}
+                onChange={handleThemeChange}
+              />
+            </div>
+            <div>
+              <h4 className="mb-2 text-xs font-medium text-muted-foreground">{t("language")}</h4>
+              <SegmentedControl
+                value={i18n.language}
+                options={[{ value: "en", label: "English" }, { value: "zh", label: "中文" }]}
+                onChange={handleLangChange}
+              />
+            </div>
+          </div>
+        </div>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-4 rounded-md bg-card/55 px-3 py-3">
+            <span className="text-sm">{t("autostart")}</span>
+            <Toggle checked={autostart} disabled={autostartPending} label={t("autostart")} onChange={() => { void handleAutostartToggle(); }} />
+          </div>
+          {autostartError && <p className="py-2 text-xs text-red-500">{t("autostartUpdateFailed")}</p>}
+          <div className="flex items-center justify-between gap-4 rounded-md bg-card/55 px-3 py-3">
+            <span className="text-sm">{t("notification")}</span>
+            <Toggle checked={notificationsEnabled} disabled={notificationsPending} label={t("notification")} onChange={() => { void handleNotificationsToggle(); }} />
+          </div>
+          {notificationError && <p className="py-2 text-xs text-red-500">{t("notificationUpdateFailed")}</p>}
+          <label className="block rounded-md bg-card/55 px-3 py-3 text-xs text-muted-foreground">
+            <span className="mb-1 block">{t("dailyCostThreshold")}</span>
+            <span className="flex items-center gap-2">
+              <input
+                type="number"
+                aria-label={t("dailyCostThreshold")}
+                value={costThreshold}
+                min={0}
+                step={1}
+                onChange={(event) => handleThresholdChange(Number(event.target.value))}
+                className="h-9 w-28 rounded border border-border bg-card px-2.5 font-mono text-sm text-foreground"
+              />
+              <span>USD</span>
+            </span>
+          </label>
+        </div>
       </section>
 
       {confirmRebuild && (

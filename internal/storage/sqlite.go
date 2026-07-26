@@ -328,6 +328,13 @@ func migrate(db *sql.DB) error {
 				CREATE INDEX idx_usage_pricing_snapshot_id ON usage_records(pricing_snapshot_id);
 			`,
 		},
+		{
+			"010_semantic_prompt_rescan", `
+				DELETE FROM prompt_events;
+				UPDATE sessions SET prompts=0;
+				DELETE FROM file_state;
+			`,
+		},
 	}
 	for _, m := range migrations {
 		var done string

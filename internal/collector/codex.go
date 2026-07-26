@@ -45,8 +45,9 @@ type codexTokenUsage struct {
 }
 
 type codexPromptResponse struct {
-	Role string `json:"role"`
-	Type string `json:"type"`
+	Role    string          `json:"role"`
+	Type    string          `json:"type"`
+	Content json.RawMessage `json:"content"`
 }
 
 // Scan walks all configured paths and processes new JSONL data from Codex CLI sessions.
@@ -174,7 +175,7 @@ func (c *CodexCollector) processFile(path string) error {
 			if err := json.Unmarshal(entry.Payload, &response); err != nil {
 				return nil
 			}
-			if response.Type == "message" && response.Role == "user" {
+			if response.Type == "message" && response.Role == "user" && codexUserContentIsPrompt(response.Content) {
 				prompts++
 				promptEvents = append(promptEvents, &storage.PromptEvent{Source: "codex", SessionID: context.SessionID, Timestamp: ts})
 			}

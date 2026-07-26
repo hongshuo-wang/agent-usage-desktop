@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"time"
 )
 
+var codexImageReference = regexp.MustCompile(`(?i)\[image\s+#\d+\]`)
+
 type codexEventAdapter struct{}
 
-func (codexEventAdapter) ParserVersion() string { return "codex-events-v1" }
+func (codexEventAdapter) ParserVersion() string { return "codex-events-v3" }
 
 type codexEventEnvelope struct {
 	Timestamp string          `json:"timestamp"`
@@ -191,6 +194,12 @@ func codexVisibleTextEvents(raw json.RawMessage, kind EventKind, role, sourceTyp
 		return nil
 	}
 	if text, ok := rawString(trimmed); ok {
+		if kind == EventUserMessage {
+			text = normalizeCodexUserText(text)
+			if text == "" {
+				return nil
+			}
+		}
 		if kind == EventReasoning && role == "" {
 			role = "assistant"
 		}
@@ -210,6 +219,12 @@ func codexVisibleTextEvents(raw json.RawMessage, kind EventKind, role, sourceTyp
 			continue
 		}
 		if text, ok := rawString(item.Text); ok {
+			if kind == EventUserMessage {
+				text = normalizeCodexUserText(text)
+				if text == "" {
+					continue
+				}
+			}
 			eventRole := role
 			if kind == EventReasoning && eventRole == "" {
 				eventRole = "assistant"
@@ -219,6 +234,62 @@ func codexVisibleTextEvents(raw json.RawMessage, kind EventKind, role, sourceTyp
 		}
 	}
 	return events
+}
+
+func isCodexTransportArtifact(value string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	for _, prefix := range []string{
+		"<user_shell_command>",
+		"<image name=",
+		"</image>",
+		"<environment_context>",
+		"<permissions instructions>",
+		"<collaboration_mode",
+		"<turn_aborted>",
+		"# agents.md instructions",
+	} {
+		if strings.HasPrefix(normalized, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeCodexUserText(value string) string {
+	if isCodexTransportArtifact(value) {
+		return ""
+	}
+	return strings.TrimSpace(codexImageReference.ReplaceAllString(value, ""))
+}
+
+func codexUserContentIsPrompt(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return false
+	}
+	if text, ok := rawString(trimmed); ok {
+		return normalizeCodexUserText(text) != ""
+	}
+	var parts []json.RawMessage
+	if json.Unmarshal(trimmed, &parts) != nil {
+		return false
+	}
+	for _, part := range parts {
+		var item codexEventMessagePart
+		if json.Unmarshal(part, &item) != nil {
+			continue
+		}
+		if item.Type == "input_image" {
+			return true
+		}
+		if item.Type != "input_text" && item.Type != "text" {
+			continue
+		}
+		if text, ok := rawString(item.Text); ok && normalizeCodexUserText(text) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func stableJSONOrString(raw json.RawMessage) string {

@@ -38,6 +38,13 @@ describe("TimeRangeSelector", () => {
     expect(screen.getByRole("combobox", { name: "queryAgent" })).toHaveValue("codex");
   });
 
+  it("does not render the duplicate rolling query range control", () => {
+    const legacyProps = { ...props(), onTimeWindowChange: vi.fn() } as any;
+    render(<TimeRangeSelector {...legacyProps} />);
+
+    expect(screen.queryByRole("combobox", { name: "timeWindow" })).not.toBeInTheDocument();
+  });
+
   it("cancels draft edits with Escape", () => {
     render(<TimeRangeSelector {...props()} />);
     fireEvent.click(screen.getByRole("button", { name: /editQuery/ }));

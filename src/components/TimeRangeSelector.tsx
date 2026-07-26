@@ -38,8 +38,6 @@ interface Props {
   customTo?: string;
   onCustomFromChange?: (v: string) => void;
   onCustomToChange?: (v: string) => void;
-  timeWindowHours?: number | null;
-  onTimeWindowChange?: (hours: number | null) => void;
   filters?: UsageFilters;
   onFiltersApply?: (filters: UsageFilters) => void;
   onClearFilters?: () => void;
@@ -48,7 +46,7 @@ interface Props {
 export default function TimeRangeSelector({
   preset, onPresetChange,
   source, onSourceChange, onRefresh, customFrom, customTo,
-  onCustomFromChange, onCustomToChange, timeWindowHours = null, onTimeWindowChange,
+  onCustomFromChange, onCustomToChange,
   filters, onFiltersApply, onClearFilters,
 }: Props) {
   const { t } = useTranslation();
@@ -115,7 +113,7 @@ export default function TimeRangeSelector({
 
   return (
     <div className="relative z-20 min-w-0">
-      <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 shadow-sm">
+      <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg bg-card/75 px-3 py-2">
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-sm">
             <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">{t("currentQuery")}</span>
@@ -147,7 +145,7 @@ export default function TimeRangeSelector({
           <div ref={editorRef} id="query-editor" role="dialog" aria-modal="true" aria-label={t("queryEditor")} className="absolute right-0 top-[calc(100%+0.5rem)] z-40 w-full max-w-md rounded-xl border border-border bg-card p-4 shadow-xl sm:w-[25rem]">
             <div className="flex items-center justify-between"><div><h2 className="text-sm font-semibold">{t("queryEditor")}</h2><p className="mt-0.5 text-[11px] text-muted-foreground">{t("currentQuery")}</p></div><button type="button" onClick={() => setEditorOpen(false)} aria-label={t("cancelQuery")} className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><X className="h-4 w-4" /></button></div>
             <div className="mt-4 space-y-4">
-              <fieldset><legend className="text-[11px] font-semibold text-muted-foreground">{t("queryTimeRange")}</legend><div className="mt-2 flex flex-wrap gap-1.5">{PRESETS.map((item) => <button key={item} type="button" onClick={() => updateDraftPreset(item)} className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${draft.preset === item ? "bg-accent text-white" : "border border-border text-muted-foreground hover:bg-muted hover:text-foreground"}`}>{t(item)}</button>)}</div>{draft.preset === "custom" && !timeWindowHours && <div className="mt-2 flex items-center gap-2"><input aria-label={`${t("queryTimeRange")} ${t("from")}`} type={preciseRange ? "datetime-local" : "date"} value={dateTimeInputValue(draft.from)} onChange={(event) => handleDateChange(event.target.value, "from")} className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs" /><span className="text-xs text-muted-foreground">{t("to")}</span><input aria-label={`${t("queryTimeRange")} ${t("to")}`} type={preciseRange ? "datetime-local" : "date"} value={dateTimeInputValue(draft.to)} onChange={(event) => handleDateChange(event.target.value, "to")} className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs" /></div>}</fieldset>
+              <fieldset><legend className="text-[11px] font-semibold text-muted-foreground">{t("queryTimeRange")}</legend><div className="mt-2 flex flex-wrap gap-1.5">{PRESETS.map((item) => <button key={item} type="button" onClick={() => updateDraftPreset(item)} className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${draft.preset === item ? "bg-accent text-white" : "border border-border text-muted-foreground hover:bg-muted hover:text-foreground"}`}>{t(item)}</button>)}</div>{draft.preset === "custom" && <div className="mt-2 flex items-center gap-2"><input aria-label={`${t("queryTimeRange")} ${t("from")}`} type={preciseRange ? "datetime-local" : "date"} value={dateTimeInputValue(draft.from)} onChange={(event) => handleDateChange(event.target.value, "from")} className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs" /><span className="text-xs text-muted-foreground">{t("to")}</span><input aria-label={`${t("queryTimeRange")} ${t("to")}`} type={preciseRange ? "datetime-local" : "date"} value={dateTimeInputValue(draft.to)} onChange={(event) => handleDateChange(event.target.value, "to")} className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs" /></div>}</fieldset>
               <label className="block"><span className="text-[11px] font-semibold text-muted-foreground">{t("queryAgent")}</span><select ref={firstFieldRef} aria-label={t("queryAgent")} value={draft.source} onChange={(event) => setDraft((current) => ({ ...current, source: event.target.value }))} className="mt-1.5 h-9 w-full rounded-md border border-border bg-background px-2.5 text-xs text-foreground">{SOURCES.map((item) => <option key={item.value} value={item.value}>{t(item.label)}</option>)}</select></label>
               <label className="block"><span className="text-[11px] font-semibold text-muted-foreground">{t("queryProject")}</span><input aria-label={t("queryProject")} value={draft.project} onChange={(event) => setDraft((current) => ({ ...current, project: event.target.value }))} placeholder={t("allProjects")} className="mt-1.5 h-9 w-full rounded-md border border-border bg-background px-2.5 text-xs text-foreground placeholder:text-muted-foreground" /></label>
               <label className="block"><span className="text-[11px] font-semibold text-muted-foreground">{t("queryModel")}</span><input aria-label={t("queryModel")} value={draft.model} onChange={(event) => setDraft((current) => ({ ...current, model: event.target.value }))} placeholder={t("allModels")} className="mt-1.5 h-9 w-full rounded-md border border-border bg-background px-2.5 text-xs text-foreground placeholder:text-muted-foreground" /></label>
@@ -157,12 +155,6 @@ export default function TimeRangeSelector({
         </>
       )}
 
-      {onTimeWindowChange && (
-        <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-          <span className="font-medium text-foreground">{t("timeWindow")}</span>
-          <select aria-label={t("timeWindow")} value={timeWindowHours ?? ""} onChange={(event) => onTimeWindowChange(event.target.value ? Number(event.target.value) : null)} className="h-8 rounded-md border border-border bg-card px-2 text-xs text-foreground"><option value="">{t("currentRange")}</option>{[1, 6, 12, 24].map((hours) => <option key={hours} value={hours}>{t(`window_${hours}h`)}</option>)}</select>
-        </div>
-      )}
       {onClearFilters && activeFilters.length > 0 && <button type="button" onClick={onClearFilters} className="mt-1 text-[11px] font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground">{t("clearAll")}</button>}
     </div>
   );

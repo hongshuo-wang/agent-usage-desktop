@@ -313,6 +313,10 @@ func loadSessionEventSummaries(db sessionQueryer, query SessionQuery, identities
 			AND e.content NOT LIKE '<environment_context>%'
 			AND e.content NOT LIKE '<permissions instructions>%'
 			AND e.content NOT LIKE '<collaboration_mode%'
+			AND e.content NOT LIKE '<user_shell_command>%'
+			AND e.content NOT LIKE '<image name=%'
+			AND e.content NOT LIKE '</image>%'
+			AND e.content NOT LIKE '<turn_aborted>%'
 			AND e.content NOT LIKE '# AGENTS.md instructions%'
 	)
 	SELECT x.source, x.session_id, COALESCE(ec.tool_calls,0), COALESCE(ec.errors,0),

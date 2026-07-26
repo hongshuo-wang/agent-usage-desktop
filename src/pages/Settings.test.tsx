@@ -93,6 +93,76 @@ describe("application settings", () => {
     expect(screen.queryByText(/hermes|provider|mcp|skills|backup|account|team/i)).not.toBeInTheDocument();
   });
 
+  it("keeps system sections in the same order as the subnavigation", async () => {
+    render(<Settings />);
+    await screen.findByRole("button", { name: "saveCollectorSettings" });
+
+    const sections = [
+      screen.getByRole("heading", { name: "collectorSettings" }).closest("section"),
+      screen.getByRole("heading", { name: "pricingSourceTitle" }).closest("section"),
+      screen.getByRole("heading", { name: "sessionIndex" }).closest("section"),
+      screen.getByRole("heading", { name: "desktopPreferences" }).closest("section"),
+    ];
+    expect(sections.map((section) => section?.id)).toEqual([
+      "data-sources", "pricing", "index-diagnostics", "preferences",
+    ]);
+    for (let index = 0; index < sections.length - 1; index += 1) {
+      const current = sections[index];
+      const next = sections[index + 1];
+      if (!current || !next) throw new Error("missing system section");
+      expect(current.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    expect(screen.getByRole("heading", { name: "appearanceAndLanguage" }).closest("section")).toBe(sections[3]);
+  });
+
+  it("separates system sections with whitespace instead of repeated rules", async () => {
+    render(<Settings />);
+    await screen.findByRole("button", { name: "saveCollectorSettings" });
+
+    for (const id of ["data-sources", "pricing", "index-diagnostics", "preferences"]) {
+      expect(document.getElementById(id)).not.toHaveClass("border-b");
+    }
+    expect(screen.getByRole("heading", { name: "appearanceAndLanguage" }).parentElement).not.toHaveClass("border-b");
+  });
+
+  it("keeps subnavigation clicks deterministic while section observation settles", async () => {
+    const observerCallbacks: IntersectionObserverCallback[] = [];
+    class MockIntersectionObserver {
+      readonly root = null;
+      readonly rootMargin = "0px";
+      readonly thresholds = [0];
+      constructor(callback: IntersectionObserverCallback) { observerCallbacks.push(callback); }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+      takeRecords() { return []; }
+    }
+    vi.stubGlobal("IntersectionObserver", MockIntersectionObserver);
+
+    render(<main className="app-main"><Settings /></main>);
+    await screen.findByRole("button", { name: "saveCollectorSettings" });
+    const scrollRoot = document.querySelector<HTMLElement>(".app-main");
+    const pricingSection = document.getElementById("pricing");
+    if (!scrollRoot || !pricingSection) throw new Error("missing settings scroll structure");
+    Object.defineProperty(scrollRoot, "scrollTop", { configurable: true, value: 200 });
+    scrollRoot.getBoundingClientRect = () => ({ top: 100 } as DOMRect);
+    pricingSection.getBoundingClientRect = () => ({ top: 500 } as DOMRect);
+    const scrollTo = vi.fn();
+    scrollRoot.scrollTo = scrollTo;
+    const pricingLink = screen.getByRole("link", { name: "pricing" });
+    fireEvent.click(pricingLink);
+
+    expect(scrollTo).toHaveBeenLastCalledWith({ behavior: "auto", top: 584 });
+    expect(pricingLink).toHaveClass("system-subnav-link-active");
+    observerCallbacks[0]?.([{
+      isIntersecting: true,
+      intersectionRatio: 1,
+      target: document.getElementById("data-sources") as Element,
+    } as IntersectionObserverEntry], {} as IntersectionObserver);
+    expect(pricingLink).toHaveClass("system-subnav-link-active");
+    vi.unstubAllGlobals();
+  });
+
   it("provides the official LiteLLM source and imports a selected pricing JSON file", async () => {
     const user = userEvent.setup();
     render(<Settings />);

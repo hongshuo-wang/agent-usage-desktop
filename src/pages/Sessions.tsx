@@ -365,7 +365,7 @@ export default function Sessions() {
       />
 
       {hasDrilldown(drilldown) && (
-        <aside data-testid="session-filter-context" className="flex min-w-0 flex-wrap items-center gap-2 border-y border-border px-3 py-2 text-xs">
+        <aside data-testid="session-filter-context" className="flex min-w-0 flex-wrap items-center gap-2 rounded-md bg-muted/55 px-3 py-2 text-xs">
           <span className="font-medium text-muted-foreground">{t("inheritedFilters")}</span>
           {contextItems.map(([key, value]) => (
             <span key={key} className="max-w-full truncate border-l-2 border-accent px-2">{t(key)}: {value}</span>
@@ -379,7 +379,7 @@ export default function Sessions() {
       <main
         data-testid="session-center-grid"
         data-inspector-open={String(Boolean(inspectedEvent))}
-        className="session-center-grid min-h-0 min-w-0 flex-1 overflow-hidden border-y border-border"
+        className="session-center-grid min-h-0 min-w-0 flex-1 overflow-hidden bg-card/20"
       >
         {isMobile ? (
           mobileDetailVisible ? (inspector || timeline) : list

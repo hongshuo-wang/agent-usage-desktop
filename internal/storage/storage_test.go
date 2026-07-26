@@ -938,6 +938,56 @@ func TestMigration009PreservesLegacyCostWithoutInventingSnapshot(t *testing.T) {
 	}
 }
 
+func TestMigration010ResetsDerivedPromptDataForSemanticRescan(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "pre-010.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`
+		INSERT INTO usage_records(source,session_id,model,input_tokens,output_tokens,timestamp)
+		VALUES('codex','transport-session','synthetic-model',7,3,'2026-01-02 03:04:05+00:00');
+		INSERT INTO sessions(source,session_id,start_time,prompts)
+		VALUES('codex','transport-session','2026-01-02 03:04:05+00:00',3);
+		INSERT INTO prompt_events(source,session_id,timestamp)
+		VALUES('codex','transport-session','2026-01-02 03:04:06+00:00');
+		INSERT INTO file_state(path,size,last_offset,scan_context)
+		VALUES('/synthetic/codex.jsonl',100,100,'{}');
+		DELETE FROM meta WHERE key='migration_010_semantic_prompt_rescan';
+	`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	checks := []struct {
+		query string
+		want  int
+	}{
+		{`SELECT COUNT(*) FROM usage_records`, 1},
+		{`SELECT COUNT(*) FROM prompt_events`, 0},
+		{`SELECT COUNT(*) FROM file_state`, 0},
+		{`SELECT COALESCE(SUM(prompts),0) FROM sessions`, 0},
+		{`SELECT COUNT(*) FROM meta WHERE key='migration_010_semantic_prompt_rescan' AND value='done'`, 1},
+	}
+	for _, check := range checks {
+		var got int
+		if err := db.db.QueryRow(check.query).Scan(&got); err != nil {
+			t.Fatalf("query %q: %v", check.query, err)
+		}
+		if got != check.want {
+			t.Fatalf("query %q = %d, want %d", check.query, got, check.want)
+		}
+	}
+}
+
 func TestCreatePricingSnapshotPersistsFullLedger(t *testing.T) {
 	db := tempDB(t)
 	syncedAt := time.Date(2025, 4, 5, 6, 7, 8, 0, time.UTC)
@@ -1015,7 +1065,7 @@ func TestCreatePricingSnapshotRollsBackOnEntryFailure(t *testing.T) {
 	}
 }
 
-func TestMigration007PreservesLegacyData(t *testing.T) {
+func TestMigrationsFromPre007PreserveLegacyUsageAndResetDerivedPrompts(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "legacy.db")
 	legacy, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -1150,10 +1200,11 @@ func TestMigration007PreservesLegacyData(t *testing.T) {
 		query string
 		want  int
 	}{
-		{`SELECT COUNT(*) FROM sessions WHERE source='claude' AND session_id='legacy-session' AND prompts=4`, 1},
-		{`SELECT COUNT(*) FROM prompt_events WHERE source='claude' AND session_id='legacy-session'`, 1},
+		{`SELECT COUNT(*) FROM sessions WHERE source='claude' AND session_id='legacy-session' AND prompts=0`, 1},
+		{`SELECT COUNT(*) FROM prompt_events WHERE source='claude' AND session_id='legacy-session'`, 0},
 		{`SELECT COUNT(*) FROM meta WHERE key='migration_007_session_event_index' AND value='done'`, 1},
 		{`SELECT COUNT(*) FROM meta WHERE key='migration_008_remove_config_management' AND value='done'`, 1},
+		{`SELECT COUNT(*) FROM meta WHERE key='migration_010_semantic_prompt_rescan' AND value='done'`, 1},
 	}
 	for _, check := range checks {
 		var got int

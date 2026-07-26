@@ -4,7 +4,7 @@ import type { SessionEvent, SessionSummary } from "../../lib/types";
 import { fmtCost, fmtTokens } from "../../lib/utils";
 import EventCard from "./EventCard";
 import { sessionStatusLabels } from "./SessionList";
-import { humanizeSessionTitle, isReadableSessionEvent } from "../../lib/sessionPresentation";
+import { humanizeSessionTitle, isReadableSessionEvent, isTransportArtifactContent } from "../../lib/sessionPresentation";
 
 type Translate = (key: string) => string;
 
@@ -40,11 +40,13 @@ export default function SessionTimeline({
   if (!session) {
     return <section data-testid="session-timeline" className="flex min-h-0 items-center justify-center text-sm text-muted-foreground">{t("selectSession")}</section>;
   }
-  const visibleEvents = events.filter((item) => showTechnical || isReadableSessionEvent(item));
+  const visibleEvents = events.filter((item) => (
+    !isTransportArtifactContent(item.content) && (showTechnical || isReadableSessionEvent(item))
+  ));
 
   return (
     <section data-testid="session-timeline" className="flex min-h-0 min-w-0 flex-col bg-background">
-      <header className="border-b border-border px-4 py-3">
+      <header className="bg-card/35 px-4 py-3">
         <div className="flex min-w-0 items-center gap-2">
           {isMobile && (
             <button type="button" aria-label={t("backToSessions")} onClick={onBack} className="flex h-8 w-8 shrink-0 items-center justify-center rounded hover:bg-muted">

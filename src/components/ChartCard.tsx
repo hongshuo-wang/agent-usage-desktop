@@ -98,7 +98,7 @@ export default function ChartCard({ title, option, className, onEvents }: ChartC
   }, []);
 
   return (
-    <div className={`bg-card border border-border rounded-xl p-3 shadow-sm flex flex-col min-w-0 min-h-0 overflow-hidden ${className || ""}`}>
+    <div className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-md bg-card/70 p-3 ${className || ""}`}>
       <h3 className="text-xs font-medium text-muted-foreground mb-1.5">{title}</h3>
       <div ref={containerRef} className="flex-1 min-h-0" />
     </div>

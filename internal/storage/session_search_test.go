@@ -243,7 +243,9 @@ func TestSearchSessionsSkipsSyntheticContextWhenChoosingTitle(t *testing.T) {
 		ParserVersion: "v1", CoverageStatus: "complete", SourceStatus: "available",
 	}, []SessionEventRecord{
 		{Source: "codex", SessionID: "synthetic-title", EventType: "user_message", Timestamp: timestamp, Content: "<environment_context> <cwd>/work</cwd>", RawOffset: 0},
-		{Source: "codex", SessionID: "synthetic-title", EventType: "user_message", Timestamp: timestamp.Add(time.Second), Content: "重构首页吞吐图", RawOffset: 100},
+		{Source: "codex", SessionID: "synthetic-title", EventType: "user_message", Timestamp: timestamp.Add(time.Second), Content: "<user_shell_command> <command>npm test</command>", RawOffset: 100},
+		{Source: "codex", SessionID: "synthetic-title", EventType: "user_message", Timestamp: timestamp.Add(2 * time.Second), Content: `<image name=[Image #1] path="/tmp/synthetic.png">`, RawOffset: 200},
+		{Source: "codex", SessionID: "synthetic-title", EventType: "user_message", Timestamp: timestamp.Add(3 * time.Second), Content: "重构首页吞吐图", RawOffset: 300},
 	})
 	if err != nil {
 		t.Fatalf("UpsertSessionSourceWithEvents: %v", err)

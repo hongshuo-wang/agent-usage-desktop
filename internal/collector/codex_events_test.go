@@ -140,3 +140,24 @@ func TestCodexEventAdapterToolPayloadPreservesLargeInteger(t *testing.T) {
 		t.Fatalf("events = %+v, want exact large integer", events)
 	}
 }
+
+func TestCodexEventAdapterTransportArtifactsAreNotDisplayable(t *testing.T) {
+	t.Parallel()
+
+	adapter := codexEventAdapter{}
+	shell, err := adapter.Parse([]byte(`{"timestamp":"2026-01-02T03:04:05Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<user_shell_command>\n<command>npm test</command>\n</user_shell_command>"}]}}`), &EventContext{})
+	if err != nil {
+		t.Fatalf("Parse shell envelope: %v", err)
+	}
+	if len(shell) != 0 {
+		t.Fatalf("shell envelope events = %+v, want none", shell)
+	}
+
+	imageAndText, err := adapter.Parse([]byte(`{"timestamp":"2026-01-02T03:04:06Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,synthetic"},{"type":"input_text","text":"<image name=[Image #1] path=\"/tmp/synthetic.png\">"},{"type":"input_text","text":"[Image #1]Explain the screenshot"}]}}`), &EventContext{})
+	if err != nil {
+		t.Fatalf("Parse image message: %v", err)
+	}
+	if len(imageAndText) != 1 || imageAndText[0].Kind != EventUserMessage || imageAndText[0].Content != "Explain the screenshot" {
+		t.Fatalf("image message events = %+v, want only semantic text", imageAndText)
+	}
+}

@@ -215,6 +215,17 @@ describe("session retrospective center", () => {
     await waitFor(() => expect(screen.queryByTestId("session-filter-context")).not.toBeInTheDocument());
   });
 
+  it("uses spacing and surface states instead of stacked horizontal rules", async () => {
+    renderSessions("/sessions?source=claude");
+
+    const card = await screen.findByTestId("event-card-4");
+    const list = screen.getByTestId("session-list").querySelector("ol");
+    expect(list).not.toHaveClass("divide-y");
+    expect(card).not.toHaveClass("border");
+    expect(screen.getByTestId("session-filter-context")).not.toHaveClass("border-y");
+    expect(screen.getByTestId("session-center-grid")).not.toHaveClass("border-y");
+  });
+
   it("sends user-editable model and project filters to the backend and allows clearing them", async () => {
     renderSessions("/sessions?from=2026-07-01&to=2026-07-03&model=sonnet&project=console");
     const initialListSignal = vi.mocked(fetchAPI).mock.calls.find(([path]) => path === "sessions")?.[2]?.signal;
@@ -278,6 +289,24 @@ describe("session retrospective center", () => {
     expect(within(timeline).queryByText('{"command":"npm test"}')).not.toBeInTheDocument();
     expect(within(timeline).queryByText("x".repeat(320))).not.toBeInTheDocument();
     expect(within(timeline).getByText("Rate limit exceeded")).toBeVisible();
+  });
+
+  it("never reveals transport artifacts in all-events mode", async () => {
+    mockContracts([summary()], [
+      event({ id: 31, event_type: "user_message", role: "user", content: "<user_shell_command>pwd</user_shell_command>", has_raw: false }),
+      event({ id: 32, event_type: "user_message", role: "user", content: '<image name=[Image #1] path="/tmp/private.png">', has_raw: false }),
+      event({ id: 33, event_type: "tool_call", tool_name: "Read", tool_input: "package.json", content: "", has_raw: false }),
+      event({ id: 34, event_type: "user_message", role: "user", content: "[Image #2]Explain the screenshot", has_raw: false }),
+    ]);
+    const user = userEvent.setup();
+    renderSessions();
+
+    await user.click(await screen.findByRole("button", { name: "allEventsMode" }));
+    expect(screen.getByTestId("event-card-33")).toBeVisible();
+    expect(screen.getByText("Explain the screenshot")).toBeVisible();
+    expect(screen.queryByText(/Image #2/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/user_shell_command/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/private\.png/)).not.toBeInTheDocument();
   });
 
   it("opens the inspector on event click and restores center width when closed", async () => {

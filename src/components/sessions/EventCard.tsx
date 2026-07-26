@@ -1,6 +1,7 @@
 import { AlertCircle, Bot, ChevronDown, ChevronRight, CircleUserRound, Terminal } from "lucide-react";
 import { useState } from "react";
 import type { SessionEvent } from "../../lib/types";
+import { stripTransportArtifacts } from "../../lib/sessionPresentation";
 
 type Translate = (key: string) => string;
 
@@ -9,7 +10,7 @@ const LONG_RESULT_LENGTH = 240;
 function visibleValue(event: SessionEvent): string {
   if (event.event_type === "tool_call") return event.tool_input;
   if (event.event_type === "tool_result") return event.tool_output;
-  return event.content;
+  return stripTransportArtifacts(event.content);
 }
 
 function initiallyExpanded(event: SessionEvent): boolean {
@@ -48,7 +49,7 @@ export default function EventCard({ event, onInspect, t }: { event: SessionEvent
           onInspect(event);
         }
       }}
-      className={`rounded border px-3 py-2.5 outline-none transition-colors hover:border-accent focus-visible:ring-2 focus-visible:ring-accent ${event.event_type === "error" ? "border-red-500/40 bg-red-500/5" : "border-border bg-card"}`}
+      className={`rounded-md px-3 py-2.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent ${event.event_type === "error" ? "bg-red-500/8 hover:bg-red-500/12" : "bg-card/75 hover:bg-muted/80"}`}
     >
       <header className="flex min-w-0 items-center gap-2">
         <EventIcon event={event} />

@@ -58,7 +58,7 @@ export default function SessionList({
 }: Props) {
   return (
     <aside data-testid="session-list" className="flex min-h-0 min-w-0 flex-col border-r border-border bg-card/20">
-      <header className="border-b border-border p-3">
+      <header className="p-3 pb-2">
         <h1 className="mb-2 text-sm font-semibold">{t("sessionRetrospective")}</h1>
         <label className="flex h-9 min-w-0 items-center gap-2 rounded border border-border bg-background px-2.5 focus-within:border-accent">
           <Search aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -89,7 +89,7 @@ export default function SessionList({
             <p className="mt-1 text-xs text-muted-foreground">{t("adjustSessionFilters")}</p>
           </div>
         ) : (
-          <ol className="divide-y divide-border">
+          <ol className="space-y-1 px-2 pb-2">
             {sessions.map((session) => {
               const key = sessionIdentity(session);
               const selected = selectedKey === key;
@@ -103,7 +103,7 @@ export default function SessionList({
                     type="button"
                     onClick={() => onSelect(session)}
                     aria-current={selected ? "true" : undefined}
-                    className={`w-full min-w-0 px-3 py-3 text-left transition-colors ${selected ? "bg-accent-dim" : "hover:bg-muted/50"}`}
+                    className={`w-full min-w-0 rounded-md px-3 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${selected ? "bg-accent-dim" : "hover:bg-muted/70"}`}
                   >
                     <div className="flex min-w-0 items-start justify-between gap-2">
                       <span className="min-w-0 flex-1 truncate text-sm font-medium" title={projectPresentation.detail || displayTitle}>{displayTitle}</span>
@@ -139,7 +139,7 @@ export default function SessionList({
       </div>
 
       {hasMore && !error && (
-        <button type="button" onClick={onLoadMore} disabled={loadingMore} className="border-t border-border px-3 py-2 text-xs font-medium hover:bg-muted disabled:opacity-50">
+        <button type="button" onClick={onLoadMore} disabled={loadingMore} className="mx-2 mb-2 rounded-md bg-muted/50 px-3 py-2 text-xs font-medium hover:bg-muted disabled:opacity-50">
           {loadingMore ? t("loading") : t("loadMoreSessions")}
         </button>
       )}
