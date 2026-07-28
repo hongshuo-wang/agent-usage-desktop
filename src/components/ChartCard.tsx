@@ -31,26 +31,46 @@ export default function ChartCard({ title, option, className, onEvents }: ChartC
   const isDark = useIsDark();
 
   const themed = useCallback(() => {
-    const textColor = isDark ? "#a8a8a8" : "#737373";
-    const axisLine = isDark ? "#2e2e2e" : "#e5e5e5";
+    const styles = getComputedStyle(document.documentElement);
+    const css = (name: string, fallback: string) => styles.getPropertyValue(name).trim() || fallback;
+    const textColor = css("--color-muted-foreground", isDark ? "#a1a1a6" : "#6e6e73");
+    const axisColor = css("--color-border", isDark ? "#3a3a3c" : "#dedee2");
     const base = option as Record<string, unknown>;
     const baseXAxis = (base.xAxis as Record<string, unknown>) || {};
-    const themeYAxis = (axis: Record<string, unknown>) => ({
-      ...axis,
-      axisLine: { show: false },
-      axisLabel: { ...(axis.axisLabel as object || {}), color: textColor, fontSize: 11 },
-      splitLine: { ...(axis.splitLine as object || {}), lineStyle: { color: axisLine, type: "dashed" as const } },
-    });
+    const themeAxis = (axis: Record<string, unknown>) => {
+      const axisLine = (axis.axisLine as Record<string, unknown>) || {};
+      const axisLineStyle = (axisLine.lineStyle as Record<string, unknown>) || {};
+      const splitLine = (axis.splitLine as Record<string, unknown>) || {};
+      const splitLineStyle = (splitLine.lineStyle as Record<string, unknown>) || {};
+      return {
+        ...axis,
+        axisLine: { ...axisLine, lineStyle: { ...axisLineStyle, color: axisColor } },
+        axisLabel: { ...((axis.axisLabel as object) || {}), color: textColor, fontSize: 11 },
+        splitLine: {
+          ...splitLine,
+          lineStyle: { ...splitLineStyle, color: axisColor, type: "dashed" as const },
+        },
+      };
+    };
     const baseYAxis = base.yAxis;
     return {
       ...base,
       backgroundColor: "transparent",
-      tooltip: { ...(base.tooltip as object || {}), backgroundColor: isDark ? "#1a1a1a" : "#fff", borderColor: axisLine, textStyle: { color: isDark ? "#ededed" : "#171717", fontSize: 12 } },
+      textStyle: {
+        color: textColor,
+        fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif",
+      },
+      tooltip: {
+        ...((base.tooltip as object) || {}),
+        backgroundColor: css("--color-card", isDark ? "#242426" : "#ffffff"),
+        borderColor: axisColor,
+        textStyle: { color: css("--color-foreground", isDark ? "#f5f5f7" : "#1d1d1f"), fontSize: 12 },
+      },
       legend: { ...(base.legend as object || {}), textStyle: { color: textColor, fontSize: 11 } },
-      xAxis: { ...baseXAxis, axisLine: { lineStyle: { color: axisLine } }, axisLabel: { ...(baseXAxis.axisLabel as object || {}), color: textColor, fontSize: 11 }, splitLine: { lineStyle: { color: axisLine, type: "dashed" as const } } },
+      xAxis: themeAxis(baseXAxis),
       yAxis: Array.isArray(baseYAxis)
-        ? baseYAxis.map((axis) => themeYAxis((axis as Record<string, unknown>) || {}))
-        : themeYAxis((baseYAxis as Record<string, unknown>) || {}),
+        ? baseYAxis.map((axis) => themeAxis((axis as Record<string, unknown>) || {}))
+        : themeAxis((baseYAxis as Record<string, unknown>) || {}),
     };
   }, [option, isDark]);
 

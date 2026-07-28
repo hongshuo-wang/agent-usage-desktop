@@ -32,10 +32,15 @@ const props = (overrides: Partial<React.ComponentProps<typeof TimeRangeSelector>
 describe("TimeRangeSelector", () => {
   it("opens a grouped editor without moving the summary", () => {
     render(<TimeRangeSelector {...props()} />);
+    expect(screen.getByRole("button", { name: "refresh" })).toHaveAttribute("title", "refresh");
+    expect(screen.getByRole("button", { name: "editQuery" })).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /editQuery/ }));
+    fireEvent.click(screen.getByRole("button", { name: "editQuery" }));
+    expect(screen.getByRole("button", { name: "editQuery" })).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("dialog", { name: "queryEditor" })).toBeVisible();
     expect(screen.getByRole("combobox", { name: "queryAgent" })).toHaveValue("codex");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "queryEditor" })).not.toBeInTheDocument();
   });
 
   it("does not render the duplicate rolling query range control", () => {

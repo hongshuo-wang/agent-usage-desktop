@@ -113,17 +113,17 @@ export default function TimeRangeSelector({
 
   return (
     <div className="relative z-20 min-w-0">
-      <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg bg-card/75 px-3 py-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-border/80 bg-card px-3 py-2">
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-sm">
-            <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">{t("currentQuery")}</span>
+            <span className="shrink-0 text-[11px] font-medium text-muted-foreground">{t("currentQuery")}</span>
             <span className="truncate font-semibold">{summaryPreset} · {summarySource}</span>
             <span className="truncate text-xs text-muted-foreground">{draft.from} {t("to")} {draft.to}</span>
           </div>
           {activeFilters.length > 0 && (
             <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5" aria-label={t("activeFilters")}>
               {activeFilters.map((chip) => (
-                <span key={chip.key} className="inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-muted/50 px-2 py-0.5 text-[11px] text-muted-foreground" title={chip.value}>
+                <span key={chip.key} className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-muted/50 px-2 py-0.5 text-[11px] text-muted-foreground" title={chip.value}>
                   <span className="truncate">{t(chip.key === "source" ? "source" : chip.key === "model" ? "model" : "project")}: {chip.key === "project" && presentProjectKey(chip.value).label === "unnamedProject" ? t("unnamedProject") : chip.value}</span>
                   <button type="button" aria-label={`${t("removeFilter")} ${chip.value}`} onClick={() => removeFilter(chip.key)} className="rounded-full p-0.5 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><X className="h-3 w-3" /></button>
                 </span>
@@ -131,7 +131,7 @@ export default function TimeRangeSelector({
             </div>
           )}
         </div>
-        <button type="button" onClick={() => setEditorOpen((open) => !open)} aria-expanded={editorOpen} aria-controls="query-editor" className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+        <button type="button" onClick={() => setEditorOpen((open) => !open)} aria-expanded={editorOpen} aria-controls="query-editor" className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-xs font-semibold text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
           <SlidersHorizontal className="h-3.5 w-3.5" />
           {t("editQuery")}
           <ChevronDown className={`h-3.5 w-3.5 transition-transform ${editorOpen ? "rotate-180" : ""}`} />
@@ -142,7 +142,7 @@ export default function TimeRangeSelector({
       {editorOpen && (
         <>
           <button type="button" aria-label={t("cancelQuery")} onClick={() => setEditorOpen(false)} className="fixed inset-0 z-30 cursor-default bg-black/10" />
-          <div ref={editorRef} id="query-editor" role="dialog" aria-modal="true" aria-label={t("queryEditor")} className="absolute right-0 top-[calc(100%+0.5rem)] z-40 w-full max-w-md rounded-xl border border-border bg-card p-4 shadow-xl sm:w-[25rem]">
+          <div ref={editorRef} id="query-editor" role="dialog" aria-modal="true" aria-label={t("queryEditor")} className="absolute right-0 top-[calc(100%+0.5rem)] z-40 w-full max-w-md rounded-lg border border-border bg-card p-4 shadow-[0_18px_60px_rgba(0,0,0,0.18)] sm:w-[25rem]">
             <div className="flex items-center justify-between"><div><h2 className="text-sm font-semibold">{t("queryEditor")}</h2><p className="mt-0.5 text-[11px] text-muted-foreground">{t("currentQuery")}</p></div><button type="button" onClick={() => setEditorOpen(false)} aria-label={t("cancelQuery")} className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><X className="h-4 w-4" /></button></div>
             <div className="mt-4 space-y-4">
               <fieldset><legend className="text-[11px] font-semibold text-muted-foreground">{t("queryTimeRange")}</legend><div className="mt-2 flex flex-wrap gap-1.5">{PRESETS.map((item) => <button key={item} type="button" onClick={() => updateDraftPreset(item)} className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${draft.preset === item ? "bg-accent text-white" : "border border-border text-muted-foreground hover:bg-muted hover:text-foreground"}`}>{t(item)}</button>)}</div>{draft.preset === "custom" && <div className="mt-2 flex items-center gap-2"><input aria-label={`${t("queryTimeRange")} ${t("from")}`} type={preciseRange ? "datetime-local" : "date"} value={dateTimeInputValue(draft.from)} onChange={(event) => handleDateChange(event.target.value, "from")} className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs" /><span className="text-xs text-muted-foreground">{t("to")}</span><input aria-label={`${t("queryTimeRange")} ${t("to")}`} type={preciseRange ? "datetime-local" : "date"} value={dateTimeInputValue(draft.to)} onChange={(event) => handleDateChange(event.target.value, "to")} className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs" /></div>}</fieldset>

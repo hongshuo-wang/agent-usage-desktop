@@ -341,6 +341,33 @@ describe("Dashboard overview", () => {
     expect(screen.queryByTestId("collection-index-status")).not.toBeInTheDocument();
   });
 
+  it("shows the composed empty state when every usage result is empty", async () => {
+    vi.mocked(fetchAPI).mockImplementation(async (path, params) => {
+      if (path === "stats") return { ...stats, total_tokens: 0, total_calls: 0 };
+      if (path === "usage-breakdown" || path === "tokens-over-time") return [];
+      return defaultAPIResponse(path, params);
+    });
+
+    renderDashboard();
+
+    expect(await screen.findByText("noUsageData")).toBeInTheDocument();
+    expect(screen.getByText("noUsageDataDetail")).toBeInTheDocument();
+  });
+
+  it("keeps successful overview content when throughput fails", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.mocked(fetchAPI).mockImplementation(async (path, params) => {
+      if (path === "throughput") throw new Error("throughput unavailable");
+      return defaultAPIResponse(path, params);
+    });
+
+    renderDashboard();
+
+    expect(await screen.findByTestId("primary-token-total")).toHaveTextContent("410");
+    expect(await screen.findByText("throughput unavailable")).toBeInTheDocument();
+    expect(consoleError).toHaveBeenCalledWith("Throughput fetch error:", expect.any(Error));
+  });
+
   it("keeps newer overview data when an older request succeeds later", async () => {
     const oldStats = deferred<typeof stats>();
     const latestStats = { ...stats, total_tokens: 902 };
