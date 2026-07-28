@@ -151,15 +151,20 @@ describe("Dashboard overview", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("renders the three full-width bands in order with exact token components", async () => {
+  it("renders the token-first bands in order with exact token components", async () => {
     renderDashboard();
 
-    expect(await screen.findByTestId("dashboard-band-core")).toBeInTheDocument();
+    expect(await screen.findByTestId("primary-token-total")).toHaveTextContent("410");
     expect(screen.getAllByTestId(/^dashboard-band-/).map((band) => band.dataset.testid)).toEqual([
       "dashboard-band-core",
+      "dashboard-band-insight",
       "dashboard-band-analysis",
       "dashboard-band-detail",
     ]);
+    const core = screen.getByTestId("dashboard-band-core");
+    expect(within(core).getByTestId("estimated-cost")).toHaveTextContent("$1.23");
+    expect(within(core).getByTestId("estimated-cost")).toHaveClass("text-muted-foreground");
+    expect(within(core).queryByText(/last period|较上周/i)).not.toBeInTheDocument();
     expect(within(screen.getByTestId("token-components")).getByText("111")).toBeInTheDocument();
     expect(within(screen.getByTestId("token-components")).getByText("222")).toBeInTheDocument();
     expect(within(screen.getByTestId("token-components")).getByText("33")).toBeInTheDocument();
@@ -240,6 +245,18 @@ describe("Dashboard overview", () => {
     expect(screen.getByTestId("location")).toHaveTextContent("/sessions?");
     expect(screen.getByTestId("location")).toHaveTextContent("from=2025-01-03");
     expect(screen.getByTestId("location")).toHaveTextContent("to=2025-01-03");
+  });
+
+  it.each([
+    ["peakUsage", "from=2025-01-03"],
+    ["topModel", "model=sonnet"],
+    ["topProject", "project=console"],
+  ])("opens sessions from insight %s", async (name, query) => {
+    renderDashboard();
+    await userEvent.setup().click(await screen.findByRole("button", { name }));
+
+    expect(screen.getByTestId("location")).toHaveTextContent("/sessions?");
+    expect(screen.getByTestId("location")).toHaveTextContent(query);
   });
 
   it("renders every throughput summary and a dual-axis component trend", async () => {

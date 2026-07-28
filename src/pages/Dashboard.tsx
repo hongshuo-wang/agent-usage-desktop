@@ -4,7 +4,10 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { Info } from "lucide-react";
 import ChartCard from "../components/ChartCard";
 import TimeRangeSelector from "../components/TimeRangeSelector";
+import TokenSummary from "../components/dashboard/TokenSummary";
+import UsageInsight from "../components/dashboard/UsageInsight";
 import { fetchAPI } from "../lib/api";
+import { buildDashboardInsight } from "../lib/dashboardPresentation";
 import type {
   CollectionIndexStatus,
   DashboardStats,
@@ -45,27 +48,24 @@ function Skeleton({ className = "" }: { className?: string }) {
 
 function DashboardSkeleton() {
   return (
-    <div className="min-w-0 space-y-4 overflow-hidden" aria-label="loading">
-      {["core", "analysis", "detail"].map((band, index) => (
-        <section key={band} className={index % 2 === 0 ? "bg-card/30 px-4 py-4" : "px-4 py-4"}>
-          <Skeleton className="mb-4 h-4 w-32" />
-          <div className={`grid gap-3 ${index === 0 ? "grid-cols-2 lg:grid-cols-5" : "grid-cols-1 lg:grid-cols-3"}`}>
-            {[1, 2, 3, 4, 5].slice(0, index === 0 ? 5 : 3).map((item) => (
-              <Skeleton key={item} className="h-24 min-w-0" />
-            ))}
-          </div>
-        </section>
-      ))}
-    </div>
-  );
-}
-
-function Metric({ label, value, detail }: { label: string; value: string; detail?: string }) {
-  return (
-    <div className="min-w-0 border-l-2 border-border pl-3 first:border-l-0 first:pl-0">
-      <div className="truncate text-xs font-medium text-muted-foreground">{label}</div>
-      <div className="mt-1 truncate font-mono text-2xl font-semibold tabular-nums">{value}</div>
-      {detail && <div className="mt-1 truncate text-[11px] text-muted-foreground">{detail}</div>}
+    <div className="dashboard-skeleton min-w-0 space-y-4 overflow-hidden" aria-label="loading">
+      <section className="dashboard-summary">
+        <div>
+          <Skeleton className="h-5 w-28" />
+          <Skeleton className="mt-3 h-12 w-52" />
+        </div>
+        <Skeleton className="h-28 w-full" />
+      </section>
+      <Skeleton className="h-20 w-full" />
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(16rem,1fr)]">
+        <Skeleton className="h-80" />
+        <Skeleton className="h-80" />
+      </div>
+      <div className="grid gap-5 xl:grid-cols-3">
+        <Skeleton className="h-64" />
+        <Skeleton className="h-64" />
+        <Skeleton className="h-64" />
+      </div>
     </div>
   );
 }
@@ -415,6 +415,12 @@ export default function Dashboard() {
 
   const throughputView = useMemo(() => buildThroughputView(throughput.series, throughputMode), [throughput.series, throughputMode]);
 
+  const usageInsight = useMemo(() => buildDashboardInsight(
+    data?.tokens || [],
+    data?.models || [],
+    data?.projects || [],
+  ), [data?.tokens, data?.models, data?.projects]);
+
   const throughputOption = useMemo(() => ({
     tooltip: { trigger: "axis", confine: true },
     legend: { type: "scroll", top: 0, left: "center" },
@@ -446,6 +452,13 @@ export default function Dashboard() {
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
+      <header className="dashboard-page-header">
+        <div>
+          <p className="dashboard-eyebrow">{rangeDetail}</p>
+          <h1>{t("title")}</h1>
+        </div>
+      </header>
+
       <TimeRangeSelector
         preset={filters.preset}
         onPresetChange={updatePreset}
@@ -508,18 +521,15 @@ export default function Dashboard() {
           </section>
         ) : data && stats ? (
           <>
-            <section data-testid="dashboard-band-core" className="bg-card/40 px-4 py-4">
-              <BandTitle title={t("coreMetrics")} detail={rangeDetail} />
-              <div className="grid grid-cols-2 gap-x-4 gap-y-4 lg:grid-cols-5">
-                <Metric label={t("totalTokens")} value={fmtTokens(stats.total_tokens)} detail={`${stats.total_calls} ${t("apiCalls")}`} />
-                <Metric label={t("localCostEstimate")} value={fmtCost(stats.total_cost)} />
-                <Metric label={t("sessions")} value={String(stats.total_sessions)} />
-                <Metric label={t("userMessages")} value={String(stats.total_prompts)} />
-                <Metric label={t("cacheHitRate")} value={`${(stats.cache_hit_rate * 100).toFixed(1)}%`} />
-              </div>
-            </section>
+            <TokenSummary stats={stats} rangeDetail={rangeDetail} />
+            <UsageInsight
+              insight={usageInsight}
+              onOpenDay={(day) => openSessions({ from: day, to: day })}
+              onOpenModel={(model) => openSessions({ model })}
+              onOpenProject={(project) => openSessions({ project })}
+            />
 
-            <section data-testid="dashboard-band-analysis" className="px-4 py-4">
+            <section data-testid="dashboard-band-analysis" className="px-1 py-4">
               <div className="grid min-w-0 grid-cols-1 gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(16rem,1fr)]">
                 <div className="min-w-0">
                   <header className="mb-3 flex min-w-0 flex-wrap items-end justify-between gap-2">
@@ -566,7 +576,7 @@ export default function Dashboard() {
               </div>
             </section>
 
-            <section data-testid="dashboard-band-detail" className="bg-card/25 px-4 py-4">
+            <section data-testid="dashboard-band-detail" className="px-1 py-4">
               <div className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(14rem,0.8fr)_minmax(16rem,1fr)]">
                 <div className="min-w-0">
                   <BandTitle title={t("agentComposition")} detail={t("tokens")} />
