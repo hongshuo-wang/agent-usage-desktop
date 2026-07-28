@@ -130,7 +130,7 @@ function BreakdownRows({
               {composition ? (
                 <>
                   <span className="block font-mono text-[10px] tabular-nums text-muted-foreground">
-                    {row.unknown_price ? `${fmtCost(row.total_cost)}*` : fmtCost(row.total_cost)}
+                    {fmtCost(row.total_cost)}
                   </span>
                   <span className="block font-mono text-[10px] tabular-nums text-muted-foreground">{share.toFixed(1)}%</span>
                   <span className="block text-[10px] text-muted-foreground">{row.sessions} {t("sessions")}</span>
@@ -258,7 +258,7 @@ function ModelUsageRows({ rows, onSelect, t }: {
             <span className="text-right">
               <span className="block font-mono text-xs font-semibold tabular-nums">{fmtTokens(row.total_tokens)}</span>
               <span className="block font-mono text-[10px] tabular-nums text-muted-foreground">
-                <span>{row.unknown_price ? `${fmtCost(row.total_cost)}*` : fmtCost(row.total_cost)}</span>
+                <span>{fmtCost(row.total_cost)}</span>
                 <span> / {share.toFixed(1)}%</span>
               </span>
               <span className="block text-[10px] text-muted-foreground">
@@ -570,7 +570,7 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <div className="min-w-0 pt-1 lg:pl-2">
-                  <BandTitle title={t("modelUsage")} detail={t("unknownPriceFootnote")} />
+                  <BandTitle title={t("modelUsage")} />
                   <ModelUsageRows rows={data.models} onSelect={(model) => openSessions({ model })} t={t} />
                 </div>
               </div>

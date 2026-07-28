@@ -193,7 +193,7 @@ describe("Dashboard overview", () => {
     expect(within(detail).queryByText("modelUsage")).not.toBeInTheDocument();
   });
 
-  it("renders model usage as proportional, accessible bars with pricing details", async () => {
+  it("renders model usage as proportional, accessible bars with secondary cost details", async () => {
     renderDashboard();
 
     const row = await screen.findByRole("button", { name: "viewSessionsFor sonnet" });
@@ -314,10 +314,12 @@ describe("Dashboard overview", () => {
     expect(within(row).getByTestId("composition-share")).toHaveStyle({ width: "62.5%" });
   });
 
-  it("marks Agent costs that include unpriced usage", async () => {
+  it("does not annotate Agent costs with pricing warnings", async () => {
     renderDashboard();
     const row = await screen.findByRole("button", { name: "viewSessionsFor codex" });
-    expect(within(row).getByText("$0.4000*")).toBeInTheDocument();
+    expect(within(row).getByText("$0.4000")).toBeInTheDocument();
+    expect(within(row).queryByText("$0.4000*")).not.toBeInTheDocument();
+    expect(screen.queryByText("unknownPriceFootnote")).not.toBeInTheDocument();
   });
 
   it("keeps pricing coverage details out of the daily overview", async () => {
