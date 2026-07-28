@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { getTimeRange } from "./utils";
+import { CHART_COLORS, getTimeRange } from "./utils";
 
 describe("getTimeRange", () => {
   it("returns the supplied dates for a custom range", () => {
@@ -12,5 +12,14 @@ describe("getTimeRange", () => {
     const element = document.createElement("div");
     document.body.appendChild(element);
     expect(element).toBeInTheDocument();
+  });
+});
+
+describe("chart colors", () => {
+  it("uses the restrained dashboard palette", () => {
+    expect(CHART_COLORS).toEqual([
+      "#0071e3", "#5ac8fa", "#64d2ff", "#8e8e93",
+      "#34c759", "#ff9f0a", "#5856d6", "#af52de",
+    ]);
   });
 });

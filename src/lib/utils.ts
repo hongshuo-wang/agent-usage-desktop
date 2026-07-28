@@ -49,4 +49,13 @@ export function relativeTime(ts: string, t: (key: string) => string): string {
   return d.toLocaleDateString();
 }
 
-export const CHART_COLORS = ["#f97316", "#22c55e", "#6366f1", "#eab308", "#ec4899", "#06b6d4", "#3b82f6", "#a855f7"];
+export const CHART_COLORS = [
+  "#0071e3",
+  "#5ac8fa",
+  "#64d2ff",
+  "#8e8e93",
+  "#34c759",
+  "#ff9f0a",
+  "#5856d6",
+  "#af52de",
+];

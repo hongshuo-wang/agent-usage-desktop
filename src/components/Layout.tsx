@@ -37,7 +37,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           <div className="text-sm font-semibold tracking-tight">Agent Usage</div>
           <div className="mt-1 text-[10px] text-muted-foreground">Local observability</div>
         </div>
-        <nav aria-label="Primary" className="flex flex-1 flex-col gap-1 px-3 py-3">
+        <nav
+          aria-label="Primary"
+          data-testid="desktop-navigation"
+          className="flex flex-1 flex-col gap-1 px-3 py-3"
+        >
           {navItems.map((item) => {
             const isActive = item.path === "/"
               ? location.pathname === "/"
@@ -47,9 +51,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               <Link
                 key={item.path}
                 to={item.path}
-                className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors ${
+                aria-current={isActive ? "page" : undefined}
+                className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
                   isActive
-                    ? "bg-accent-dim font-semibold text-foreground"
+                    ? "bg-muted font-semibold text-foreground"
                     : "text-muted-foreground hover:bg-muted hover:text-foreground"
                 }`}
               >
@@ -62,11 +67,20 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         <div className="border-t border-border px-4 py-4 text-xs text-muted-foreground">
           <div className="flex items-center justify-between">
             <span>{t("theme")}</span>
-            <button type="button" onClick={toggleTheme} aria-label={t("theme")} className="icon-button">
+            <button
+              type="button"
+              onClick={toggleTheme}
+              aria-label={t("theme")}
+              className="icon-button focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
               {document.documentElement.classList.contains("dark") ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </button>
           </div>
-          <button type="button" onClick={toggleLang} className="mt-3 flex w-full items-center justify-between rounded-md px-2 py-1.5 hover:bg-muted">
+          <button
+            type="button"
+            onClick={toggleLang}
+            className="mt-3 flex w-full items-center justify-between rounded-md px-2 py-1.5 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
             <span className="flex items-center gap-2"><Languages className="h-4 w-4" /> {t("language")}</span>
             <span>{i18n.language.toUpperCase()}</span>
           </button>
@@ -76,7 +90,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       <header className="sticky top-0 z-50 border-b border-border bg-background/90 backdrop-blur-sm lg:hidden">
         <div className="flex items-center justify-between px-4 py-3">
           <div className="text-sm font-semibold">Agent Usage</div>
-          <nav className="flex items-center gap-1" aria-label="Primary">
+          <nav
+            className="flex items-center gap-1"
+            aria-label="Primary"
+            data-testid="mobile-navigation"
+          >
             {navItems.map((item) => {
               const isActive = item.path === "/"
                 ? location.pathname === "/"
@@ -86,9 +104,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 <Link
                   key={item.path}
                   to={item.path}
-                  className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                  aria-current={isActive ? "page" : undefined}
+                  className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
                     isActive
-                      ? "bg-accent-dim text-foreground"
+                      ? "bg-muted text-foreground"
                       : "text-muted-foreground hover:bg-muted hover:text-foreground"
                   }`}
                 >

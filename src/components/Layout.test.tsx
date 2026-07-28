@@ -29,6 +29,13 @@ describe("Layout", () => {
     expect(new Set(screen.getAllByRole("link").map((link) => link.getAttribute("href")))).toEqual(
       new Set(["/", "/sessions", "/settings"]),
     );
+    expect(screen.getByTestId("desktop-navigation")).toBeInTheDocument();
+    expect(screen.getByTestId("mobile-navigation")).toBeInTheDocument();
+    for (const link of screen.getAllByRole("link", { name: "title" })) {
+      expect(link).toHaveAttribute("aria-current", "page");
+    }
+    expect(screen.getAllByRole("link", { name: "sessionLog" })[0]).not.toHaveAttribute("aria-current");
+    expect(screen.getAllByRole("main")).toHaveLength(1);
   });
 
   it("keeps the header fixed while making the main content vertically scrollable", () => {
