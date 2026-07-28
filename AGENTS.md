@@ -107,6 +107,7 @@ Usage records are deduped via a unique index on `(session_id, model, timestamp, 
 
 ## Conventions
 
+- Work directly in the current checkout by default. Do not create or switch to a git worktree unless the user explicitly requests one.
 - Conventional Commits (`feat:`, `fix:`, `refactor:`, etc.).
 - Version/commit/date injected via ldflags at build time.
 - Desktop app frontend lives in `src/` (React + TypeScript).
