@@ -58,8 +58,8 @@ Download an installer from [GitHub Releases](https://github.com/hongshuo-wang/ag
 
 | Platform | Official v2.0 artifact |
 | --- | --- |
-| macOS Apple Silicon | `Agent Usage_2.0.0_aarch64.dmg` |
-| Windows x64 | `Agent Usage_2.0.0_x64-setup.exe` |
+| macOS Apple Silicon | `Agent.Usage_2.0.0_aarch64.dmg` |
+| Windows x64 | `Agent.Usage_2.0.0_x64-setup.exe` |
 
 macOS Intel and Linux users can build from source. These platforms do not have official v2.0 installers.
 

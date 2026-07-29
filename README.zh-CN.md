@@ -58,8 +58,8 @@ Agent Usage 读取这台电脑上已有的会话和用量记录，将不同来�
 
 | 平台 | v2.0 官方产物 |
 | --- | --- |
-| macOS Apple Silicon | `Agent Usage_2.0.0_aarch64.dmg` |
-| Windows x64 | `Agent Usage_2.0.0_x64-setup.exe` |
+| macOS Apple Silicon | `Agent.Usage_2.0.0_aarch64.dmg` |
+| Windows x64 | `Agent.Usage_2.0.0_x64-setup.exe` |
 
 macOS Intel 和 Linux 用户可以从源码构建，v2.0 暂不提供这两个平台的官方安装包。
 
