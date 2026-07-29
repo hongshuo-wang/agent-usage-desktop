@@ -125,7 +125,7 @@ pricing:
 
 ## 从源码构建
 
-前置条件：[Go](https://go.dev/) 1.25+、[Node.js](https://nodejs.org/) 20+ 和 [Rust](https://rustup.rs/) stable。Linux 还需要 `libwebkit2gtk-4.1-dev` 和 `libappindicator3-dev`。
+前置条件：[Go](https://go.dev/) 1.25+、[Node.js](https://nodejs.org/) 24+ 和 [Rust](https://rustup.rs/) stable。Linux 还需要 `libwebkit2gtk-4.1-dev` 和 `libappindicator3-dev`。
 
 ```bash
 npm install

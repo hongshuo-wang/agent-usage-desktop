@@ -125,7 +125,7 @@ pricing:
 
 ## Build From Source
 
-Prerequisites: [Go](https://go.dev/) 1.25+, [Node.js](https://nodejs.org/) 20+, and [Rust](https://rustup.rs/) stable. Linux also requires `libwebkit2gtk-4.1-dev` and `libappindicator3-dev`.
+Prerequisites: [Go](https://go.dev/) 1.25+, [Node.js](https://nodejs.org/) 24+, and [Rust](https://rustup.rs/) stable. Linux also requires `libwebkit2gtk-4.1-dev` and `libappindicator3-dev`.
 
 ```bash
 npm install

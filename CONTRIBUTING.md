@@ -11,7 +11,7 @@ Thanks for your interest in agent-usage-desktop! Issues and Pull Requests are we
 git clone https://github.com/hongshuo-wang/agent-usage-desktop.git
 cd agent-usage-desktop
 
-# Requirements: Go 1.25+, Node.js 20+, Rust (stable)
+# Requirements: Go 1.25+, Node.js 24+, Rust (stable)
 
 # Install frontend deps
 npm install
