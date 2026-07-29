@@ -52,6 +52,34 @@ func snapshotCount(t *testing.T, ledger *sql.DB) int {
 	return count
 }
 
+func TestEnsureBundledPricingSeedsOnlyAnEmptyCatalog(t *testing.T) {
+	db, ledger := openPricingTestDB(t)
+
+	if err := EnsureBundledPricing(db); err != nil {
+		t.Fatalf("EnsureBundledPricing: %v", err)
+	}
+	if got := snapshotCount(t, ledger); got != 1 {
+		t.Fatalf("snapshot count = %d, want 1", got)
+	}
+	catalog, err := db.GetLatestPricingCatalog()
+	if err != nil {
+		t.Fatalf("GetLatestPricingCatalog: %v", err)
+	}
+	if catalog == nil || catalog.Source != "litellm" || !strings.HasPrefix(catalog.Revision, "bundled:") {
+		t.Fatalf("bundled catalog provenance = %#v", catalog)
+	}
+	if len(catalog.Entries) < 100 {
+		t.Fatalf("bundled catalog contains %d entries, want a complete catalog", len(catalog.Entries))
+	}
+
+	if err := EnsureBundledPricing(db); err != nil {
+		t.Fatalf("second EnsureBundledPricing: %v", err)
+	}
+	if got := snapshotCount(t, ledger); got != 1 {
+		t.Fatalf("snapshot count after second seed = %d, want 1", got)
+	}
+}
+
 func TestPricingSyncCreatesOneAtomicSnapshot(t *testing.T) {
 	db, ledger := openPricingTestDB(t)
 	body := `{

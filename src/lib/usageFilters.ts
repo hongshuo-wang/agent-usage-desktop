@@ -7,7 +7,7 @@ const VALID_PRESETS = new Set<TimePreset>([
 ]);
 
 export const DEFAULT_USAGE_FILTERS: UsageFilters = {
-  preset: "last7d",
+  preset: "today",
   from: "",
   to: "",
   source: "",

@@ -14,7 +14,11 @@ function App() {
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/sessions" element={<Sessions />} />
-            <Route path="/settings" element={<Settings />} />
+            <Route path="/settings" element={<Navigate to="/settings/data-sources" replace />} />
+            <Route path="/settings/data-sources" element={<Settings section="data-sources" />} />
+            <Route path="/settings/pricing" element={<Settings section="pricing" />} />
+            <Route path="/settings/index-diagnostics" element={<Settings section="index-diagnostics" />} />
+            <Route path="/settings/preferences" element={<Settings section="preferences" />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>

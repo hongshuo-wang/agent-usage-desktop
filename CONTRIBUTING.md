@@ -29,7 +29,7 @@ npx tauri dev
 ├── main.go                  # Entry point
 ├── internal/
 │   ├── config/              # YAML config loader
-│   ├── collector/           # Data source parsers (Claude Code, Codex, OpenClaw)
+│   ├── collector/           # Data source parsers (Claude Code, Codex, OpenCode, OpenClaw)
 │   ├── pricing/             # litellm price sync + cost calculation
 │   ├── storage/             # SQLite schema, read/write, cost backfill
 │   └── server/              # HTTP server, REST API
@@ -68,15 +68,7 @@ The changelog is generated from these prefixes during release.
 
 ## Release Process
 
-Releases are manual. Two options:
-
-```bash
-# Push a tag to trigger CI
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-This triggers the Desktop Build workflow to build Tauri apps for all platforms and create a GitHub Release.
+Releases are manual and follow the checklist in [RELEASE.md](RELEASE.md). Commit the version and bilingual changelog first, push `main`, then create an annotated matching tag. CI validates every version source, builds all official artifacts, and creates the GitHub Release only after every required job succeeds.
 
 ## Versioning
 
@@ -85,6 +77,8 @@ We follow [Semantic Versioning](https://semver.org/):
 - `MAJOR` — breaking changes (config format, API response schema, DB migration)
 - `MINOR` — new features (new data source, new dashboard panel, new API endpoint)
 - `PATCH` — bug fixes, performance improvements, dependency updates
+
+The committed manifests are the version source of truth. A Git tag must match them exactly.
 
 ## Code Style
 

@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, Database, Eye, RefreshCw, Save, Search, Star, StarOff, Upload, X } from "lucide-react";
+import { AlertTriangle, BarChart3, CircleCheck, CircleMinus, Database, MessageSquareText, RefreshCw, Save, Search, Star, StarOff, Upload, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { fetchAPI } from "../lib/api";
 import { applyOwnedHydration } from "./settingsHydration";
+import type { SystemSection } from "../lib/systemNavigation";
 import type {
   CollectorName,
   CollectorSetting,
@@ -95,7 +96,7 @@ function SegmentedControl({
   );
 }
 
-export default function Settings() {
+export default function Settings({ section = "data-sources" }: { section?: SystemSection }) {
   const { t, i18n } = useTranslation();
   const [autostart, setAutostart] = useState(false);
   const [theme, setTheme] = useState(localStorage.getItem("au-theme") || "system");
@@ -112,7 +113,7 @@ export default function Settings() {
   const [pricingImportError, setPricingImportError] = useState<string | null>(null);
   const [pricingSyncState, setPricingSyncState] = useState<ActionState>("idle");
   const [pricingSyncError, setPricingSyncError] = useState<string | null>(null);
-  const [pricingCatalogOpen, setPricingCatalogOpen] = useState(false);
+  const [pricingImportOpen, setPricingImportOpen] = useState(false);
   const [pricingCatalogState, setPricingCatalogState] = useState<ActionState>("idle");
   const [pricingCatalog, setPricingCatalog] = useState<PricingCatalog | null>(null);
   const [pricingCatalogError, setPricingCatalogError] = useState<string | null>(null);
@@ -133,11 +134,9 @@ export default function Settings() {
   const [confirmRebuild, setConfirmRebuild] = useState(false);
   const [rebuildState, setRebuildState] = useState<RebuildState>("idle");
   const [rebuildError, setRebuildError] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState("data-sources");
-  const programmaticSectionRef = useRef<string | null>(null);
-  const sectionNavigationTimerRef = useRef<number | null>(null);
   const loadControllerRef = useRef<AbortController | null>(null);
   const loadGenerationRef = useRef(0);
+  const pricingCatalogGenerationRef = useRef(0);
   const mountedRef = useRef(false);
   const desktopHydrationGenerationRef = useRef({
     costThreshold: 0,
@@ -147,8 +146,7 @@ export default function Settings() {
   const rebuildTriggerRef = useRef<HTMLButtonElement>(null);
   const rebuildDialogRef = useRef<HTMLElement>(null);
   const rebuildCancelRef = useRef<HTMLButtonElement>(null);
-  const pricingCatalogDialogRef = useRef<HTMLElement>(null);
-  const pricingCatalogCloseRef = useRef<HTMLButtonElement>(null);
+  const pricingImportCloseRef = useRef<HTMLButtonElement>(null);
 
   const loadCollectorSettings = useCallback(async () => {
     loadControllerRef.current?.abort();
@@ -177,6 +175,22 @@ export default function Settings() {
       setSettingsError(errorMessage(error));
     } finally {
       if (isCurrent()) setSettingsLoading(false);
+    }
+  }, []);
+
+  const loadPricingCatalog = useCallback(async (showLoading = true) => {
+    const generation = ++pricingCatalogGenerationRef.current;
+    if (showLoading) setPricingCatalogState("pending");
+    setPricingCatalogError(null);
+    try {
+      const response = await fetchAPI<PricingCatalog>("pricing/models", {});
+      if (!mountedRef.current || generation !== pricingCatalogGenerationRef.current) return;
+      setPricingCatalog(response);
+      setPricingCatalogState("success");
+    } catch (error) {
+      if (!mountedRef.current || generation !== pricingCatalogGenerationRef.current) return;
+      setPricingCatalogState("error");
+      setPricingCatalogError(errorMessage(error));
     }
   }, []);
 
@@ -216,7 +230,6 @@ export default function Settings() {
     return () => {
       mountedRef.current = false;
       loadControllerRef.current?.abort();
-      if (sectionNavigationTimerRef.current !== null) window.clearTimeout(sectionNavigationTimerRef.current);
     };
   }, [loadCollectorSettings]);
 
@@ -225,46 +238,23 @@ export default function Settings() {
   }, [confirmRebuild]);
 
   useEffect(() => {
-    if (pricingCatalogOpen) pricingCatalogCloseRef.current?.focus();
-  }, [pricingCatalogOpen]);
+    if (pricingImportOpen) pricingImportCloseRef.current?.focus();
+  }, [pricingImportOpen]);
 
   useEffect(() => {
-    const sections = ["data-sources", "pricing", "index-diagnostics", "preferences"]
-      .map((id) => document.getElementById(id))
-      .filter((section): section is HTMLElement => Boolean(section));
-    if (!sections.length || typeof IntersectionObserver === "undefined") return;
-    const root = document.querySelector(".app-main");
-    const observer = new IntersectionObserver((entries) => {
-      if (programmaticSectionRef.current) return;
-      const visible = entries
-        .filter((entry) => entry.isIntersecting)
-        .sort((left, right) => right.intersectionRatio - left.intersectionRatio);
-      if (visible[0]) setActiveSection(visible[0].target.id);
-    }, { root, rootMargin: "-12% 0px -62% 0px", threshold: [0.1, 0.35, 0.7] });
-    sections.forEach((section) => observer.observe(section));
-    return () => observer.disconnect();
-  }, [settingsLoading, pricingCatalogOpen]);
+    if (section !== "pricing") return;
+    void loadPricingCatalog();
+    return () => { pricingCatalogGenerationRef.current += 1; };
+  }, [loadPricingCatalog, section]);
 
-  const scrollToSection = (event: React.MouseEvent<HTMLAnchorElement>, id: string) => {
-    event.preventDefault();
-    if (sectionNavigationTimerRef.current !== null) window.clearTimeout(sectionNavigationTimerRef.current);
-    programmaticSectionRef.current = id;
-    const section = document.getElementById(id);
-    const scrollRoot = document.querySelector<HTMLElement>(".app-main");
-    if (section && scrollRoot) {
-      const top = scrollRoot.scrollTop + section.getBoundingClientRect().top
-        - scrollRoot.getBoundingClientRect().top - 16;
-      scrollRoot.scrollTo({ top: Math.max(0, top), behavior: "auto" });
-    } else {
-      section?.scrollIntoView({ behavior: "auto", block: "start" });
-    }
-    setActiveSection(id);
-    window.history.replaceState(null, "", `#${id}`);
-    sectionNavigationTimerRef.current = window.setTimeout(() => {
-      if (programmaticSectionRef.current === id) programmaticSectionRef.current = null;
-      sectionNavigationTimerRef.current = null;
-    }, 150);
-  };
+  const visiblePricingModels = useMemo(() => {
+    const search = pricingCatalogSearch.trim().toLowerCase();
+    return (pricingCatalog?.models || [])
+      .filter((entry) => entry.model.toLowerCase().includes(search))
+      .sort((left, right) => (
+        Number(pinnedModels.includes(right.model)) - Number(pinnedModels.includes(left.model))
+      ));
+  }, [pinnedModels, pricingCatalog, pricingCatalogSearch]);
 
   const handleThemeChange = (value: string) => {
     setTheme(value);
@@ -378,6 +368,7 @@ export default function Settings() {
         headers: { "Content-Type": "application/json" },
         body,
       });
+      await loadPricingCatalog(false);
       setPricingImportState("success");
       setPricingFile(null);
       if (pricingFileInputRef.current) pricingFileInputRef.current.value = "";
@@ -393,6 +384,7 @@ export default function Settings() {
     setPricingSyncError(null);
     try {
       await fetchAPI("pricing/sync", {}, { method: "POST" });
+      await loadPricingCatalog(false);
       setPricingSyncState("success");
     } catch (error) {
       setPricingSyncState("error");
@@ -401,54 +393,12 @@ export default function Settings() {
     }
   };
 
-  const openPricingCatalog = async () => {
-    setPricingCatalogOpen(true);
-    setPricingCatalogState("pending");
-    setPricingCatalogError(null);
-    setPricingCatalogSearch("");
-    try {
-      const response = await fetchAPI<PricingCatalog>("pricing/models", {});
-      setPricingCatalog(response);
-      setPricingCatalogState("success");
-    } catch (error) {
-      setPricingCatalogState("error");
-      setPricingCatalogError(errorMessage(error));
-    }
-  };
-
-  const closePricingCatalog = () => {
-    setPricingCatalogOpen(false);
-    setPricingCatalogSearch("");
-  };
-
   const togglePinnedModel = (model: string) => {
     setPinnedModels((current) => {
       const next = current.includes(model) ? current.filter((item) => item !== model) : [...current, model];
       localStorage.setItem("au-pinned-models", JSON.stringify(next));
       return next;
     });
-  };
-
-  const handlePricingCatalogKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      closePricingCatalog();
-      return;
-    }
-    if (event.key !== "Tab") return;
-    const focusable = Array.from(
-      pricingCatalogDialogRef.current?.querySelectorAll<HTMLElement>("button:not([disabled]), input:not([disabled])") || [],
-    );
-    if (focusable.length === 0) return;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
   };
 
   const closeRebuildDialog = () => {
@@ -505,15 +455,8 @@ export default function Settings() {
   };
 
   return (
-    <div className="system-page-layout min-w-0 max-w-6xl pb-8">
-      <aside className="system-subnav hidden lg:block">
-        <div className="mb-3 text-sm font-semibold">{t("systemWorkspace")}</div>
-        {[["data-sources", "dataSources"], ["pricing", "pricing"], ["index-diagnostics", "indexDiagnostics"], ["preferences", "preferences"]].map(([id, label]) => (
-          <a key={id} href={`#${id}`} onClick={(event) => scrollToSection(event, id)} className={`system-subnav-link ${activeSection === id ? "system-subnav-link-active" : ""}`}>{t(label)}</a>
-        ))}
-      </aside>
-      <div className="min-w-0 space-y-10">
-      <section id="data-sources" className="scroll-mt-5">
+    <div className="min-w-0 w-full max-w-5xl pb-8">
+      {section === "data-sources" && <section id="data-sources">
         <div className="mb-4">
           <h2 className="text-base font-semibold tracking-tight">{t("collectorSettings")}</h2>
           <p className="mt-1 text-sm leading-5 text-muted-foreground">{t("collectorSettingsDetail")}</p>
@@ -531,20 +474,35 @@ export default function Settings() {
           <div className="space-y-2">
             {collectors.map((collector) => {
               const label = t(COLLECTOR_LABELS[collector.name]);
+              const supportsReplay = FULL_RETROSPECTIVE.has(collector.name);
               return (
-                <div key={collector.name} className="grid min-w-0 gap-4 rounded-md bg-card/55 px-3 py-4 lg:grid-cols-[12rem_minmax(0,1fr)_12rem]">
-                  <div className="flex items-start justify-between gap-3 lg:block">
-                    <div>
+                <div key={collector.name} className="grid min-w-0 gap-4 rounded-md bg-card/55 px-4 py-4 lg:grid-cols-[14rem_minmax(0,1fr)_10rem]">
+                  <div className="min-w-0">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
                       <h3 className="text-sm font-medium">{label}</h3>
-                      <p className="mt-1 text-[10px] text-muted-foreground">
-                        {t(FULL_RETROSPECTIVE.has(collector.name) ? "fullRetrospective" : "statisticsOnly")}
+                      <p className="mt-1 text-[10px] text-muted-foreground tabular-nums">
+                        {t("collectorCapabilityCount", { supported: supportsReplay ? 2 : 1, total: 2 })}
                       </p>
+                      </div>
+                      <Toggle
+                        checked={collector.enabled}
+                        label={`${t("collectorEnabled")} ${label}`}
+                        onChange={() => updateCollector(collector.name, { enabled: !collector.enabled })}
+                      />
                     </div>
-                    <Toggle
-                      checked={collector.enabled}
-                      label={`${t("collectorEnabled")} ${label}`}
-                      onChange={() => updateCollector(collector.name, { enabled: !collector.enabled })}
-                    />
+                    <div className="mt-3 flex flex-wrap gap-1.5" aria-label={t("collectorCapabilities")}>
+                      <span className="inline-flex items-center gap-1.5 rounded bg-accent-dim px-2 py-1 text-[10px] font-medium text-accent">
+                        <BarChart3 className="h-3 w-3" aria-hidden="true" />
+                        {t("tokenUsageCapability")}
+                        <CircleCheck className="h-3 w-3" aria-hidden="true" />
+                      </span>
+                      <span className={`inline-flex items-center gap-1.5 rounded px-2 py-1 text-[10px] font-medium ${supportsReplay ? "bg-accent-dim text-accent" : "bg-muted text-muted-foreground"}`}>
+                        <MessageSquareText className="h-3 w-3" aria-hidden="true" />
+                        {t("sessionReplayCapability")}
+                        {supportsReplay ? <CircleCheck className="h-3 w-3" aria-hidden="true" /> : <CircleMinus className="h-3 w-3" aria-hidden="true" />}
+                      </span>
+                    </div>
                   </div>
                   <label className="min-w-0 text-[10px] text-muted-foreground">
                     <span className="mb-1 block">{t("collectorPaths")}</span>
@@ -569,17 +527,7 @@ export default function Settings() {
                 </div>
               );
             })}
-            <div className="flex min-w-0 flex-wrap items-end justify-between gap-4 pt-3">
-              <label className="min-w-48 text-[10px] text-muted-foreground">
-                <span className="mb-1 block">{t("pricingSyncInterval")}</span>
-                <input
-                  type="text"
-                  aria-label={t("pricingSyncInterval")}
-                  value={pricingInterval}
-                  onChange={(event) => { setPricingInterval(event.target.value); setSaveState("idle"); setSaveError(null); }}
-                  className="h-9 w-full rounded border border-border bg-card px-2.5 font-mono text-xs text-foreground outline-none focus:border-accent"
-                />
-              </label>
+            <div className="flex min-w-0 flex-wrap items-end justify-end gap-4 pt-3">
               <button
                 type="button"
                 aria-label={t("saveCollectorSettings")}
@@ -602,171 +550,246 @@ export default function Settings() {
             {saveError && <p className="pb-3 break-words text-xs text-red-500">{saveError}</p>}
           </div>
         ) : null}
-      </section>
+      </section>}
 
-      <section id="pricing" className="scroll-mt-5">
-              <h2 className="text-base font-semibold tracking-tight">{t("pricingSourceTitle")}</h2>
-              <p className="mt-1 max-w-2xl text-sm leading-5 text-muted-foreground">
-                {t("pricingSourceDetail")} {" "}
-                  <a
-                    href={LITELLM_PRICING_URL}
-                    target="_blank"
-                    rel="noreferrer"
-                    onClick={openPricingSource}
-                    className="text-accent underline underline-offset-2 hover:text-accent/80"
-                >
-                  {t("pricingSourceLink")}
-                </a>
-              </p>
-              <div className="mt-3 flex min-w-0 flex-wrap items-end gap-3">
-                <button
-                  type="button"
-                  aria-label={t("refreshPricing")}
-                  onClick={() => { void refreshPricing(); }}
-                  disabled={pricingSyncState === "pending"}
-                  className="inline-flex h-9 items-center gap-2 rounded border border-border px-3 text-xs font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <RefreshCw className={`h-4 w-4 ${pricingSyncState === "pending" ? "animate-spin" : ""}`} />
-                  {pricingSyncState === "pending" ? t("refreshingPricing") : t("refreshPricing")}
-                </button>
-                <label className="min-w-0 flex-1 text-[10px] text-muted-foreground sm:min-w-64">
-                  <span className="mb-1 block">{t("pricingFile")}</span>
-                  <input
-                    ref={pricingFileInputRef}
-                    type="file"
-                    accept=".json,application/json"
-                    aria-label={t("pricingFile")}
-                    onChange={(event) => {
-                      setPricingFile(event.target.files?.[0] ?? null);
-                      setPricingImportState("idle");
-                      setPricingImportError(null);
-                    }}
-                    className="block h-9 w-full min-w-0 cursor-pointer rounded border border-border bg-card px-2 py-1.5 text-xs text-foreground file:mr-2 file:rounded file:border-0 file:bg-muted file:px-2 file:py-1 file:text-xs file:font-medium"
-                  />
-                </label>
-                <button
-                  type="button"
-                  aria-label={t("importPricing")}
-                  onClick={() => { void importPricing(); }}
-                  disabled={!pricingFile || pricingImportState === "pending"}
-                  className="inline-flex h-9 items-center gap-2 rounded border border-border px-3 text-xs font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <Upload className="h-4 w-4" />
-                  {pricingImportState === "pending" ? t("importingPricing") : t("importPricing")}
-                </button>
-                <button
-                  type="button"
-                  aria-label={t("viewPricing")}
-                  onClick={() => { void openPricingCatalog(); }}
-                  disabled={pricingCatalogState === "pending"}
-                  className="inline-flex h-9 items-center gap-2 rounded border border-border px-3 text-xs font-medium hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <Eye className="h-4 w-4" />
-                  {pricingCatalogState === "pending" ? t("loadingPricing") : t("viewPricing")}
-                </button>
-              </div>
-              {pricingImportState === "success" && <p className="mt-2 text-xs text-green">{t("pricingImported")}</p>}
-              {pricingImportError && (
-                <p className="mt-2 break-words text-xs text-red-500">
-                  {t("pricingImportFailed")}: {pricingImportError}
-                </p>
-              )}
-              {pricingSyncState === "success" && <p className="mt-2 text-xs text-green">{t("pricingRefreshed")}</p>}
-              {pricingSyncError && (
-                <p className="mt-2 break-words text-xs text-red-500">
-                  {t("pricingRefreshFailed")}: {pricingSyncError}
-                </p>
-              )}
-      </section>
+      {section === "pricing" && <section id="pricing">
+        <h2 className="text-base font-semibold tracking-tight">{t("pricingSourceTitle")}</h2>
+        <p className="mt-1 max-w-2xl text-sm leading-5 text-muted-foreground">{t("pricingSourceDetail")}</p>
 
-      {pricingCatalogOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closePricingCatalog(); }}>
-          <section
-            ref={pricingCatalogDialogRef}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="pricing-catalog-title"
-            onKeyDown={handlePricingCatalogKeyDown}
-            className="flex h-[min(88vh,56rem)] w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-border bg-background shadow-xl"
-          >
-            <div className="flex items-start justify-between gap-4 border-b border-border p-5">
-              <div>
-                <h2 id="pricing-catalog-title" className="text-sm font-semibold">{t("pricingCatalogTitle")}</h2>
-                <p className="mt-1 text-xs text-muted-foreground">{t("pricingCatalogDetail")}</p>
-              </div>
-              <button ref={pricingCatalogCloseRef} type="button" aria-label={t("closePricingCatalog")} onClick={closePricingCatalog} className="icon-button shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground">
-                <X className="h-5 w-5" />
+        <div className="mt-5 rounded-md bg-card/60 p-4">
+          <div className="flex min-w-0 flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium">{t("defaultPricingCatalog")}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{t("defaultPricingCatalogDetail")}</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                aria-label={t("refreshPricing")}
+                onClick={() => { void refreshPricing(); }}
+                disabled={pricingSyncState === "pending"}
+                className="inline-flex h-9 items-center gap-2 rounded bg-accent px-3 text-xs font-medium text-white transition-colors hover:bg-accent/90 active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <RefreshCw className={`h-4 w-4 ${pricingSyncState === "pending" ? "animate-spin" : ""}`} />
+                {pricingSyncState === "pending" ? t("refreshingPricing") : t("refreshPricing")}
               </button>
             </div>
-            <div className="min-h-0 flex-1 p-5">
-              {pricingCatalogState === "pending" && <p className="py-10 text-center text-sm text-muted-foreground">{t("loadingPricing")}</p>}
-              {pricingCatalogState === "error" && <p className="break-words py-10 text-center text-sm text-red-500">{pricingCatalogError}</p>}
-              {pricingCatalogState === "success" && pricingCatalog && (
-                <>
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
-                    <span>{t("pricingModelCount", { count: pricingCatalog.models.length })}</span>
-                    <label className="relative min-w-52 flex-1 sm:max-w-xs">
-                      <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-                      <input
-                        type="search"
-                        aria-label={t("searchPricingModels")}
-                        value={pricingCatalogSearch}
-                        onChange={(event) => setPricingCatalogSearch(event.target.value)}
-                        placeholder={t("searchPricingModels")}
-                        className="h-8 w-full rounded border border-border bg-card pl-7 pr-2 text-xs text-foreground outline-none focus:border-accent"
-                      />
-                    </label>
-                  </div>
-                  <div className="max-h-[55vh] overflow-auto rounded border border-border">
-                    <table className="w-full min-w-[46rem] text-left text-xs">
-                      <thead className="sticky top-0 bg-muted text-muted-foreground">
-                        <tr>
-                          <th className="w-12 px-3 py-2 font-medium">{t("pinned")}</th>
-                          <th className="px-3 py-2 font-medium">{t("model")}</th>
-                          <th className="px-3 py-2 text-right font-medium">{t("pricingInputPrice")}</th>
-                          <th className="px-3 py-2 text-right font-medium">{t("pricingOutputPrice")}</th>
-                          <th className="px-3 py-2 text-right font-medium">{t("pricingCacheReadPrice")}</th>
-                          <th className="px-3 py-2 text-right font-medium">{t("pricingCacheCreatePrice")}</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border">
-                        {pricingCatalog.models
-                          .filter((entry) => entry.model.toLowerCase().includes(pricingCatalogSearch.trim().toLowerCase()))
-                          .sort((left, right) => Number(pinnedModels.includes(right.model)) - Number(pinnedModels.includes(left.model)))
-                          .map((entry) => (
-                          <tr key={entry.model} className="hover:bg-muted/50">
-                            <td className="px-3 py-2">
-                              <button
-                                type="button"
-                                aria-label={`${t(pinnedModels.includes(entry.model) ? "unpinModel" : "pinModel")} ${entry.model}`}
-                                aria-pressed={pinnedModels.includes(entry.model)}
-                                onClick={() => togglePinnedModel(entry.model)}
-                                className="icon-button h-7 w-7 text-muted-foreground hover:text-accent"
-                              >
-                                {pinnedModels.includes(entry.model) ? <Star className="h-4 w-4 fill-current" /> : <StarOff className="h-4 w-4" />}
-                              </button>
-                            </td>
-                            <td className="max-w-[24rem] truncate px-3 py-2 font-mono" title={entry.model}>{entry.model}</td>
-                            <td className="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums">{formatPricePerMillion(entry.input_cost_per_token)}</td>
-                            <td className="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums">{formatPricePerMillion(entry.output_cost_per_token)}</td>
-                            <td className="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums">{formatPricePerMillion(entry.cache_read_input_token_cost)}</td>
-                            <td className="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums">{formatPricePerMillion(entry.cache_creation_input_token_cost)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    {pricingCatalog.models.filter((entry) => entry.model.toLowerCase().includes(pricingCatalogSearch.trim().toLowerCase())).length === 0 && (
-                      <p className="py-10 text-center text-sm text-muted-foreground">{t("noPricingModels")}</p>
-                    )}
-                  </div>
-                </>
-              )}
+          </div>
+
+          <dl className="mt-4 grid gap-px overflow-hidden rounded border border-border bg-border sm:grid-cols-3">
+            <div className="bg-card px-3 py-3">
+              <dt className="text-[10px] text-muted-foreground">{t("pricingProvider")}</dt>
+              <dd className="mt-1 text-xs font-medium">{pricingCatalog?.source || "LiteLLM"}</dd>
             </div>
+            <div className="bg-card px-3 py-3">
+              <dt className="text-[10px] text-muted-foreground">{t("pricingLastUpdated")}</dt>
+              <dd className="mt-1 font-mono text-xs tabular-nums">
+                {pricingCatalog?.pricing_last_synced_at
+                  ? new Date(pricingCatalog.pricing_last_synced_at).toLocaleString(i18n.language)
+                  : pricingCatalogState === "pending" ? t("loadingPricing") : t("notAvailable")}
+              </dd>
+            </div>
+            <div className="bg-card px-3 py-3">
+              <dt className="text-[10px] text-muted-foreground">{t("pricingModels")}</dt>
+              <dd className="mt-1 font-mono text-xs font-semibold tabular-nums">
+                {pricingCatalog ? pricingCatalog.models.length : pricingCatalogState === "pending" ? "..." : "-"}
+              </dd>
+            </div>
+          </dl>
+
+          {pricingSyncState === "success" && <p className="mt-3 text-xs text-green">{t("pricingRefreshed")}</p>}
+          {pricingSyncError && <p className="mt-3 break-words text-xs text-red-500">{t("pricingRefreshFailed")}: {pricingSyncError}</p>}
+        </div>
+
+        <section className="mt-6" aria-labelledby="pricing-catalog-title">
+          <div className="flex min-w-0 flex-wrap items-end justify-between gap-3">
+            <div>
+              <h3 id="pricing-catalog-title" className="text-sm font-semibold">{t("pricingCatalogTitle")}</h3>
+              <p className="mt-1 text-xs text-muted-foreground">{t("pricingCatalogDetail")}</p>
+            </div>
+            <label className="relative min-w-52 flex-1 sm:max-w-xs">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <input
+                type="search"
+                aria-label={t("searchPricingModels")}
+                value={pricingCatalogSearch}
+                onChange={(event) => setPricingCatalogSearch(event.target.value)}
+                placeholder={t("searchPricingModels")}
+                className="h-9 w-full rounded border border-border bg-card pl-8 pr-2.5 text-xs text-foreground outline-none focus:border-accent"
+              />
+            </label>
+          </div>
+
+          <div className="mt-3 flex h-[clamp(18rem,48vh,32rem)] min-w-0 flex-col overflow-hidden rounded border border-border bg-card">
+            {pricingCatalogState === "pending" && (
+              <p className="m-auto text-sm text-muted-foreground">{t("loadingPricing")}</p>
+            )}
+            {pricingCatalogState === "error" && (
+              <div className="m-auto px-5 text-center">
+                <p className="break-words text-sm text-red-500">{pricingCatalogError}</p>
+                <button
+                  type="button"
+                  onClick={() => { void loadPricingCatalog(); }}
+                  className="mt-3 inline-flex items-center gap-2 rounded border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" /> {t("retry")}
+                </button>
+              </div>
+            )}
+            {pricingCatalogState === "success" && pricingCatalog && (
+              <>
+                <div className="border-b border-border px-3 py-2 text-[10px] text-muted-foreground">
+                  {t("pricingModelCount", { count: visiblePricingModels.length })}
+                </div>
+                <div className="min-h-0 flex-1 overflow-auto">
+                  <table className="w-full min-w-[46rem] text-left text-xs">
+                    <thead className="sticky top-0 z-10 bg-muted text-muted-foreground">
+                      <tr>
+                        <th className="w-12 px-3 py-2 font-medium">{t("pinned")}</th>
+                        <th className="px-3 py-2 font-medium">{t("model")}</th>
+                        <th className="px-3 py-2 text-right font-medium">{t("pricingInputPrice")}</th>
+                        <th className="px-3 py-2 text-right font-medium">{t("pricingOutputPrice")}</th>
+                        <th className="px-3 py-2 text-right font-medium">{t("pricingCacheReadPrice")}</th>
+                        <th className="px-3 py-2 text-right font-medium">{t("pricingCacheCreatePrice")}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {visiblePricingModels.map((entry) => (
+                        <tr key={entry.model} className="hover:bg-muted/50">
+                          <td className="px-3 py-2">
+                            <button
+                              type="button"
+                              aria-label={`${t(pinnedModels.includes(entry.model) ? "unpinModel" : "pinModel")} ${entry.model}`}
+                              aria-pressed={pinnedModels.includes(entry.model)}
+                              onClick={() => togglePinnedModel(entry.model)}
+                              className="icon-button h-7 w-7 text-muted-foreground hover:text-accent"
+                            >
+                              {pinnedModels.includes(entry.model) ? <Star className="h-4 w-4 fill-current" /> : <StarOff className="h-4 w-4" />}
+                            </button>
+                          </td>
+                          <td className="max-w-[24rem] truncate px-3 py-2 font-mono" title={entry.model}>{entry.model}</td>
+                          <td className="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums">{formatPricePerMillion(entry.input_cost_per_token)}</td>
+                          <td className="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums">{formatPricePerMillion(entry.output_cost_per_token)}</td>
+                          <td className="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums">{formatPricePerMillion(entry.cache_read_input_token_cost)}</td>
+                          <td className="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums">{formatPricePerMillion(entry.cache_creation_input_token_cost)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {visiblePricingModels.length === 0 && (
+                    <p className="py-10 text-center text-sm text-muted-foreground">{t("noPricingModels")}</p>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </section>
+
+        <div className="mt-5 flex min-w-0 flex-wrap items-end justify-between gap-4">
+          <label className="w-48 text-[10px] text-muted-foreground">
+            <span className="mb-1 block">{t("pricingSyncInterval")}</span>
+            <input
+              type="text"
+              aria-label={t("pricingSyncInterval")}
+              value={pricingInterval}
+              onChange={(event) => { setPricingInterval(event.target.value); setSaveState("idle"); setSaveError(null); }}
+              className="h-9 w-full rounded border border-border bg-card px-2.5 font-mono text-xs text-foreground outline-none focus:border-accent"
+            />
+          </label>
+          <button
+            type="button"
+            aria-label={t("savePricingSettings")}
+            onClick={() => { void saveCollectorSettings(); }}
+            disabled={saveState === "pending" || saveState === "restartPending" || settingsLoading}
+            className="inline-flex h-9 items-center gap-2 rounded border border-border px-3 text-xs font-medium transition-colors hover:bg-muted active:translate-y-px disabled:opacity-50"
+          >
+            <Save className="h-4 w-4" /> {saveState === "pending" ? t("savingSettings") : t("save")}
+          </button>
+        </div>
+        {saveState === "success" && <p className="mt-2 text-xs text-green">{t("settingsSavedAndRestarted")}</p>}
+        {saveError && <p className="mt-2 break-words text-xs text-red-500">{saveError}</p>}
+
+        <button
+          type="button"
+          aria-label={t("customPricingFile")}
+          onClick={() => { setPricingImportOpen(true); setPricingImportState("idle"); setPricingImportError(null); }}
+          className="mt-6 inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          <Upload className="h-3.5 w-3.5" /> {t("customPricingFile")}
+        </button>
+      </section>}
+
+      {section === "pricing" && pricingImportOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          role="presentation"
+          onMouseDown={(event) => { if (event.target === event.currentTarget) setPricingImportOpen(false); }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="pricing-import-title"
+            onKeyDown={(event) => { if (event.key === "Escape") setPricingImportOpen(false); }}
+            className="w-full max-w-md rounded-lg border border-border bg-background p-5 shadow-xl"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 id="pricing-import-title" className="text-sm font-semibold">{t("customPricingFile")}</h2>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">{t("customPricingFileDetail")}</p>
+              </div>
+              <button
+                ref={pricingImportCloseRef}
+                type="button"
+                aria-label={t("closePricingImport")}
+                onClick={() => setPricingImportOpen(false)}
+                className="icon-button shrink-0 text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <a
+              href={LITELLM_PRICING_URL}
+              target="_blank"
+              rel="noreferrer"
+              onClick={openPricingSource}
+              className="mt-4 inline-block text-xs text-accent underline underline-offset-2 hover:text-accent/80"
+            >
+              {t("pricingSourceLink")}
+            </a>
+            <label className="mt-4 block min-w-0 text-[10px] text-muted-foreground">
+              <span className="mb-1 block">{t("pricingFile")}</span>
+              <input
+                ref={pricingFileInputRef}
+                type="file"
+                accept=".json,application/json"
+                aria-label={t("pricingFile")}
+                onChange={(event) => {
+                  setPricingFile(event.target.files?.[0] ?? null);
+                  setPricingImportState("idle");
+                  setPricingImportError(null);
+                }}
+                className="block h-9 w-full min-w-0 cursor-pointer rounded border border-border bg-card px-2 py-1.5 text-xs text-foreground file:mr-2 file:rounded file:border-0 file:bg-muted file:px-2 file:py-1 file:text-xs file:font-medium"
+              />
+            </label>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                aria-label={t("importPricing")}
+                onClick={() => { void importPricing(); }}
+                disabled={!pricingFile || pricingImportState === "pending"}
+                className="inline-flex h-9 items-center gap-2 rounded bg-accent px-3 text-xs font-medium text-white hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Upload className="h-4 w-4" />
+                {pricingImportState === "pending" ? t("importingPricing") : t("importPricing")}
+              </button>
+            </div>
+            {pricingImportState === "success" && <p className="mt-3 text-xs text-green">{t("pricingImported")}</p>}
+            {pricingImportError && <p className="mt-3 break-words text-xs text-red-500">{t("pricingImportFailed")}: {pricingImportError}</p>}
           </section>
         </div>
       )}
 
-      <section id="index-diagnostics" className="scroll-mt-5">
+      {section === "index-diagnostics" && <section id="index-diagnostics">
         <h2 className="text-base font-semibold tracking-tight">{t("sessionIndex")}</h2>
         <p className="mt-1 text-sm leading-5 text-muted-foreground">{t("sessionIndexDetail")}</p>
         <button
@@ -789,9 +812,9 @@ export default function Settings() {
           </div>
         )}
         {rebuildError && <p className="mt-3 break-words text-xs text-red-500">{rebuildError}</p>}
-      </section>
+      </section>}
 
-      <section id="preferences" className="scroll-mt-5">
+      {section === "preferences" && <section id="preferences">
         <h2 className="mb-4 text-base font-semibold tracking-tight">{t("desktopPreferences")}</h2>
         <div className="pb-5">
           <h3 className="mb-4 text-sm font-semibold">{t("appearanceAndLanguage")}</h3>
@@ -841,9 +864,9 @@ export default function Settings() {
             </span>
           </label>
         </div>
-      </section>
+      </section>}
 
-      {confirmRebuild && (
+      {section === "index-diagnostics" && confirmRebuild && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="presentation">
           <section ref={rebuildDialogRef} role="dialog" aria-modal="true" aria-labelledby="confirm-rebuild-title" onKeyDown={handleRebuildDialogKeyDown} className="w-full max-w-md rounded border border-border bg-background p-5 shadow-xl">
             <div className="flex items-start gap-3">
@@ -860,7 +883,6 @@ export default function Settings() {
           </section>
         </div>
       )}
-      </div>
     </div>
   );
 }

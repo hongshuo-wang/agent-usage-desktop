@@ -2,6 +2,7 @@ package pricing
 
 import (
 	"crypto/sha256"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,9 @@ import (
 )
 
 const pricingURL = "https://cdn.jsdelivr.net/gh/BerriAI/litellm@main/model_prices_and_context_window.json"
+
+//go:embed model_prices_and_context_window.json
+var bundledPricingJSON []byte
 
 // MaxPricingImportBytes bounds uploaded pricing documents while leaving ample
 // room for the current LiteLLM model catalog and future growth.
@@ -30,7 +34,35 @@ type modelPricing struct {
 // full response as one immutable pricing snapshot.
 func Sync(db *storage.DB) error {
 	client := &http.Client{Timeout: 30 * time.Second}
-	return syncFromURL(db, client, pricingURL)
+	if err := syncFromURL(db, client, pricingURL); err != nil {
+		if fallbackErr := EnsureBundledPricing(db); fallbackErr != nil {
+			return fmt.Errorf("sync pricing: %w; load bundled pricing: %v", err, fallbackErr)
+		}
+		return err
+	}
+	return nil
+}
+
+// EnsureBundledPricing installs the release snapshot only when no local
+// pricing catalog exists. Online syncs and manual imports always take priority.
+func EnsureBundledPricing(db *storage.DB) error {
+	catalog, err := db.GetLatestPricingCatalog()
+	if err != nil {
+		return err
+	}
+	if catalog != nil {
+		return nil
+	}
+
+	entries, revision, err := ParsePricingJSON(bundledPricingJSON)
+	if err != nil {
+		return fmt.Errorf("decode bundled pricing: %w", err)
+	}
+	if _, err := db.CreatePricingSnapshot(time.Now().UTC(), "litellm", "bundled:"+revision, entries); err != nil {
+		return err
+	}
+	log.Printf("pricing: loaded %d models from bundled snapshot", len(entries))
+	return nil
 }
 
 func syncFromURL(db *storage.DB, client *http.Client, url string) error {

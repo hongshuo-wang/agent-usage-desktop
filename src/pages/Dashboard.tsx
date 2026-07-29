@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Info } from "lucide-react";
@@ -17,6 +18,7 @@ import type {
   UsageFilters,
 } from "../lib/types";
 import {
+  DEFAULT_USAGE_FILTERS,
   buildSessionsSearch,
   getInitialUsageFilters,
   getUsageRequestParams,
@@ -152,6 +154,80 @@ function formatThroughput(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
+function HelpTooltip({ label, align = "right" }: { label: string; align?: "left" | "right" }) {
+  const tooltipID = useId();
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState({ left: 0, top: 0 });
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const tooltipRef = useRef<HTMLSpanElement>(null);
+
+  const updatePosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    const tooltip = tooltipRef.current;
+    if (!trigger || !tooltip) return;
+
+    const triggerRect = trigger.getBoundingClientRect();
+    const tooltipRect = tooltip.getBoundingClientRect();
+    const viewportMargin = 8;
+    const gap = 6;
+    const preferredLeft = align === "left" ? triggerRect.left : triggerRect.right - tooltipRect.width;
+    const maxLeft = Math.max(viewportMargin, window.innerWidth - tooltipRect.width - viewportMargin);
+    const left = Math.min(Math.max(preferredLeft, viewportMargin), maxLeft);
+    const below = triggerRect.bottom + gap;
+    const top = below + tooltipRect.height <= window.innerHeight - viewportMargin
+      ? below
+      : Math.max(viewportMargin, triggerRect.top - tooltipRect.height - gap);
+
+    setPosition({ left, top });
+  }, [align]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [open, updatePosition]);
+
+  return (
+    <span
+      className="relative inline-flex shrink-0"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label={label}
+        aria-describedby={open ? tooltipID : undefined}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") setOpen(false);
+        }}
+        className="inline-flex h-5 w-5 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        <Info aria-hidden="true" className="h-3 w-3" />
+      </button>
+      {open && createPortal(
+        <span
+          ref={tooltipRef}
+          id={tooltipID}
+          role="tooltip"
+          style={{ left: position.left, top: position.top }}
+          className="pointer-events-none fixed z-[100] w-max max-w-64 rounded-md border border-border bg-card px-2.5 py-2 text-left font-sans text-[11px] font-normal leading-4 text-foreground shadow-lg"
+        >
+          {label}
+        </span>,
+        document.body,
+      )}
+    </span>
+  );
+}
+
 function ThroughputMatrix({ throughput, t }: {
   throughput: ThroughputResult;
   t: (key: string) => string;
@@ -177,9 +253,9 @@ function ThroughputMatrix({ throughput, t }: {
           <tr>
             {columns.map(([key, label, help], index) => (
               <th key={key} className={`pb-1.5 ${index < columns.length - 1 ? "pr-2" : ""} ${index ? "text-right" : ""}`}>
-                <span className="inline-flex items-center gap-1" title={help}>
+                <span className="inline-flex items-center gap-0.5">
                   {label}{index > 0 && <span className="text-[9px] font-normal">({key === "rpm" ? "req/min" : "tok/min"})</span>}
-                  <Info aria-hidden="true" className="h-3 w-3 shrink-0 opacity-60" />
+                  <HelpTooltip label={help} align={index === 0 ? "left" : "right"} />
                 </span>
               </th>
             ))}
@@ -391,8 +467,8 @@ export default function Dashboard() {
   };
 
   const clearAllQueryFilters = () => {
-    const range = getTimeRange("last7d");
-    applyQueryFilters({ ...filters, ...range, preset: "last7d", source: "", model: "", project: "" });
+    const range = getTimeRange(DEFAULT_USAGE_FILTERS.preset);
+    applyQueryFilters({ ...filters, ...range, preset: DEFAULT_USAGE_FILTERS.preset, source: "", model: "", project: "" });
   };
 
   const openSessions = (overrides: Partial<UsageFilters>) => {
@@ -452,13 +528,6 @@ export default function Dashboard() {
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
-      <header className="dashboard-page-header">
-        <div>
-          <p className="dashboard-eyebrow">{rangeDetail}</p>
-          <h1>{t("title")}</h1>
-        </div>
-      </header>
-
       <TimeRangeSelector
         preset={filters.preset}
         onPresetChange={updatePreset}
@@ -494,7 +563,7 @@ export default function Dashboard() {
           <span className="ml-auto text-muted-foreground">
             {data.collectionStatus.source_count} {t("indexedSources")} / {data.collectionStatus.file_count} {t("indexedFiles")} / {data.collectionStatus.malformed_lines} {t("malformedLines")}
           </span>
-          <button type="button" onClick={() => navigate("/settings?section=index")} className="font-medium text-amber-700 underline underline-offset-2 hover:text-foreground">
+          <button type="button" onClick={() => navigate("/settings/index-diagnostics")} className="font-medium text-amber-700 underline underline-offset-2 hover:text-foreground">
             {t("openSystemDiagnostics")}
           </button>
         </aside>
@@ -603,8 +672,10 @@ export default function Dashboard() {
                 >
                   <header className="mb-3 flex min-w-0 flex-wrap items-end justify-between gap-2">
                     <div className="min-w-0">
-                      <h2 className="truncate text-sm font-semibold">{t("localObservedThroughput")}</h2>
-                      <p className="truncate text-xs text-muted-foreground">{t("notProviderQuota")}</p>
+                      <h2 className="flex items-center gap-1 text-sm font-semibold">
+                        <span className="truncate">{t("localObservedThroughput")}</span>
+                        <HelpTooltip label={t("localObservedThroughputHelp")} align="left" />
+                      </h2>
                     </div>
                     <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
                       <div className="inline-flex rounded-md border border-border bg-card p-0.5" aria-label={t("throughputScaleMode")}>

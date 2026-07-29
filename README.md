@@ -1,51 +1,85 @@
-# Agent Usage
-
-[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-blue)]()
-
-Agent Usage is a local, single-user application for understanding AI coding-agent usage, cost, throughput, and session history.
-
-**[中文文档](README.zh-CN.md)**
-
-It reads source data already stored by agents on this computer, builds a local SQLite index, and presents the result in a Tauri desktop app. Claude Code and Codex support deep session retrospective. OpenCode and OpenClaw currently provide statistics only.
-
 <p align="center">
-  <img src="docs/desktop.png" alt="Agent Usage desktop application" width="700">
+  <img src="docs/assets/logo.svg" alt="Agent Usage logo" width="128" height="128">
 </p>
 
-## What It Provides
+<h1 align="center">Agent Usage</h1>
 
-- Usage and cost trends across supported local agents
-- Project, model, and source breakdowns
-- Locally observed RPM/TPM throughput analysis
-- Searchable Claude Code and Codex sessions with readable event timelines
-- Automatic incremental scanning and deduplication
-- Cost alerts, system tray operation, autostart, light/dark themes, and English/Chinese UI
+<p align="center">
+  A desktop app for local usage, cost, throughput, and session analytics across AI coding agents.
+</p>
 
-The main navigation is Overview, Sessions, and Settings. Overview summarizes usage and cost; Sessions supports filtering, full-text search, and retrospective timelines; Settings controls the local collectors and application behavior.
+<p align="center">
+  <a href="README.zh-CN.md">中文文档</a>
+</p>
 
-## Data Sources
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-2563EB.svg" alt="Apache 2.0 license"></a>
+  <a href="https://tauri.app"><img src="https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white" alt="Tauri 2"></a>
+  <a href="https://react.dev"><img src="https://img.shields.io/badge/React-19-149ECA?logo=react&logoColor=white" alt="React 19"></a>
+  <a href="https://www.typescriptlang.org"><img src="https://img.shields.io/badge/TypeScript-6-3178C6?logo=typescript&logoColor=white" alt="TypeScript 6"></a>
+  <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white" alt="Go 1.25+"></a>
+  <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/Rust-stable-D65A31?logo=rust&logoColor=white" alt="Rust stable"></a>
+  <a href="https://sqlite.org"><img src="https://img.shields.io/badge/SQLite-local-0F80CC?logo=sqlite&logoColor=white" alt="SQLite"></a>
+</p>
 
-| Source | Default location | Input format | Current depth |
-| --- | --- | --- | --- |
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `~/.claude/projects/<project>/<session>.jsonl` | JSONL | Statistics and deep session retrospective |
-| [Codex CLI](https://github.com/openai/codex) | `~/.codex/sessions/<year>/<month>/<day>/<session>.jsonl` | JSONL | Statistics and deep session retrospective |
-| [OpenClaw](https://github.com/openclaw/openclaw) | `~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl` | JSONL | Statistics only |
-| [OpenCode](https://github.com/anomalyco/opencode) | `~/.local/share/opencode/opencode.db` | SQLite | Statistics only |
+Agent Usage reads the session and usage records already stored on this computer, normalizes them into a local SQLite index, and presents them in a focused desktop workspace. It is designed for one person inspecting their own coding-agent activity; there is no account, cloud database, or session upload.
 
-Collectors read incrementally and record file offsets so unchanged content is not parsed again. Supported sources are normalized into the same statistical model; only Claude Code and Codex currently populate the retrospective event index.
+<p align="center">
+  <img src="docs/assets/overview.png" alt="Agent Usage overview showing token, cost, throughput, and source analytics" width="960">
+</p>
+
+## Highlights
+
+- Compare token usage, estimated cost, prompts, sessions, API calls, RPM, and TPM across supported agents.
+- Filter the workspace by time range, source, model, and project, then carry the same query into session search.
+- Search and inspect readable Claude Code and Codex event timelines, including tool calls and errors.
+- Scan incrementally, deduplicate records, and rebuild the local index from source files when needed.
+- Use immutable pricing snapshots with bundled offline fallback, online LiteLLM refresh, and JSON import.
+- Run from the system tray with autostart, cost notifications, English/Chinese UI, and light/dark themes.
+
+<p align="center">
+  <img src="docs/assets/sessions.png" alt="Agent Usage session retrospective with search, timeline, and event details" width="960">
+</p>
+
+## Supported Sources
+
+| Source | Default location | Usage analytics | Session retrospective |
+| --- | --- | :---: | :---: |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `~/.claude/projects` | Yes | Yes |
+| [Codex CLI](https://github.com/openai/codex) | `~/.codex/sessions` | Yes | Yes |
+| [OpenCode](https://github.com/anomalyco/opencode) | `~/.local/share/opencode/opencode.db` | Yes | No |
+| [OpenClaw](https://github.com/openclaw/openclaw) | `~/.openclaw/agents` | Yes | No |
+
+Collectors resume from stored file offsets, so unchanged JSONL content is not parsed again. OpenCode is read from its local SQLite database. All sources share one statistical model, while deep event indexing is intentionally limited to Claude Code and Codex in v2.0.
+
+## Install
+
+Download an installer from [GitHub Releases](https://github.com/hongshuo-wang/agent-usage-desktop/releases):
+
+| Platform | Official v2.0 artifact |
+| --- | --- |
+| macOS Apple Silicon | `Agent Usage_2.0.0_aarch64.dmg` |
+| Windows x64 | `Agent Usage_2.0.0_x64-setup.exe` |
+
+macOS Intel and Linux users can build from source. These platforms do not have official v2.0 installers.
+
+The macOS build is currently unsigned. After moving the app to Applications, remove its quarantine attribute once if macOS reports that the app is damaged:
+
+```bash
+xattr -cr "/Applications/Agent Usage.app"
+```
+
+Launch Agent Usage. The sidecar starts on a loopback-only dynamic port and scans enabled local sources in the background.
+
+## Privacy and Network Access
+
+Raw agent files remain the source of truth. The SQLite index and configuration stay on this computer and can be rebuilt. Session content is never uploaded, and the local API binds to loopback.
+
+The only routine network request is model-pricing refresh from [LiteLLM's jsDelivr mirror](https://cdn.jsdelivr.net/gh/BerriAI/litellm@main/model_prices_and_context_window.json). A bundled catalog lets first-run cost estimation work offline. Online refresh and manual import never rewrite costs already assigned from historical pricing snapshots.
 
 ## Metric Semantics
 
 Token totals use four non-overlapping components:
-
-- **non-cached input**: input that was not served from or written to cache
-- **cache read input**: input served from cache
-- **cache creation input**: input written to cache
-- **output tokens**: all generated output
-
-The totals are calculated as:
 
 ```text
 total input  = non-cached input + cache read input + cache creation input
@@ -53,38 +87,11 @@ total output = output tokens
 total tokens = total input + total output
 ```
 
-Reasoning output is informational and is a subset of output, so it is never added to `total output` again.
-
-RPM and TPM are locally observed throughput, not provider quota or rate-limit utilization. They describe API calls and tokens visible in local source records. They do not reveal an account limit, remaining capacity, throttling state, or traffic that is absent from those files.
-
-## Local Data and Network Access
-
-Raw agent files are the source of truth. The local SQLite index can be rebuilt when source files or parser versions change. The default database and configuration stay on this computer.
-
-Session content is never uploaded. The application binds its API to loopback by default. Pricing sync is the only routine network request: it reads model pricing from [LiteLLM's jsDelivr mirror](https://cdn.jsdelivr.net/gh/BerriAI/litellm@main/model_prices_and_context_window.json) and stores an immutable local snapshot. Syncing does not rewrite costs that were already assigned to usage records.
-
-## Install
-
-Download a supported installer from [GitHub Releases](https://github.com/hongshuo-wang/agent-usage-desktop/releases):
-
-| Platform | File |
-| --- | --- |
-| macOS (Apple Silicon) | `Agent Usage_x.x.x_aarch64.dmg` |
-| Windows | `Agent Usage_x.x.x_x64-setup.exe` |
-
-For macOS Intel and Linux, build from source.
-
-Unsigned macOS builds may be reported as damaged. After moving the app into Applications, remove the quarantine attribute once:
-
-```bash
-xattr -cr "/Applications/Agent Usage.app"
-```
-
-Launch Agent Usage. It runs in the system tray and begins scanning enabled local sources.
+Reasoning output is informational and is already a subset of output tokens, so it is not added again. RPM and TPM are locally observed throughput, not provider quota, remaining capacity, or rate-limit utilization. Displayed cost is a local estimate, not a provider invoice.
 
 ## Configuration
 
-The desktop app creates `~/.config/agent-usage/config.yaml` on first launch. Settings can also be changed in the app.
+The desktop app creates `~/.config/agent-usage/config.yaml` on first launch. Data sources and application behavior can also be managed in Settings.
 
 ```yaml
 server:
@@ -118,52 +125,37 @@ pricing:
 
 ## Build From Source
 
-Prerequisites:
-
-- [Go](https://go.dev/) 1.25+
-- [Node.js](https://nodejs.org/) 20+
-- [Rust](https://rustup.rs/) stable
-- Linux only: `libwebkit2gtk-4.1-dev` and `libappindicator3-dev`
-
-Install dependencies, prepare the sidecar, and run the desktop app:
+Prerequisites: [Go](https://go.dev/) 1.25+, [Node.js](https://nodejs.org/) 20+, and [Rust](https://rustup.rs/) stable. Linux also requires `libwebkit2gtk-4.1-dev` and `libappindicator3-dev`.
 
 ```bash
 npm install
 
-# macOS Apple Silicon
+# macOS Apple Silicon sidecar
 CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
   go build -o src-tauri/binaries/agent-usage-aarch64-apple-darwin .
 
 npx tauri dev
 ```
 
-Production builds use the same sidecar step followed by:
+For a production build, prepare the sidecar matching the target and run `npx tauri build`:
 
 ```bash
-npx tauri build
-```
-
-Tauri requires the sidecar name `agent-usage-{rust-target-triple}[.exe]`. Build the binary that matches the desktop target:
-
-```bash
-# macOS Apple Silicon
-CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
-  go build -o src-tauri/binaries/agent-usage-aarch64-apple-darwin .
-
 # macOS Intel
 CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 \
   go build -o src-tauri/binaries/agent-usage-x86_64-apple-darwin .
 
-# Linux x86_64
+# Linux x64
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
   go build -o src-tauri/binaries/agent-usage-x86_64-unknown-linux-gnu .
 
-# Windows x86_64
+# Windows x64
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
   go build -o src-tauri/binaries/agent-usage-x86_64-pc-windows-msvc.exe .
 ```
 
-The standalone Go backend is also useful during development:
+Tauri requires the sidecar name `agent-usage-{rust-target-triple}[.exe]`.
+
+The Go backend can also run on its own:
 
 ```bash
 go build -o agent-usage-desktop .
@@ -173,48 +165,28 @@ go build -o agent-usage-desktop .
 ./agent-usage-desktop version
 ```
 
-Run all project checks with:
+Run the complete local verification suite with:
 
 ```bash
 go test ./...
+go vet ./...
 npm test
 npm run build
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-## Cost Calculation
+## Architecture
 
-Prices are expressed per token and stored locally. Because the four token components are non-overlapping, cost is calculated without subtracting cache tokens from input again:
+The React and TypeScript frontend runs inside Tauri v2. Rust manages the desktop window, tray, notifications, autostart, and Go sidecar lifecycle. The pure-Go sidecar collects local records, stores the normalized index with `modernc.org/sqlite` (no CGO), calculates snapshot-based costs, and serves the loopback REST API consumed by the UI.
 
-```text
-cost = non-cached input × input price
-     + cache creation input × cache creation price
-     + cache read input × cache read price
-     + output tokens × output price
-```
+## Contributing
 
-Displayed cost is a local estimate, not a provider invoice. Each usage record is priced from the latest locally stored pricing snapshot available at the event time, so later pricing syncs do not recalculate its historical cost. Usage that could not be priced is reported as unpriced and its cost is excluded from the estimate.
-
-Costs preserved from databases created before pricing snapshots are labeled legacy. They remain part of the local estimate, but their original pricing source cannot be traced.
-
-## Technology
-
-- Tauri v2 with a Rust process layer and system WebView
-- React, TypeScript, Vite, Tailwind CSS, and ECharts
-- Pure-Go backend and `modernc.org/sqlite`, with no CGO requirement
-
-## Roadmap
-
-- [ ] Hermes session retrospective support
-- [ ] Read-only discovery of global `CLAUDE.md`, `AGENTS.md`, and memory files, with explicit project-level import
-- [ ] Branded PNG/PDF BI sharing containing the project name, GitHub link, and Linux.do link
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and [SECURITY.md](SECURITY.md) for private vulnerability reporting.
 
 ## Community
 
-Source code and issues: [GitHub](https://github.com/hongshuo-wang/agent-usage-desktop)
-
-Discussion: [Linux.do](https://linux.do/t/topic/1922004)
+- [GitHub Issues](https://github.com/hongshuo-wang/agent-usage-desktop/issues)
 
 ## License
 
-[Apache 2.0](LICENSE)
+Agent Usage is licensed under the [Apache License 2.0](LICENSE).

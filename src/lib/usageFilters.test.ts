@@ -14,11 +14,11 @@ describe("usage filters", () => {
     vi.setSystemTime(new Date(2025, 0, 8, 12));
   });
 
-  it("defaults to the last seven days", () => {
-    expect(DEFAULT_USAGE_FILTERS.preset).toBe("last7d");
+  it("defaults to today", () => {
+    expect(DEFAULT_USAGE_FILTERS.preset).toBe("today");
     expect(getInitialUsageFilters("")).toEqual({
-      preset: "last7d",
-      from: "2025-01-02",
+      preset: "today",
+      from: "2025-01-08",
       to: "2025-01-08",
       source: "",
       model: "",

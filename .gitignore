@@ -53,4 +53,5 @@ src-tauri/src-tauri/
 .worktrees/
 
 # Local planning and design artifacts stay out of the repository.
-docs/
+!docs/
+docs/superpowers/

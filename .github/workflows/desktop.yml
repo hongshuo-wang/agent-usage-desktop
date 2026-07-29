@@ -3,85 +3,122 @@ name: Desktop Build
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  create-release:
+  validate-release:
     runs-on: ubuntu-latest
     outputs:
-      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: Get tag
-        id: tag
-        run: echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-
-      - name: Generate changelog
-        id: changelog
+      - name: Validate tag, manifests, and changelog
+        id: release
+        shell: bash
         run: |
+          set -euo pipefail
+
           TAG="${GITHUB_REF_NAME}"
-          PREV_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
-          if [ -z "$PREV_TAG" ]; then
-            RANGE="$TAG"
-          else
-            RANGE="${PREV_TAG}..${TAG}"
+          VERSION="${TAG#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid SemVer tag: $TAG" >&2
+            exit 1
           fi
 
-          {
-            echo 'body<<CHANGELOG_EOF'
-            echo "## What's Changed"
-            echo ""
+          PACKAGE_VERSION=$(jq -r '.version' package.json)
+          LOCK_VERSION=$(jq -r '.packages[""].version' package-lock.json)
+          TAURI_VERSION=$(jq -r '.version' src-tauri/tauri.conf.json)
+          CARGO_VERSION=$(awk '
+            /^\[package\]$/ { in_package=1; next }
+            in_package && /^version = / { gsub(/version = |"/, ""); print; exit }
+          ' src-tauri/Cargo.toml)
+          CARGO_LOCK_VERSION=$(awk '
+            $0 == "name = \"agent-usage-desktop\"" { found=1; next }
+            found && /^version = / { gsub(/version = |"/, ""); print; exit }
+          ' src-tauri/Cargo.lock)
 
-            # Collect commits by category
-            FEATS=$(git log "$RANGE" --pretty="format:- %s (%h)" --grep="^feat" 2>/dev/null || true)
-            FIXES=$(git log "$RANGE" --pretty="format:- %s (%h)" --grep="^fix" 2>/dev/null || true)
-            REFACTORS=$(git log "$RANGE" --pretty="format:- %s (%h)" --grep="^refactor" 2>/dev/null || true)
-            OTHERS=$(git log "$RANGE" --pretty="format:- %s (%h)" --invert-grep --grep="^feat" --grep="^fix" --grep="^refactor" --grep="^docs" --grep="^ci" --grep="^chore" --grep="^test" 2>/dev/null || true)
+          for manifest_version in \
+            "$PACKAGE_VERSION" \
+            "$LOCK_VERSION" \
+            "$TAURI_VERSION" \
+            "$CARGO_VERSION" \
+            "$CARGO_LOCK_VERSION"; do
+            if [ "$manifest_version" != "$VERSION" ]; then
+              echo "Version mismatch: tag=$VERSION manifest=$manifest_version" >&2
+              exit 1
+            fi
+          done
 
-            if [ -n "$FEATS" ]; then
-              echo "### Features"
-              echo "$FEATS"
-              echo ""
-            fi
-            if [ -n "$FIXES" ]; then
-              echo "### Fixes"
-              echo "$FIXES"
-              echo ""
-            fi
-            if [ -n "$REFACTORS" ]; then
-              echo "### Refactor"
-              echo "$REFACTORS"
-              echo ""
-            fi
-            if [ -n "$OTHERS" ]; then
-              echo "### Others"
-              echo "$OTHERS"
-              echo ""
-            fi
+          awk -v version="$VERSION" '
+            index($0, "## [" version "] - ") == 1 { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+            END { if (!found) exit 1 }
+          ' CHANGELOG.md > release-notes.md
 
-            if [ -n "$PREV_TAG" ]; then
-              echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG}"
-            fi
-            echo 'CHANGELOG_EOF'
-          } >> "$GITHUB_OUTPUT"
+          if [ ! -s release-notes.md ]; then
+            echo "CHANGELOG.md has no release notes for $VERSION" >&2
+            exit 1
+          fi
 
-      - name: Create release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+          if [ -n "$PREVIOUS_TAG" ]; then
+            {
+              echo
+              echo "**Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${PREVIOUS_TAG}...${TAG}"
+            } >> release-notes.md
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+          if-no-files-found: error
+
+  verify-go-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Verify Go and frontend
         run: |
-          gh release create "${{ steps.tag.outputs.tag }}" \
-            --title "${{ steps.tag.outputs.tag }}" \
-            --notes "${{ steps.changelog.outputs.body }}" \
-            --repo "${{ github.repository }}"
+          go test ./...
+          go vet ./...
+          npm test
+          npm run build
+
+  verify-rust:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify Rust layer
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
 
   build:
-    needs: create-release
+    needs: [validate-release, verify-go-frontend, verify-rust]
     strategy:
       fail-fast: false
       matrix:
@@ -99,17 +136,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Sync version from tag
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          echo "Syncing version to $VERSION"
-          jq --arg v "$VERSION" '.version = $v' src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
-          jq --arg v "$VERSION" '.version = $v' package.json > tmp2.json && mv tmp2.json package.json
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
 
@@ -120,51 +147,97 @@ jobs:
           GOARCH: ${{ matrix.go_arch }}
           CGO_ENABLED: "0"
         run: |
+          set -euo pipefail
           EXT=""
-          if [ "${{ matrix.go_os }}" = "windows" ]; then EXT=".exe"; fi
-          go build -ldflags "-s -w -X main.version=${{ github.ref_name }}" \
-            -o src-tauri/binaries/agent-usage-${{ matrix.target }}${EXT} .
+          if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
+          BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          go build \
+            -ldflags "-s -w -X main.version=${GITHUB_REF_NAME} -X main.commit=${GITHUB_SHA} -X main.date=${BUILD_DATE}" \
+            -o "src-tauri/binaries/agent-usage-${{ matrix.target }}${EXT}" .
 
-      - name: Setup Node
-        uses: actions/setup-node@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "20"
+          cache: npm
 
       - name: Install frontend dependencies
-        run: npm install
+        run: npm ci
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
       - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
         id: tauri
+        uses: tauri-apps/tauri-action@v0
         with:
           args: --target ${{ matrix.target }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload to release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Stage release artifacts
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ARTIFACT_PATHS: ${{ steps.tauri.outputs.artifactPaths }}
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          echo "Artifact paths: $ARTIFACT_PATHS"
-          # Use noglob to prevent bash from interpreting spaces/special chars in paths
-          set -o noglob
-          echo "$ARTIFACT_PATHS" | jq -r '.[]' | tr -d '\r' | while IFS= read -r f; do
-            # Convert Windows backslash paths to forward slashes for Git Bash
-            f="${f//\\//}"
-            if [ ! -e "$f" ]; then
-              echo "Warning: $f does not exist, skipping"
-              continue
+          set -euo pipefail
+          mkdir -p release-assets
+          echo "$ARTIFACT_PATHS" | jq -r '.[]' | tr -d '\r' | while IFS= read -r artifact; do
+            artifact="${artifact//\\//}"
+            if [ ! -f "$artifact" ]; then
+              echo "Missing Tauri artifact: $artifact" >&2
+              exit 1
             fi
-            echo "Uploading $f"
-            gh release upload "$TAG" "$f" --clobber || true
+            cp "$artifact" release-assets/
           done
-          set +o noglob
+          if ! find release-assets -type f -print -quit | grep -q .; then
+            echo "Tauri produced no release artifacts" >&2
+            exit 1
+          fi
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-${{ matrix.target }}
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish-release:
+    needs: [validate-release, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-assets-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mapfile -d '' ASSETS < <(find release-assets -type f -print0)
+          if [ "${#ASSETS[@]}" -eq 0 ]; then
+            echo "No packaged artifacts were downloaded" >&2
+            exit 1
+          fi
+
+          RELEASE_FLAGS=(--verify-tag --title "$GITHUB_REF_NAME" --notes-file release-notes/release-notes.md)
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            RELEASE_FLAGS+=(--prerelease)
+          else
+            RELEASE_FLAGS+=(--latest)
+          fi
+
+          gh release create "$GITHUB_REF_NAME" "${ASSETS[@]}" "${RELEASE_FLAGS[@]}"

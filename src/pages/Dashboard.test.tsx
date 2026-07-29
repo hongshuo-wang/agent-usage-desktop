@@ -170,7 +170,7 @@ describe("Dashboard overview", () => {
     expect(within(screen.getByTestId("token-components")).getByText("33")).toBeInTheDocument();
     expect(within(screen.getByTestId("token-components")).getByText("44")).toBeInTheDocument();
     expect(screen.getByText("localObservedThroughput")).toBeInTheDocument();
-    expect(screen.getByText("notProviderQuota")).toBeInTheDocument();
+    expect(screen.queryByText("notProviderQuota")).not.toBeInTheDocument();
   });
 
   it("separates overview bands with space and surfaces instead of horizontal rules", async () => {
@@ -180,6 +180,31 @@ describe("Dashboard overview", () => {
     for (const band of screen.getAllByTestId(/^dashboard-band-/)) {
       expect(band).not.toHaveClass("border-y");
     }
+  });
+
+  it("exposes throughput help as hoverable and keyboard-focusable tooltips", async () => {
+    renderDashboard();
+    const user = userEvent.setup();
+
+    await screen.findByTestId("throughput-matrix");
+    const sectionHelp = screen.getByRole("button", { name: "localObservedThroughputHelp" });
+    expect(sectionHelp).not.toHaveAttribute("aria-describedby");
+    expect(sectionHelp).toHaveClass("cursor-pointer");
+    expect(sectionHelp).not.toHaveClass("cursor-help");
+    expect(screen.queryByRole("tooltip", { name: "localObservedThroughputHelp" })).not.toBeInTheDocument();
+    await user.hover(sectionHelp);
+    expect(sectionHelp).toHaveAttribute("aria-describedby");
+    expect(screen.getByRole("tooltip", { name: "localObservedThroughputHelp" })).toBeInTheDocument();
+    await user.unhover(sectionHelp);
+
+    const cacheHelp = screen.getByRole("button", { name: "cacheReadTPMHelp" });
+    await user.click(cacheHelp);
+    expect(cacheHelp).toHaveFocus();
+    expect(cacheHelp).toHaveAttribute("aria-describedby");
+    const tooltip = screen.getByRole("tooltip", { name: "cacheReadTPMHelp" });
+    expect(tooltip).toBeInTheDocument();
+    expect(tooltip.parentElement).toBe(document.body);
+    expect(tooltip).toHaveClass("fixed", "z-[100]");
   });
 
   it("places model usage in analysis and agent composition in detail", async () => {

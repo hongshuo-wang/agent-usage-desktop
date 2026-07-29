@@ -1,132 +1,110 @@
-# Release Guide
+# Release Guide / 发布指南
 
-本文档描述 agent-usage-desktop 的发版流程和规范。
+Agent Usage uses [Semantic Versioning 2.0.0](https://semver.org/) and publishes desktop installers from annotated Git tags. This document is the permanent release contract for maintainers.
 
-This document describes the release process and conventions for agent-usage-desktop.
+Agent Usage 遵循 [Semantic Versioning 2.0.0](https://semver.org/)，并通过带注释的 Git 标签发布桌面安装包。本文档是维护者长期遵循的发版约定。
 
-## Version Scheme
+## Version Policy / 版本规则
 
-遵循 [Semantic Versioning 2.0.0](https://semver.org/)：`vMAJOR.MINOR.PATCH`
+| Change | Version | Examples |
+| --- | --- | --- |
+| Breaking compatibility / 破坏兼容 | MAJOR | incompatible config or API contract, migration that cannot preserve user state |
+| Backward-compatible feature / 兼容的新功能 | MINOR | new source, analytics view, setting, or API endpoint |
+| Backward-compatible fix / 兼容修复 | PATCH | bug, performance, dependency, packaging, or documentation fix |
 
-| 变更类型 | 版本位 | 示例 | 触发场景 |
-|---------|--------|------|---------|
-| Breaking | MAJOR | v1.0.0 → v2.0.0 | 配置格式变更、数据库 schema 不兼容迁移、API 响应结构变更 |
-| Feature | MINOR | v0.1.0 → v0.2.0 | 新数据源、新仪表板面板、新 API 端点、新配置项 |
-| Fix | PATCH | v0.1.0 → v0.1.1 | Bug 修复、性能优化、依赖更新、文档修正 |
+Pre-release tags use SemVer suffixes such as `v2.1.0-alpha.1`, `v2.1.0-beta.1`, and `v2.1.0-rc.1`.
 
-### Pre-release
+## Version Source of Truth / 版本唯一来源
 
-开发阶段可使用预发布标签：
+The release version is committed before a tag is created. These files must contain the same version without the leading `v`:
 
-```
-v0.2.0-alpha.1    # 早期测试
-v0.2.0-beta.1     # 功能完整，测试中
-v0.2.0-rc.1       # 发布候选
-```
+发版版本号必须先提交，再创建标签。以下文件必须保存同一个不带 `v` 的版本号：
 
-## Release Checklist
+- `package.json`
+- `package-lock.json`
+- `src-tauri/tauri.conf.json`
+- `src-tauri/Cargo.toml`
+- the `agent-usage-desktop` package entry in `src-tauri/Cargo.lock`
 
-发版前逐项确认：
+The Git tag is a trigger and integrity check, not a second version source. CI rejects a tag that does not match the committed manifests.
 
-```
-[ ] 所有目标功能已合并到 main
-[ ] go build 编译通过（无 warning）
-[ ] go vet ./... 无问题
-[ ] go test ./... 全部通过
-[ ] 本地运行测试，数据解析正常
-[ ] CHANGELOG.md 已更新（将 [Unreleased] 内容移至新版本号下）
-[ ] README 已更新（如有用户可见变更）
-[ ] config.yaml 示例已更新（如有新配置项）
-```
+Git 标签只负责触发发布和校验完整性，不是另一套版本来源。标签与清单版本不一致时，CI 必须失败。
 
-## How to Release
+## Supported Release Artifacts / 官方发布产物
 
-### Step 1: Update CHANGELOG
+| Platform | Architecture | Artifact |
+| --- | --- | --- |
+| macOS | Apple Silicon | `Agent Usage_<version>_aarch64.dmg` |
+| Windows | x64 | `Agent Usage_<version>_x64-setup.exe` |
 
-将 `[Unreleased]` 部分重命名为新版本号并添加日期：
+macOS Intel and Linux are source-build targets for v2.x and are not official installer artifacts.
 
-```markdown
-## [0.1.0] - 2026-04-03
+macOS Intel 与 Linux 在 v2.x 中仅提供源码构建方式，不属于官方安装包范围。
 
-### Added
-- Claude Code session parser
-- ...
+## Release Checklist / 发版检查
 
-## [Unreleased]
-```
+- [ ] All intended changes are committed on `main`; the worktree is clean.
+- [ ] `main` is pushed and synchronized with `origin/main`.
+- [ ] The five version locations contain the target version.
+- [ ] `CHANGELOG.md` contains a dated, bilingual entry for the target version.
+- [ ] `README.md` and `README.zh-CN.md` describe the shipped behavior and artifacts.
+- [ ] `go test ./...` passes.
+- [ ] `go vet ./...` passes.
+- [ ] `npm test` passes.
+- [ ] `npm run build` passes.
+- [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes.
+- [ ] A local production build has been checked on the maintainer's platform.
+- [ ] The GitHub About description, topics, and community URL are current.
 
-提交：
+## Prepare a Release / 准备发布
+
+1. Select the next version according to SemVer.
+2. Update every version source listed above.
+3. Move the release notes out of `[Unreleased]` into a dated bilingual version section in `CHANGELOG.md`.
+4. Update user-facing documentation and screenshots when behavior changed.
+5. Run the complete checklist.
+6. Commit and push the preparation:
 
 ```bash
-git add CHANGELOG.md
-git commit -m "chore: prepare release v0.1.0"
+git add -A
+git commit -m "chore: prepare v2.0.1 release"
 git push origin main
 ```
 
-### Step 2: Create Tag
+## Publish / 正式发布
+
+Create an annotated tag on the verified release commit, then push only that tag:
+
+在通过验证的发版提交上创建带注释标签，然后只推送该标签：
 
 ```bash
-git tag -a v0.1.0 -m "Release v0.1.0: initial release with Claude Code and Codex support"
-git push origin v0.1.0
+git tag -a v2.0.1 -m "Release v2.0.1: concise release summary"
+git push origin v2.0.1
 ```
 
-Tag message 格式：`Release v<VERSION>: <one-line summary>`
+The `Desktop Build` workflow then:
 
-### Step 3: Verify
+1. validates the tag and all committed versions;
+2. extracts the matching bilingual notes from `CHANGELOG.md`;
+3. builds and tests the Go sidecar, frontend, and Rust layer;
+4. packages macOS Apple Silicon and Windows x64 installers;
+5. creates the GitHub Release only after every required build succeeds;
+6. uploads all installers and marks a stable SemVer release as Latest.
 
-1. 前往 [GitHub Actions](https://github.com/hongshuo-wang/agent-usage-desktop/actions) 确认 Desktop Build workflow 成功
-2. 检查 [Releases](https://github.com/hongshuo-wang/agent-usage-desktop/releases) 页面：
-   - Changelog 自动生成且正确
-   - 各平台桌面安装包已上传（macOS .dmg、Windows .exe、Linux .AppImage/.deb）
+If any required job fails, fix the cause and create a new version. Do not move or overwrite a published tag.
 
-### Alternative: GitHub UI
+如果任何必要任务失败，应修复后发布新版本，不要移动或覆盖已经公开的标签。
 
-也可以通过 GitHub Actions 页面手动触发：
+## Post-release Verification / 发布后检查
 
-1. 进入 Actions → Desktop Build → Run workflow
-2. 点击 Run
+- Confirm the GitHub Actions run is green.
+- Confirm the Release contains both expected platform installers and bilingual notes.
+- Download and launch at least the maintainer-platform artifact.
+- Verify `agent-usage-desktop version` reports the release tag.
+- Verify the README installer names and community links still resolve.
 
-## Build Matrix
+## Hotfixes / 紧急修复
 
-Desktop Build workflow 自动为以下平台构建 Tauri 桌面应用：
+A hotfix increments PATCH from the latest stable tag, follows the same preparation checklist, and publishes through the same workflow. Never reuse a version number or retag an existing release.
 
-| OS | Arch | 产物 |
-|----|------|------|
-| macOS | arm64 (Apple Silicon) | `Agent Usage_<ver>_aarch64.dmg` |
-| macOS | amd64 (Intel) | `Agent Usage_<ver>_x64.dmg` |
-| Linux | amd64 | `Agent Usage_<ver>_amd64.AppImage` / `.deb` |
-| Windows | amd64 | `Agent Usage_<ver>_x64-setup.exe` / `.msi` |
-
-Go sidecar 使用 CGO_ENABLED=0 确保静态链接。
-
-## Hotfix Process
-
-紧急修复流程：
-
-```bash
-# 1. 基于最新 tag 创建修复
-git checkout -b hotfix/v0.1.1 v0.1.0
-
-# 2. 修复并提交
-git commit -m "fix: critical bug description"
-
-# 3. 合并回 main
-git checkout main
-git merge hotfix/v0.1.1
-git push origin master:main
-
-# 4. 打 patch tag
-git tag -a v0.1.1 -m "Release v0.1.1: fix critical bug"
-git push origin v0.1.1
-
-# 5. 清理
-git branch -d hotfix/v0.1.1
-```
-
-## Post-Release
-
-发版后：
-
-1. 确认 GitHub Release 页面正常
-2. 在本地测试下载的二进制能否正常运行
-3. 如有必要，更新相关文档或公告
+紧急修复从最新稳定版递增 PATCH，并完整执行同一套检查与发布流程。不得复用版本号，也不得重新指向已有标签。

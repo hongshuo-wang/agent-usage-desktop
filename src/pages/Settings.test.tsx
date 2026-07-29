@@ -29,6 +29,13 @@ const settings = {
   pricing_sync_interval: "1h0m0s",
 };
 
+const pricingCatalog = {
+  pricing_last_synced_at: "2026-07-25T08:00:00Z",
+  source: "litellm",
+  revision: "revision-1",
+  models: [{ model: "gpt-test", input_cost_per_token: 0.000001, output_cost_per_token: 0.000002, cache_read_input_token_cost: 0, cache_creation_input_token_cost: 0 }],
+};
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -64,12 +71,7 @@ describe("application settings", () => {
       if (path === "settings/collectors") return settings as never;
       if (path === "pricing/import" && init?.method === "POST") return { imported_models: 1, repriced_records: 1 } as never;
       if (path === "pricing/sync" && init?.method === "POST") return { imported_models: 1, repriced_records: 1 } as never;
-      if (path === "pricing/models") return {
-        pricing_last_synced_at: "2026-07-25T08:00:00Z",
-        source: "litellm",
-        revision: "revision-1",
-        models: [{ model: "gpt-test", input_cost_per_token: 0.000001, output_cost_per_token: 0.000002, cache_read_input_token_cost: 0, cache_creation_input_token_cost: 0 }],
-      } as never;
+      if (path === "pricing/models") return pricingCatalog as never;
       if (path === "session-index/rebuild") return { status: "rebuild_required", sources: 4 } as never;
       throw new Error(`unexpected path ${path}`);
     });
@@ -83,91 +85,43 @@ describe("application settings", () => {
     expect(screen.getByRole("switch", { name: "collectorEnabled codex" })).toBeChecked();
     expect(screen.getByRole("switch", { name: "collectorEnabled openClaw" })).toBeChecked();
     expect(screen.getByRole("switch", { name: "collectorEnabled openCode" })).not.toBeChecked();
-    expect(screen.getAllByText("fullRetrospective")).toHaveLength(2);
-    expect(screen.getAllByText("statisticsOnly")).toHaveLength(2);
+    const capabilities = screen.getAllByLabelText("collectorCapabilities");
+    expect(capabilities).toHaveLength(4);
+    expect(within(capabilities[0]).getByText("sessionReplayCapability")).toHaveClass("text-accent");
+    expect(within(capabilities[1]).getByText("sessionReplayCapability")).toHaveClass("text-accent");
+    expect(within(capabilities[2]).getByText("sessionReplayCapability")).toHaveClass("text-muted-foreground");
+    expect(within(capabilities[3]).getByText("sessionReplayCapability")).toHaveClass("text-muted-foreground");
+    expect(screen.getAllByText("tokenUsageCapability")).toHaveLength(4);
     expect(screen.getByRole("textbox", { name: "collectorPaths claudeCode" })).toHaveValue("/claude/a\n/claude/b");
-    expect(screen.getByRole("textbox", { name: "pricingSyncInterval" })).toHaveValue("1h0m0s");
-    expect(screen.getByRole("switch", { name: "notification" })).toBeChecked();
-    expect(screen.getByRole("spinbutton", { name: "dailyCostThreshold" })).toHaveValue(10);
+    expect(screen.queryByRole("textbox", { name: "pricingSyncInterval" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "notification" })).not.toBeInTheDocument();
 
     expect(screen.queryByText(/hermes|provider|mcp|skills|backup|account|team/i)).not.toBeInTheDocument();
   });
 
-  it("keeps system sections in the same order as the subnavigation", async () => {
-    render(<Settings />);
-    await screen.findByRole("button", { name: "saveCollectorSettings" });
+  it("exposes one system destination at a time", async () => {
+    const view = render(<Settings section="data-sources" />);
+    await screen.findByRole("heading", { name: "collectorSettings" });
+    expect(screen.queryByRole("heading", { name: "pricingSourceTitle" })).not.toBeInTheDocument();
 
-    const sections = [
-      screen.getByRole("heading", { name: "collectorSettings" }).closest("section"),
-      screen.getByRole("heading", { name: "pricingSourceTitle" }).closest("section"),
-      screen.getByRole("heading", { name: "sessionIndex" }).closest("section"),
-      screen.getByRole("heading", { name: "desktopPreferences" }).closest("section"),
-    ];
-    expect(sections.map((section) => section?.id)).toEqual([
-      "data-sources", "pricing", "index-diagnostics", "preferences",
-    ]);
-    for (let index = 0; index < sections.length - 1; index += 1) {
-      const current = sections[index];
-      const next = sections[index + 1];
-      if (!current || !next) throw new Error("missing system section");
-      expect(current.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    }
-    expect(screen.getByRole("heading", { name: "appearanceAndLanguage" }).closest("section")).toBe(sections[3]);
-  });
+    view.rerender(<Settings section="pricing" />);
+    expect(await screen.findByRole("heading", { name: "pricingSourceTitle" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "collectorSettings" })).not.toBeInTheDocument();
 
-  it("separates system sections with whitespace instead of repeated rules", async () => {
-    render(<Settings />);
-    await screen.findByRole("button", { name: "saveCollectorSettings" });
+    view.rerender(<Settings section="index-diagnostics" />);
+    expect(screen.getByRole("heading", { name: "sessionIndex" })).toBeVisible();
 
-    for (const id of ["data-sources", "pricing", "index-diagnostics", "preferences"]) {
-      expect(document.getElementById(id)).not.toHaveClass("border-b");
-    }
-    expect(screen.getByRole("heading", { name: "appearanceAndLanguage" }).parentElement).not.toHaveClass("border-b");
-  });
-
-  it("keeps subnavigation clicks deterministic while section observation settles", async () => {
-    const observerCallbacks: IntersectionObserverCallback[] = [];
-    class MockIntersectionObserver {
-      readonly root = null;
-      readonly rootMargin = "0px";
-      readonly thresholds = [0];
-      constructor(callback: IntersectionObserverCallback) { observerCallbacks.push(callback); }
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-      takeRecords() { return []; }
-    }
-    vi.stubGlobal("IntersectionObserver", MockIntersectionObserver);
-
-    render(<main className="app-main"><Settings /></main>);
-    await screen.findByRole("button", { name: "saveCollectorSettings" });
-    const scrollRoot = document.querySelector<HTMLElement>(".app-main");
-    const pricingSection = document.getElementById("pricing");
-    if (!scrollRoot || !pricingSection) throw new Error("missing settings scroll structure");
-    Object.defineProperty(scrollRoot, "scrollTop", { configurable: true, value: 200 });
-    scrollRoot.getBoundingClientRect = () => ({ top: 100 } as DOMRect);
-    pricingSection.getBoundingClientRect = () => ({ top: 500 } as DOMRect);
-    const scrollTo = vi.fn();
-    scrollRoot.scrollTo = scrollTo;
-    const pricingLink = screen.getByRole("link", { name: "pricing" });
-    fireEvent.click(pricingLink);
-
-    expect(scrollTo).toHaveBeenLastCalledWith({ behavior: "auto", top: 584 });
-    expect(pricingLink).toHaveClass("system-subnav-link-active");
-    observerCallbacks[0]?.([{
-      isIntersecting: true,
-      intersectionRatio: 1,
-      target: document.getElementById("data-sources") as Element,
-    } as IntersectionObserverEntry], {} as IntersectionObserver);
-    expect(pricingLink).toHaveClass("system-subnav-link-active");
-    vi.unstubAllGlobals();
+    view.rerender(<Settings section="preferences" />);
+    expect(screen.getByRole("heading", { name: "desktopPreferences" })).toBeVisible();
   });
 
   it("provides the official LiteLLM source and imports a selected pricing JSON file", async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    render(<Settings section="pricing" />);
 
-    await screen.findByRole("button", { name: "saveCollectorSettings" });
+    await screen.findByRole("heading", { name: "pricingSourceTitle" });
+    expect(screen.queryByLabelText("pricingFile")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "customPricingFile" }));
     const sourceLink = screen.getByRole("link", { name: "pricingSourceLink" });
     expect(sourceLink).toHaveAttribute(
       "href",
@@ -192,12 +146,16 @@ describe("application settings", () => {
 
   it("refreshes pricing from the configured source and shows completion", async () => {
     const user = userEvent.setup();
-    render(<Settings />);
-    await screen.findByRole("button", { name: "saveCollectorSettings" });
+    render(<Settings section="pricing" />);
+    await screen.findByRole("heading", { name: "pricingSourceTitle" });
+    await screen.findByText("gpt-test");
+    await user.type(screen.getByRole("searchbox", { name: "searchPricingModels" }), "gpt");
 
     await user.click(screen.getByRole("button", { name: "refreshPricing" }));
 
     await waitFor(() => expect(screen.getByText("pricingRefreshed")).toBeVisible());
+    expect(screen.getByRole("searchbox", { name: "searchPricingModels" })).toHaveValue("gpt");
+    expect(vi.mocked(fetchAPI).mock.calls.filter(([path]) => path === "pricing/models")).toHaveLength(2);
     const syncCall = vi.mocked(fetchAPI).mock.calls.find(([path, , init]) => (
       path === "pricing/sync" && init?.method === "POST"
     ));
@@ -206,29 +164,28 @@ describe("application settings", () => {
     expect(syncCall?.[2]?.body).toBeUndefined();
   });
 
-  it("opens a model pricing dialog after loading the latest catalog", async () => {
-    const user = userEvent.setup();
-    render(<Settings />);
-    await screen.findByRole("button", { name: "saveCollectorSettings" });
+  it("shows the model pricing catalog directly on the pricing page", async () => {
+    render(<Settings section="pricing" />);
+    await screen.findByRole("heading", { name: "pricingSourceTitle" });
 
-    await user.click(screen.getByRole("button", { name: "viewPricing" }));
-
-    expect(await screen.findByRole("dialog", { name: "pricingCatalogTitle" })).toBeVisible();
-    expect(screen.getByText("gpt-test")).toBeVisible();
+    expect(await screen.findByRole("region", { name: "pricingCatalogTitle" })).toBeVisible();
+    expect(await screen.findByText("gpt-test")).toBeVisible();
     expect(screen.getByText("pricingInputPrice")).toBeVisible();
-    expect(screen.getByRole("button", { name: "closePricingCatalog" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "viewPricing" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "pricingCatalogTitle" })).not.toBeInTheDocument();
     expect(vi.mocked(fetchAPI)).toHaveBeenCalledWith("pricing/models", {});
   });
 
   it("shows a refresh error and keeps the action retryable", async () => {
     vi.mocked(fetchAPI).mockImplementation(async (path, _params, init) => {
       if (path === "settings/collectors") return settings as never;
+      if (path === "pricing/models") return pricingCatalog as never;
       if (path === "pricing/sync" && init?.method === "POST") throw new Error("pricing source unavailable");
       throw new Error(`unexpected path ${path}`);
     });
     const user = userEvent.setup();
-    render(<Settings />);
-    await screen.findByRole("button", { name: "saveCollectorSettings" });
+    render(<Settings section="pricing" />);
+    await screen.findByRole("heading", { name: "pricingSourceTitle" });
 
     await user.click(screen.getByRole("button", { name: "refreshPricing" }));
 
@@ -239,12 +196,14 @@ describe("application settings", () => {
   it("shows an import error and keeps the selected file available for retry", async () => {
     vi.mocked(fetchAPI).mockImplementation(async (path, _params, init) => {
       if (path === "settings/collectors") return settings as never;
+      if (path === "pricing/models") return pricingCatalog as never;
       if (path === "pricing/import" && init?.method === "POST") throw new Error("invalid pricing JSON");
       throw new Error(`unexpected path ${path}`);
     });
     const user = userEvent.setup();
-    render(<Settings />);
-    await screen.findByRole("button", { name: "saveCollectorSettings" });
+    render(<Settings section="pricing" />);
+    await screen.findByRole("heading", { name: "pricingSourceTitle" });
+    await user.click(screen.getByRole("button", { name: "customPricingFile" }));
     const file = new File(["not json"], "model-prices.json", { type: "application/json" });
     await user.upload(screen.getByLabelText("pricingFile"), file);
     await user.click(screen.getByRole("button", { name: "importPricing" }));
@@ -264,9 +223,6 @@ describe("application settings", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "scanInterval claudeCode" }), {
       target: { value: "30s" },
     });
-    fireEvent.change(screen.getByRole("textbox", { name: "pricingSyncInterval" }), {
-      target: { value: "2h" },
-    });
     await user.click(screen.getByRole("button", { name: "saveCollectorSettings" }));
 
     await waitFor(() => expect(screen.getByText("settingsSavedAndRestarted")).toBeVisible());
@@ -276,7 +232,7 @@ describe("application settings", () => {
     expect(body.collectors[0]).toEqual({
       name: "claude", enabled: false, paths: ["/new/one", "/new/two"], scan_interval: "30s",
     });
-    expect(body.pricing_sync_interval).toBe("2h");
+    expect(body.pricing_sync_interval).toBe("1h0m0s");
     expect(invoke).toHaveBeenCalledWith("restart_sidecar");
   });
 
@@ -337,7 +293,7 @@ describe("application settings", () => {
       return undefined;
     });
     const user = userEvent.setup();
-    render(<Settings />);
+    render(<Settings section="index-diagnostics" />);
     await user.click(await screen.findByRole("button", { name: "rebuildSessionIndex" }));
     await user.click(screen.getByRole("button", { name: "confirmRebuild" }));
 
@@ -363,7 +319,7 @@ describe("application settings", () => {
       });
     }
     const user = userEvent.setup();
-    render(<Settings />);
+    render(<Settings section="index-diagnostics" />);
     await screen.findByRole("button", { name: "rebuildSessionIndex" });
     await user.click(screen.getByRole("button", { name: "rebuildSessionIndex" }));
     const dialog = screen.getByRole("dialog", { name: "confirmRebuildTitle" });
@@ -381,7 +337,7 @@ describe("application settings", () => {
 
   it("supports segmented language/theme controls and app notification settings", async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    render(<Settings section="preferences" />);
     await screen.findByRole("button", { name: "dark" });
     await user.click(screen.getByRole("button", { name: "dark" }));
     expect(screen.getByRole("button", { name: "dark" })).toHaveAttribute("aria-pressed", "true");
@@ -407,7 +363,7 @@ describe("application settings", () => {
       return Promise.resolve(undefined);
     });
     const user = userEvent.setup();
-    render(<Settings />);
+    render(<Settings section="preferences" />);
 
     const notification = await screen.findByRole("switch", { name: "notification" });
     await user.click(notification);
@@ -439,7 +395,7 @@ describe("application settings", () => {
       return Promise.resolve(undefined);
     });
     const user = userEvent.setup();
-    render(<Settings />);
+    render(<Settings section="preferences" />);
 
     const autostart = screen.getByRole("switch", { name: "autostart" });
     const notification = screen.getByRole("switch", { name: "notification" });
@@ -477,7 +433,7 @@ describe("application settings", () => {
       return Promise.resolve(undefined);
     });
     const applySpy = vi.spyOn(settingsHydration, "applyOwnedHydration");
-    const view = render(<Settings />);
+    const view = render(<Settings section="preferences" />);
     view.unmount();
 
     await act(async () => {
@@ -555,7 +511,7 @@ describe("application settings", () => {
 
   it("traps focus in the rebuild dialog and restores it after Escape", async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    render(<Settings section="index-diagnostics" />);
     const trigger = await screen.findByRole("button", { name: "rebuildSessionIndex" });
     await user.click(trigger);
     const dialog = screen.getByRole("dialog", { name: "confirmRebuildTitle" });
@@ -582,7 +538,7 @@ describe("application settings", () => {
       return Promise.reject(new Error(`unexpected path ${path}`));
     });
     const user = userEvent.setup();
-    render(<Settings />);
+    render(<Settings section="index-diagnostics" />);
     const trigger = await screen.findByRole("button", { name: "rebuildSessionIndex" });
     await user.click(trigger);
     await user.click(screen.getByRole("button", { name: "confirmRebuild" }));
