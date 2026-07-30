@@ -20,6 +20,7 @@
   <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white" alt="Go 1.25+"></a>
   <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/Rust-stable-D65A31?logo=rust&logoColor=white" alt="Rust stable"></a>
   <a href="https://sqlite.org"><img src="https://img.shields.io/badge/SQLite-local-0F80CC?logo=sqlite&logoColor=white" alt="SQLite"></a>
+  <a href="https://linux.do"><img src="https://img.shields.io/badge/linux.do-community-1F1F1F" alt="linux.do community"></a>
 </p>
 
 Agent Usage reads the session and usage records already stored on this computer, normalizes them into a local SQLite index, and presents them in a focused desktop workspace. It is designed for one person inspecting their own coding-agent activity; there is no account, cloud database, or session upload.

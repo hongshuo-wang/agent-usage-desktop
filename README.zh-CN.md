@@ -20,6 +20,7 @@
   <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white" alt="Go 1.25+"></a>
   <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/Rust-stable-D65A31?logo=rust&logoColor=white" alt="Rust stable"></a>
   <a href="https://sqlite.org"><img src="https://img.shields.io/badge/SQLite-local-0F80CC?logo=sqlite&logoColor=white" alt="SQLite"></a>
+  <a href="https://linux.do"><img src="https://img.shields.io/badge/linux.do-community-1F1F1F" alt="linux.do 社区"></a>
 </p>
 
 Agent Usage 读取这台电脑上已有的会话和用量记录，将不同来源归一化到本地 SQLite 索引，并通过专注的桌面工作区呈现。它面向个人查看自己的编程 Agent 活动，不需要账号，没有云端数据库，也不会上传会话内容。
