@@ -187,6 +187,7 @@ React 和 TypeScript 前端运行在 Tauri v2 中。Rust 负责桌面窗口、�
 ## 社区
 
 - [GitHub Issues](https://github.com/hongshuo-wang/agent-usage-desktop/issues)
+- [linux.do](https://linux.do)
 
 ## 许可证
 

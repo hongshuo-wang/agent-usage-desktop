@@ -187,6 +187,7 @@ Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for
 ## Community
 
 - [GitHub Issues](https://github.com/hongshuo-wang/agent-usage-desktop/issues)
+- [linux.do](https://linux.do)
 
 ## License
 
