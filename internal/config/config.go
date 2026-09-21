@@ -35,6 +35,7 @@ type CollectorConfigs struct {
 	Codex    CollectorConfig `yaml:"codex"`
 	OpenClaw CollectorConfig `yaml:"openclaw"`
 	OpenCode CollectorConfig `yaml:"opencode"`
+	Pi       CollectorConfig `yaml:"pi"`
 }
 
 // CollectorConfig holds settings for a single data source collector.
@@ -47,6 +48,11 @@ type CollectorConfig struct {
 // StorageConfig holds SQLite database settings.
 type StorageConfig struct {
 	Path string `yaml:"path"`
+	// SessionEventRetentionDays bounds how long indexed session content (the
+	// conversation replay/搜索 index) is kept. usage_records, prompt_events, and
+	// sessions are never pruned. 0 keeps session content forever; omit it to use
+	// the default (30 days).
+	SessionEventRetentionDays int `yaml:"session_event_retention_days"`
 }
 
 // PricingConfig holds model pricing sync settings.
@@ -88,8 +94,13 @@ func DefaultConfig() *Config {
 				Paths:        []string{filepath.Join(home, ".local", "share", "opencode", "opencode.db")},
 				ScanInterval: 60 * time.Second,
 			},
+			Pi: CollectorConfig{
+				Enabled:      true,
+				Paths:        []string{filepath.Join(home, ".pi", "agent", "sessions")},
+				ScanInterval: 60 * time.Second,
+			},
 		},
-		Storage: StorageConfig{Path: "./agent-usage.db"},
+		Storage: StorageConfig{Path: "./agent-usage.db", SessionEventRetentionDays: 30},
 		Pricing: PricingConfig{SyncInterval: time.Hour},
 	}
 }
@@ -119,17 +130,16 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	// Expand ~ in paths
-	for i, p := range cfg.Collectors.Claude.Paths {
-		cfg.Collectors.Claude.Paths[i] = expandPath(p)
-	}
-	for i, p := range cfg.Collectors.Codex.Paths {
-		cfg.Collectors.Codex.Paths[i] = expandPath(p)
-	}
-	for i, p := range cfg.Collectors.OpenClaw.Paths {
-		cfg.Collectors.OpenClaw.Paths[i] = expandPath(p)
-	}
-	for i, p := range cfg.Collectors.OpenCode.Paths {
-		cfg.Collectors.OpenCode.Paths[i] = expandPath(p)
+	for _, paths := range []*[]string{
+		&cfg.Collectors.Claude.Paths,
+		&cfg.Collectors.Codex.Paths,
+		&cfg.Collectors.OpenClaw.Paths,
+		&cfg.Collectors.OpenCode.Paths,
+		&cfg.Collectors.Pi.Paths,
+	} {
+		for i, p := range *paths {
+			(*paths)[i] = expandPath(p)
+		}
 	}
 	cfg.Storage.Path = expandPath(cfg.Storage.Path)
 	return cfg, nil

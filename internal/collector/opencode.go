@@ -33,9 +33,9 @@ type opencodeMessageData struct {
 }
 
 type opencodeTokens struct {
-	Input     int64        `json:"input"`
-	Output    int64        `json:"output"`
-	Reasoning int64        `json:"reasoning"`
+	Input     int64         `json:"input"`
+	Output    int64         `json:"output"`
+	Reasoning int64         `json:"reasoning"`
 	Cache     opencodeCache `json:"cache"`
 }
 

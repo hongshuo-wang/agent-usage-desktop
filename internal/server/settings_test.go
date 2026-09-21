@@ -42,7 +42,8 @@ const validSettingsBody = `{
     {"name":"claude","enabled":false,"paths":["/new/claude","/second/claude"],"scan_interval":"30s"},
     {"name":"codex","enabled":true,"paths":["/new/codex"],"scan_interval":"45s"},
     {"name":"openclaw","enabled":true,"paths":["/new/openclaw"],"scan_interval":"1m"},
-    {"name":"opencode","enabled":false,"paths":["/new/opencode.db"],"scan_interval":"2m"}
+    {"name":"opencode","enabled":false,"paths":["/new/opencode.db"],"scan_interval":"2m"},
+    {"name":"pi","enabled":true,"paths":["/new/pi"],"scan_interval":"1m"}
   ],
   "pricing_sync_interval":"3h"
 }`
@@ -78,7 +79,7 @@ func TestSettingsCollectorsGetUsesWhitelist(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &typed); err != nil {
 		t.Fatal(err)
 	}
-	if len(typed.Collectors) != 4 || len(typed.Collectors[0].Paths) != 2 || typed.Collectors[0].Name != "claude" || typed.Collectors[0].ScanInterval != "1m0s" {
+	if len(typed.Collectors) != 5 || len(typed.Collectors[0].Paths) != 2 || typed.Collectors[0].Name != "claude" || typed.Collectors[0].ScanInterval != "1m0s" {
 		t.Fatalf("collectors=%+v", typed.Collectors)
 	}
 }

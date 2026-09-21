@@ -36,6 +36,7 @@ func collectorSettingsFromConfig(cfg *config.Config) collectorSettingsResponse {
 		{"codex", cfg.Collectors.Codex},
 		{"openclaw", cfg.Collectors.OpenClaw},
 		{"opencode", cfg.Collectors.OpenCode},
+		{"pi", cfg.Collectors.Pi},
 	}
 	response := collectorSettingsResponse{
 		Collectors:          make([]collectorSetting, 0, len(collectors)),
@@ -113,6 +114,7 @@ func (s *Server) handleCollectorSettingsPut(w http.ResponseWriter, r *http.Reque
 	cfg.Collectors.Codex = updates["codex"]
 	cfg.Collectors.OpenClaw = updates["openclaw"]
 	cfg.Collectors.OpenCode = updates["opencode"]
+	cfg.Collectors.Pi = updates["pi"]
 	cfg.Pricing.SyncInterval = pricingInterval
 	if err := config.Save(s.configPath, cfg); err != nil {
 		serverError(w, err)
@@ -126,13 +128,13 @@ func validateCollectorSettings(request collectorSettingsResponse) (map[string]co
 	if err != nil {
 		return nil, 0, err
 	}
-	if len(request.Collectors) != 4 {
-		return nil, 0, fmt.Errorf("collectors must contain claude, codex, openclaw, and opencode exactly once")
+	if len(request.Collectors) != 5 {
+		return nil, 0, fmt.Errorf("collectors must contain claude, codex, openclaw, opencode, and pi exactly once")
 	}
-	updates := make(map[string]config.CollectorConfig, 4)
+	updates := make(map[string]config.CollectorConfig, 5)
 	for _, collector := range request.Collectors {
 		switch collector.Name {
-		case "claude", "codex", "openclaw", "opencode":
+		case "claude", "codex", "openclaw", "opencode", "pi":
 		default:
 			return nil, 0, fmt.Errorf("unknown collector %q", collector.Name)
 		}
