@@ -9,6 +9,86 @@ use tauri::{Emitter, Listener, Manager};
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_notification::NotificationExt;
 
+#[cfg(test)]
+mod tests {
+    use super::should_alert;
+
+    #[test]
+    fn cost_alert_fires_once_per_local_day() {
+        assert!(should_alert(11.0, 10.0, true, None, "2025-01-01"));
+        assert!(!should_alert(
+            11.0,
+            10.0,
+            true,
+            Some("2025-01-01"),
+            "2025-01-01"
+        ));
+        assert!(should_alert(
+            11.0,
+            10.0,
+            true,
+            Some("2025-01-01"),
+            "2025-01-02"
+        ));
+    }
+
+    #[test]
+    fn cost_alert_respects_threshold_and_setting() {
+        assert!(!should_alert(10.0, 10.0, true, None, "2025-01-01"));
+        assert!(!should_alert(9.0, 10.0, true, None, "2025-01-01"));
+        assert!(!should_alert(11.0, 10.0, false, None, "2025-01-01"));
+    }
+}
+
+/// Decides whether to raise the daily cost alert. One alert per local day: the
+/// loop polls every five minutes, so a threshold crossed in the morning would
+/// otherwise notify all day long.
+fn should_alert(
+    cost: f64,
+    threshold: f64,
+    enabled: bool,
+    alerted_day: Option<&str>,
+    day: &str,
+) -> bool {
+    enabled && cost > threshold && alerted_day != Some(day)
+}
+
+/// Reads the alert keys the notifier needs. Missing keys fall back to the same
+/// defaults the settings UI shows.
+fn port(app: &tauri::AppHandle) -> u16 {
+    app.state::<SidecarState>()
+        .port
+        .load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Returns today's locally recorded cost, or None while the sidecar is not up
+/// yet or the request fails.
+async fn poll_today(_app: tauri::AppHandle, port: u16) -> Option<f64> {
+    if port == 0 {
+        return None;
+    }
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let url = format!(
+        "http://127.0.0.1:{}/api/stats?from={}&to={}",
+        port, today, today
+    );
+    let resp = reqwest::get(&url).await.ok()?;
+    let stats = resp.json::<serde_json::Value>().await.ok()?;
+    stats["total_cost"].as_f64()
+}
+
+fn read_alert_settings(app: &tauri::AppHandle) -> (f64, bool) {
+    let path = app.path().app_data_dir().unwrap().join("settings.json");
+    let settings = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|data| serde_json::from_str::<serde_json::Value>(&data).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    (
+        settings["cost_threshold"].as_f64().unwrap_or(10.0),
+        settings["notifications_enabled"].as_bool().unwrap_or(true),
+    )
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -54,62 +134,36 @@ fn main() {
             });
 
             // Create system tray
-            tray::create_tray(app.handle())?;
+            let today_cost_item = tray::create_tray(app.handle())?;
 
             // Notification check loop: poll sidecar every 5 minutes
             let notify_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
+                // Tracks the local day already alerted on. The loop runs every
+                // five minutes, so without it an exceeded threshold re-notifies
+                // all day.
+                let mut alerted_day: Option<String> = None;
                 loop {
-                    tokio::time::sleep(std::time::Duration::from_secs(300)).await;
-                    let state = notify_handle.state::<SidecarState>();
-                    let port = state.port.load(std::sync::atomic::Ordering::Relaxed);
-                    if port == 0 {
-                        continue;
-                    }
-
-                    let (threshold, enabled) = {
-                        let path = notify_handle
-                            .path()
-                            .app_data_dir()
-                            .unwrap()
-                            .join("settings.json");
-                        let settings = std::fs::read_to_string(&path)
-                            .ok()
-                            .and_then(|data| serde_json::from_str::<serde_json::Value>(&data).ok())
-                            .unwrap_or_else(|| serde_json::json!({}));
-                        (
-                            settings["cost_threshold"].as_f64().unwrap_or(10.0),
-                            settings["notifications_enabled"].as_bool().unwrap_or(true),
-                        )
-                    };
-
-                    if !enabled {
-                        continue;
-                    }
-
-                    let today = chrono::Local::now().format("%Y-%m-%d");
-                    let url = format!(
-                        "http://127.0.0.1:{}/api/stats?from={}&to={}",
-                        port, today, today
-                    );
-
-                    if let Ok(resp) = reqwest::get(&url).await {
-                        if let Ok(stats) = resp.json::<serde_json::Value>().await {
-                            if let Some(cost) = stats["total_cost"].as_f64() {
-                                if cost > threshold {
-                                    let _ = notify_handle
-                                        .notification()
-                                        .builder()
-                                        .title("Agent Usage Alert")
-                                        .body(format!(
-                                            "Daily cost ${:.2} exceeds threshold ${:.2}",
-                                            cost, threshold
-                                        ))
-                                        .show();
-                                }
-                            }
+                    if let Some(cost) =
+                        poll_today(notify_handle.clone(), port(&notify_handle)).await
+                    {
+                        let _ = today_cost_item.set_text(format!("Today: ${:.2}", cost));
+                        let (threshold, enabled) = read_alert_settings(&notify_handle);
+                        let day = chrono::Local::now().format("%Y-%m-%d").to_string();
+                        if should_alert(cost, threshold, enabled, alerted_day.as_deref(), &day) {
+                            let _ = notify_handle
+                                .notification()
+                                .builder()
+                                .title("Agent Usage Alert")
+                                .body(format!(
+                                    "Daily cost ${:.2} exceeds threshold ${:.2}",
+                                    cost, threshold
+                                ))
+                                .show();
+                            alerted_day = Some(day);
                         }
                     }
+                    tokio::time::sleep(std::time::Duration::from_secs(300)).await;
                 }
             });
 
@@ -130,6 +184,18 @@ fn main() {
                 api.prevent_close();
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Every graceful exit ends here — tray Quit, Cmd+Q, an Apple Event
+            // quit. Only the tray menu used to kill the sidecar, so quits that
+            // went around it left the Go process running and still holding the
+            // database.
+            // ponytail: a hard kill (SIGKILL, crash) reaches no handler and the
+            // sidecar survives. Watching the parent pid from the Go side would
+            // cover that if it ever matters.
+            if let tauri::RunEvent::Exit = event {
+                sidecar::kill_sidecar(app);
+            }
+        });
 }

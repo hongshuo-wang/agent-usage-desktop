@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"testing"
 
 	"github.com/hongshuo-wang/agent-usage-desktop/internal/collector"
@@ -38,3 +39,27 @@ func TestRunInitialCollectionSyncsAfterAllHistoricalScans(t *testing.T) {
 }
 
 var _ collector.Collector = orderingCollector{}
+
+// The pipe check is the only thing standing between the parent watch and
+// breaking standalone use: answer yes for anything EOF-prone and the server
+// exits the moment it starts.
+func TestIsPipeOnlyMatchesPipes(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+	if !isPipe(reader) {
+		t.Error("anonymous pipe not detected; the sidecar would outlive its parent")
+	}
+
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("open %s: %v", os.DevNull, err)
+	}
+	defer devNull.Close()
+	if isPipe(devNull) {
+		t.Errorf("%s detected as a pipe; a standalone server would exit immediately", os.DevNull)
+	}
+}

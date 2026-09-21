@@ -1,5 +1,6 @@
-use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
@@ -88,20 +89,38 @@ fn find_available_port() -> u16 {
     listener.local_addr().unwrap().port()
 }
 
+/// Upper bound on how long the sidecar may take to answer /api/health. The Go
+/// sidecar runs its database migrations inside `storage.Open()`, before the HTTP
+/// server binds, so startup time scales with the size of the database: a 2.7 GB
+/// database already measures ~5s on a first launch. This is only a backstop for
+/// a process that is alive but wedged — a sidecar that actually dies is noticed
+/// through `exited` and reported immediately.
+const STARTUP_DEADLINE: Duration = Duration::from_secs(300);
+
 /// Wait for the Go sidecar to be ready by polling /api/health
-async fn wait_for_health(port: u16) -> Result<(), String> {
+async fn wait_for_health(port: u16, exited: &AtomicBool) -> Result<(), String> {
     let url = format!("http://127.0.0.1:{}/api/health", port);
-    let client = reqwest::Client::new();
-    for _ in 0..50 {
-        // 50 * 100ms = 5s timeout
+    // Without a per-request timeout a half-open port would hang past the
+    // deadline and the loop below would never get to check it.
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let deadline = Instant::now() + STARTUP_DEADLINE;
+    loop {
         if let Ok(resp) = client.get(&url).send().await {
             if resp.status().is_success() {
                 return Ok(());
             }
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        if exited.load(Ordering::SeqCst) {
+            return Err("Sidecar exited during startup".into());
+        }
+        if Instant::now() >= deadline {
+            return Err("Sidecar health check timed out".into());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    Err("Sidecar health check timed out".into())
 }
 
 /// Start the Go sidecar process
@@ -149,8 +168,13 @@ async fn start_sidecar_unlocked(app: &tauri::AppHandle) -> Result<u16, String> {
 
     let (mut rx, child) = sidecar_command.spawn().map_err(|e| e.to_string())?;
 
+    // Set once the child has exited, so waiting for readiness can tell "still
+    // working" apart from "gone" instead of guessing with a timer.
+    let exited = Arc::new(AtomicBool::new(false));
+
     // Log sidecar output in background
     let app_handle = app.clone();
+    let exited_watch = exited.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
             match event {
@@ -161,6 +185,7 @@ async fn start_sidecar_unlocked(app: &tauri::AppHandle) -> Result<u16, String> {
                     eprintln!("[sidecar] {}", String::from_utf8_lossy(&line));
                 }
                 CommandEvent::Terminated(payload) => {
+                    exited_watch.store(true, Ordering::SeqCst);
                     eprintln!("[sidecar] terminated: {:?}", payload);
                     let action = {
                         let state = app_handle.state::<SidecarState>();
@@ -180,7 +205,7 @@ async fn start_sidecar_unlocked(app: &tauri::AppHandle) -> Result<u16, String> {
     let state = app.state::<SidecarState>();
     *state.child.lock().unwrap() = Some(ManagedChild { generation, child });
 
-    if let Err(error) = wait_for_health(port).await {
+    if let Err(error) = wait_for_health(port, &exited).await {
         kill_generation(app, generation);
         return Err(error);
     }
@@ -222,6 +247,9 @@ pub fn kill_sidecar(app: &tauri::AppHandle) {
 /// Restart sidecar after crash
 pub async fn restart_sidecar(app: &tauri::AppHandle) -> Result<u16, String> {
     let state = app.state::<SidecarState>();
+    // Held for the whole restart on purpose: the gate exists so that no second
+    // start (setup, tray, another crash) can interleave with this sequence.
+    // Deadlock is avoided because the inner call is `start_sidecar_unlocked`.
     let _restart_guard = state.lifecycle.restart_lock.lock().await;
     kill_sidecar(app);
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -230,9 +258,28 @@ pub async fn restart_sidecar(app: &tauri::AppHandle) -> Result<u16, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{prepare_controlled_stop, LifecycleState, SidecarLifecycle, TerminationAction};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use super::{
+        prepare_controlled_stop, wait_for_health, LifecycleState, SidecarLifecycle,
+        TerminationAction,
+    };
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_dead_sidecar_is_reported_without_waiting_for_the_deadline() {
+        let exited = AtomicBool::new(true);
+        let started = Instant::now();
+        // Nothing listens on port 1, so the exit flag is the only way out.
+        let error = wait_for_health(1, &exited).await.unwrap_err();
+
+        assert!(error.contains("exited"), "unexpected error: {error}");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "a dead sidecar must not be waited on: {:?}",
+            started.elapsed()
+        );
+    }
 
     #[test]
     fn unexpected_active_termination_requests_one_restart() {

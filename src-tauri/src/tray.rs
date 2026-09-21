@@ -4,11 +4,14 @@ use tauri::{
     Manager,
 };
 
-pub fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+/// Builds the tray and hands back the read-only cost label, so the existing
+/// notification loop can keep it current instead of adding a second timer.
+pub fn create_tray(app: &tauri::AppHandle) -> tauri::Result<MenuItem<tauri::Wry>> {
     let show = MenuItem::with_id(app, "show", "Show Panel", true, None::<&str>)?;
+    let today = MenuItem::with_id(app, "today", "Today: -", false, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
 
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &today, &quit])?;
 
     TrayIconBuilder::new()
         .icon(app.default_window_icon().unwrap().clone())
@@ -46,5 +49,5 @@ pub fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         })
         .build(app)?;
 
-    Ok(())
+    Ok(today)
 }
