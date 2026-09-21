@@ -5,8 +5,8 @@ import EventInspector from "../components/sessions/EventInspector";
 import SessionList, { sessionIdentity } from "../components/sessions/SessionList";
 import SessionTimeline from "../components/sessions/SessionTimeline";
 import TimeRangeSelector from "../components/TimeRangeSelector";
-import { fetchAPI, fetchRaw } from "../lib/api";
-import type { RawEventResponse, SessionEvent, SessionSummary, UsageFilters } from "../lib/types";
+import { fetchAPI } from "../lib/api";
+import type { SessionEvent, SessionSummary, UsageFilters } from "../lib/types";
 import { buildSessionsSearch, DEFAULT_USAGE_FILTERS, getInitialUsageFilters, persistUsageFilters } from "../lib/usageFilters";
 import { getTimeRange, type TimePreset } from "../lib/utils";
 
@@ -62,7 +62,6 @@ export default function Sessions() {
   const [filters, setFilters] = useState<UsageFilters>(() => getInitialUsageFilters(location.search));
   const [drilldown, setDrilldown] = useState<DrilldownContext>(() => initialDrilldown(location.search));
   const [granularity, setGranularity] = useState(localStorage.getItem("au-granularity") || "1h");
-  const [search, setSearch] = useState("");
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [selected, setSelected] = useState<SessionSummary | null>(null);
   const [listLoading, setListLoading] = useState(true);
@@ -77,21 +76,10 @@ export default function Sessions() {
   const [eventsHasMore, setEventsHasMore] = useState(false);
   const [eventsRetry, setEventsRetry] = useState(0);
   const [inspectedEvent, setInspectedEvent] = useState<SessionEvent | null>(null);
-  const [rawCache, setRawCache] = useState<Record<number, RawEventResponse>>({});
-  const [rawLoadingID, setRawLoadingID] = useState<number | null>(null);
-  const [rawError, setRawError] = useState<string | null>(null);
   const [mobileDetailVisible, setMobileDetailVisible] = useState(false);
   const listController = useRef<AbortController | null>(null);
   const eventController = useRef<AbortController | null>(null);
-  const rawController = useRef<AbortController | null>(null);
   const selectedLifecycleKey = useRef<string | null>(null);
-
-  const resetRawRequest = useCallback(() => {
-    rawController.current?.abort();
-    rawController.current = null;
-    setRawLoadingID(null);
-    setRawError(null);
-  }, []);
 
   useEffect(() => persistUsageFilters(filters), [filters]);
 
@@ -99,10 +87,8 @@ export default function Sessions() {
     const nextKey = selected ? sessionIdentity(selected) : null;
     if (nextKey === selectedLifecycleKey.current) return;
     selectedLifecycleKey.current = nextKey;
-    resetRawRequest();
-    setRawCache({});
     setInspectedEvent(null);
-  }, [resetRawRequest, selected?.source, selected?.session_id]);
+  }, [selected?.source, selected?.session_id]);
 
   const sessionParams = useCallback((offset: number) => ({
     from: filters.from,
@@ -110,10 +96,9 @@ export default function Sessions() {
     source: filters.source || undefined,
     model: filters.model || undefined,
     project: filters.project || undefined,
-    q: search.trim() || undefined,
     limit: SESSION_PAGE_SIZE,
     offset,
-  }), [filters, search]);
+  }), [filters]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -149,13 +134,9 @@ export default function Sessions() {
       }
     };
 
-    const timer = search.trim() ? window.setTimeout(() => { void run(); }, 250) : null;
-    if (timer === null) void run();
-    return () => {
-      if (timer !== null) window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [sessionParams, listRetry, search]);
+    void run();
+    return () => controller.abort();
+  }, [sessionParams, listRetry]);
 
   const loadMoreSessions = useCallback(async () => {
     const controller = new AbortController();
@@ -212,13 +193,11 @@ export default function Sessions() {
 
   const selectSession = useCallback((session: SessionSummary) => {
     if (!selected || sessionIdentity(selected) !== sessionIdentity(session)) {
-      resetRawRequest();
-      setRawCache({});
       setInspectedEvent(null);
       setSelected(session);
     }
     if (isMobile) setMobileDetailVisible(true);
-  }, [isMobile, resetRawRequest, selected]);
+  }, [isMobile, selected]);
 
   const loadMoreEvents = useCallback(async () => {
     if (!selected) return;
@@ -243,39 +222,12 @@ export default function Sessions() {
   }, [events.length, selected]);
 
   const inspectEvent = useCallback((event: SessionEvent) => {
-    if (inspectedEvent?.id !== event.id) resetRawRequest();
     setInspectedEvent(event);
-  }, [inspectedEvent?.id, resetRawRequest]);
+  }, []);
 
   const closeInspector = useCallback(() => {
-    resetRawRequest();
     setInspectedEvent(null);
-  }, [resetRawRequest]);
-
-  const loadRaw = useCallback(async () => {
-    if (!selected || !inspectedEvent || rawCache[inspectedEvent.id]) return;
-    rawController.current?.abort();
-    const controller = new AbortController();
-    rawController.current = controller;
-    setRawLoadingID(inspectedEvent.id);
-    setRawError(null);
-    try {
-      const path = `sessions/${encodeURIComponent(selected.source)}/${encodeURIComponent(selected.session_id)}/events/${inspectedEvent.id}/raw`;
-      const raw = await fetchRaw<RawEventResponse>(path, { signal: controller.signal });
-      if (!controller.signal.aborted && rawController.current === controller) {
-        setRawCache((current) => ({ ...current, [inspectedEvent.id]: raw }));
-      }
-    } catch (error) {
-      if (!controller.signal.aborted && rawController.current === controller && !isAbortError(error)) {
-        setRawError(error instanceof Error ? error.message : String(error));
-      }
-    } finally {
-      if (!controller.signal.aborted && rawController.current === controller) {
-        rawController.current = null;
-        setRawLoadingID(null);
-      }
-    }
-  }, [inspectedEvent, rawCache, selected]);
+  }, []);
 
   const updatePreset = (preset: TimePreset) => setFilters((current) => ({
     ...current,
@@ -303,8 +255,6 @@ export default function Sessions() {
     <SessionList
       sessions={sessions}
       selectedKey={selectedKey}
-      search={search}
-      onSearchChange={setSearch}
       onSelect={selectSession}
       loading={listLoading}
       error={listError}
@@ -336,10 +286,6 @@ export default function Sessions() {
   const inspector = inspectedEvent ? (
     <EventInspector
       event={inspectedEvent}
-      raw={rawCache[inspectedEvent.id]}
-      rawLoading={rawLoadingID === inspectedEvent.id}
-      rawError={rawError}
-      onLoadRaw={() => { void loadRaw(); }}
       onClose={closeInspector}
       t={t}
     />

@@ -7,10 +7,21 @@ import { CanvasRenderer } from "echarts/renderers";
 echarts.use([BarChart, LineChart, PieChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer]);
 
 interface ChartCardProps {
-  title: string;
+  title?: string;
   option: object;
   className?: string;
   onEvents?: Record<string, (params: { name?: string }) => void>;
+}
+
+/** Axis labels stay short; tooltips carry the exact number. */
+export function compactNumber(value: number): string {
+  for (const [limit, unit] of [[1e9, "B"], [1e6, "M"], [1e3, "K"]] as const) {
+    if (Math.abs(value) < limit) continue;
+    const scaled = value / limit;
+    const text = Math.abs(scaled) >= 10 ? scaled.toFixed(0) : scaled.toFixed(1);
+    return `${text.replace(/\.0$/, "")}${unit}`;
+  }
+  return String(value);
 }
 
 function useIsDark() {
@@ -42,13 +53,24 @@ export default function ChartCard({ title, option, className, onEvents }: ChartC
       const axisLineStyle = (axisLine.lineStyle as Record<string, unknown>) || {};
       const splitLine = (axis.splitLine as Record<string, unknown>) || {};
       const splitLineStyle = (splitLine.lineStyle as Record<string, unknown>) || {};
+      const axisLabel = (axis.axisLabel as Record<string, unknown>) || {};
+      const isCategory = axis.type === "category" || axis.type === "time";
       return {
         ...axis,
-        axisLine: { ...axisLine, lineStyle: { ...axisLineStyle, color: axisColor } },
-        axisLabel: { ...((axis.axisLabel as object) || {}), color: textColor, fontSize: 11 },
+        // Gridlines are the only chrome left holding the plot together, so the
+        // axis line and ticks go — defaults first so a chart can opt back in.
+        axisLine: { show: false, ...axisLine, lineStyle: { ...axisLineStyle, color: axisColor } },
+        axisTick: { show: false, ...((axis.axisTick as object) || {}) },
+        axisLabel: {
+          fontSize: 11,
+          ...axisLabel,
+          color: textColor,
+          ...(isCategory || axisLabel.formatter ? {} : { formatter: compactNumber }),
+        },
         splitLine: {
+          show: !isCategory,
           ...splitLine,
-          lineStyle: { ...splitLineStyle, color: axisColor, type: "dashed" as const },
+          lineStyle: { color: axisColor, type: "solid" as const, opacity: 0.55, ...splitLineStyle },
         },
       };
     };
@@ -61,12 +83,22 @@ export default function ChartCard({ title, option, className, onEvents }: ChartC
         fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif",
       },
       tooltip: {
-        ...((base.tooltip as object) || {}),
         backgroundColor: css("--color-card", isDark ? "#242426" : "#ffffff"),
         borderColor: axisColor,
+        borderWidth: 1,
+        padding: [8, 10],
+        extraCssText: "border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,0.14);",
+        ...((base.tooltip as object) || {}),
         textStyle: { color: css("--color-foreground", isDark ? "#f5f5f7" : "#1d1d1f"), fontSize: 12 },
       },
-      legend: { ...(base.legend as object || {}), textStyle: { color: textColor, fontSize: 11 } },
+      legend: {
+        icon: "circle",
+        itemWidth: 8,
+        itemHeight: 8,
+        itemGap: 14,
+        ...(base.legend as object || {}),
+        textStyle: { color: textColor, fontSize: 11, ...(((base.legend as Record<string, unknown>)?.textStyle as object) || {}) },
+      },
       xAxis: themeAxis(baseXAxis),
       yAxis: Array.isArray(baseYAxis)
         ? baseYAxis.map((axis) => themeAxis((axis as Record<string, unknown>) || {}))
@@ -118,8 +150,10 @@ export default function ChartCard({ title, option, className, onEvents }: ChartC
   }, []);
 
   return (
-    <div className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-md bg-card/70 p-3 ${className || ""}`}>
-      <h3 className="text-xs font-medium text-muted-foreground mb-1.5">{title}</h3>
+    <div className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg bg-card p-3.5 ${className || ""}`}>
+      {title ? (
+        <h3 className="mb-2 text-xs font-semibold text-muted-foreground">{title}</h3>
+      ) : null}
       <div ref={containerRef} className="flex-1 min-h-0" />
     </div>
   );

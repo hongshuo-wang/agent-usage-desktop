@@ -12,6 +12,7 @@ const SOURCES = [
   { value: "codex", label: "codex" },
   { value: "openclaw", label: "openClaw" },
   { value: "opencode", label: "openCode" },
+  { value: "pi", label: "piAgent" },
 ];
 
 function isPreciseRange(value?: string): boolean {

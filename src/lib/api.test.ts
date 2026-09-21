@@ -28,20 +28,4 @@ describe("API request cancellation", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[1][1]).toMatchObject({ signal: controller.signal });
   });
-
-  it("passes RequestInit to raw requests", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response('{"content":"raw"}', { status: 200, headers: { "content-type": "application/json" } }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    const { fetchRaw } = await import("./api");
-    const controller = new AbortController();
-
-    await fetchRaw("sessions/claude/s-1/events/7/raw", { signal: controller.signal });
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:9800/api/sessions/claude/s-1/events/7/raw",
-      { signal: controller.signal },
-    );
-  });
 });

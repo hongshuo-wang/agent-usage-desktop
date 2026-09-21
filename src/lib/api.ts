@@ -120,10 +120,6 @@ export async function fetchAPI<T>(
   return requestJSON<T>(`${path}?${buildQuery(params)}`, init);
 }
 
-export async function fetchRaw<T>(path: string, init?: RequestInit): Promise<T> {
-  return requestJSON<T>(path, init);
-}
-
 export class ApiError extends Error {
   constructor(
     public code: string,

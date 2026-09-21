@@ -7,11 +7,13 @@ import ChartCard from "../components/ChartCard";
 import TimeRangeSelector from "../components/TimeRangeSelector";
 import TokenSummary from "../components/dashboard/TokenSummary";
 import UsageInsight from "../components/dashboard/UsageInsight";
+import ActivityHeatmap from "../components/dashboard/ActivityHeatmap";
 import { fetchAPI } from "../lib/api";
 import { buildDashboardInsight } from "../lib/dashboardPresentation";
 import type {
   CollectionIndexStatus,
   DashboardStats,
+  HeatmapCell,
   ThroughputResult,
   TokensRow,
   UsageBreakdown,
@@ -24,13 +26,14 @@ import {
   getUsageRequestParams,
   persistUsageFilters,
 } from "../lib/usageFilters";
-import { CHART_COLORS, fmtCost, fmtTokens, getTimeRange, type TimePreset } from "../lib/utils";
-import { buildThroughputView, type ThroughputViewMode } from "../lib/throughputScale";
+import { CHART_COLORS, fmtCost, fmtTokens, getTimeRange, type TimePreset, shortBucket } from "../lib/utils";
+import { bucketThroughputSeries, buildThroughputView, type ThroughputViewMode } from "../lib/throughputScale";
 import { presentProjectKey } from "../lib/queryPresentation";
 
 type DashboardData = {
   stats: DashboardStats;
   tokens: TokensRow[];
+  heatmap: HeatmapCell[];
   sources: UsageBreakdown[];
   models: UsageBreakdown[];
   projects: UsageBreakdown[];
@@ -252,9 +255,12 @@ function ThroughputMatrix({ throughput, t }: {
         <thead className="text-left text-muted-foreground">
           <tr>
             {columns.map(([key, label, help], index) => (
-              <th key={key} className={`pb-1.5 ${index < columns.length - 1 ? "pr-2" : ""} ${index ? "text-right" : ""}`}>
+              <th
+                key={key}
+                className={`whitespace-nowrap pb-1.5 font-medium ${index < columns.length - 1 ? "pr-2" : ""} ${index ? "text-right" : ""}`}
+              >
                 <span className="inline-flex items-center gap-0.5">
-                  {label}{index > 0 && <span className="text-[9px] font-normal">({key === "rpm" ? "req/min" : "tok/min"})</span>}
+                  {label}
                   <HelpTooltip label={help} align={index === 0 ? "left" : "right"} />
                 </span>
               </th>
@@ -287,6 +293,7 @@ const COLLECTION_STATUS_KEYS: Record<CollectionIndexStatus["status"], string> = 
   stale_parser: "collectionStatusStale",
   partial: "collectionStatusPartial",
   available: "collectionStatusAvailable",
+  stale: "collectionStatusScanStale",
 };
 
 function formatLastIndexed(value: string | null): string {
@@ -384,9 +391,10 @@ export default function Dashboard() {
     setLoading(true);
     setError(null);
     try {
-      const [stats, tokens, sources, models, projects, collectionStatus] = await Promise.all([
+      const [stats, tokens, heatmap, sources, models, projects, collectionStatus] = await Promise.all([
         fetchAPI<DashboardStats>("stats", request),
         fetchAPI<TokensRow[]>("tokens-over-time", trendRequest),
+        fetchAPI<HeatmapCell[]>("activity-heatmap", request),
         fetchAPI<UsageBreakdown[]>("usage-breakdown", { ...request, dimension: "source" }),
         fetchAPI<UsageBreakdown[]>("usage-breakdown", { ...request, dimension: "model" }),
         fetchAPI<UsageBreakdown[]>("usage-breakdown", { ...request, dimension: "project" }),
@@ -396,6 +404,7 @@ export default function Dashboard() {
         setData({
           stats,
           tokens: tokens || [],
+          heatmap: heatmap || [],
           sources: sources || [],
           models: models || [],
           projects: projects || [],
@@ -479,7 +488,12 @@ export default function Dashboard() {
     tooltip: { trigger: "axis", confine: true },
     legend: { type: "scroll", top: 0, left: "center" },
     grid: { left: 8, right: 8, top: 30, bottom: 4, containLabel: true },
-    xAxis: { type: "category", data: data?.tokens.map((row) => row.date) || [], axisLabel: { hideOverlap: true, fontSize: 11 } },
+    xAxis: {
+      type: "category",
+      data: data?.tokens.map((row) => row.date) || [],
+      // Display-only shortening: click-to-sessions reads the raw bucket value.
+      axisLabel: { hideOverlap: true, fontSize: 11, formatter: shortBucket },
+    },
     yAxis: { type: "value" },
     series: [
       { name: t("input"), type: "bar", stack: "tokens", data: data?.tokens.map((row) => row.input_tokens) || [], color: CHART_COLORS[0] },
@@ -489,7 +503,8 @@ export default function Dashboard() {
     ],
   }), [data?.tokens, t]);
 
-  const throughputView = useMemo(() => buildThroughputView(throughput.series, throughputMode), [throughput.series, throughputMode]);
+  const throughputSeries = useMemo(() => bucketThroughputSeries(throughput.series), [throughput.series]);
+  const throughputView = useMemo(() => buildThroughputView(throughputSeries, throughputMode), [throughputSeries, throughputMode]);
 
   const usageInsight = useMemo(() => buildDashboardInsight(
     data?.tokens || [],
@@ -501,24 +516,28 @@ export default function Dashboard() {
     tooltip: { trigger: "axis", confine: true },
     legend: { type: "scroll", top: 0, left: "center" },
     grid: { left: 8, right: 8, top: 30, bottom: 4, containLabel: true },
-    xAxis: { type: "category", data: throughput.series.map((point) => point.minute), axisLabel: { hideOverlap: true, fontSize: 10 } },
+    xAxis: {
+      type: "category",
+      data: throughputSeries.map((point) => point.minute),
+      axisLabel: { hideOverlap: true, fontSize: 10, formatter: shortBucket },
+    },
     yAxis: [
       { type: "value", name: "TPM", max: throughputView.ceiling || undefined },
       { type: "value", name: "RPM", position: "right", splitLine: { show: false } },
     ],
     series: [
-      { name: t("input"), type: "bar", stack: "tpm", yAxisIndex: 0, data: throughput.series.map((point) => point.input_tpm), color: CHART_COLORS[0], markPoint: throughputMode === "trend" ? {
+      { name: t("input"), type: "bar", stack: "tpm", yAxisIndex: 0, data: throughputSeries.map((point) => point.input_tpm), color: CHART_COLORS[0], markPoint: throughputMode === "trend" ? {
         symbol: "pin",
         symbolSize: 34,
         label: { formatter: t("throughputHighUsage"), fontSize: 9 },
-        data: throughputView.peakIndices.map((index) => ({ coord: [index, throughputView.ceiling], value: throughput.series[index]?.total_tpm })),
+        data: throughputView.peakIndices.map((index) => ({ coord: [index, throughputView.ceiling], value: throughputSeries[index]?.total_tpm })),
       } : undefined },
-      { name: t("cacheRead"), type: "bar", stack: "tpm", yAxisIndex: 0, data: throughput.series.map((point) => point.cache_read_tpm), color: CHART_COLORS[3] },
-      { name: t("cacheCreate"), type: "bar", stack: "tpm", yAxisIndex: 0, data: throughput.series.map((point) => point.cache_create_tpm), color: CHART_COLORS[2] },
-      { name: t("output"), type: "bar", stack: "tpm", yAxisIndex: 0, data: throughput.series.map((point) => point.output_tpm), color: CHART_COLORS[1] },
-      { name: t("rpm"), type: "line", yAxisIndex: 1, data: throughput.series.map((point) => point.rpm), color: CHART_COLORS[5], smooth: true },
+      { name: t("cacheRead"), type: "bar", stack: "tpm", yAxisIndex: 0, data: throughputSeries.map((point) => point.cache_read_tpm), color: CHART_COLORS[3] },
+      { name: t("cacheCreate"), type: "bar", stack: "tpm", yAxisIndex: 0, data: throughputSeries.map((point) => point.cache_create_tpm), color: CHART_COLORS[2] },
+      { name: t("output"), type: "bar", stack: "tpm", yAxisIndex: 0, data: throughputSeries.map((point) => point.output_tpm), color: CHART_COLORS[1] },
+      { name: t("rpm"), type: "line", yAxisIndex: 1, data: throughputSeries.map((point) => point.rpm), color: CHART_COLORS[5], smooth: true },
     ],
-  }), [throughput, throughputView.ceiling, t]);
+  }), [throughputSeries, throughputView.ceiling, t, throughputMode]);
 
   const stats = data?.stats;
   const rangeDetail = `${filters.from} ${t("to")} ${filters.to}`;
@@ -614,7 +633,6 @@ export default function Dashboard() {
                     </label>
                   </header>
                   <ChartCard
-                    title={t("tokenUsage")}
                     option={tokenOption}
                     className="h-60"
                     onEvents={{
@@ -646,7 +664,7 @@ export default function Dashboard() {
             </section>
 
             <section data-testid="dashboard-band-detail" className="px-1 py-4">
-              <div className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(14rem,0.8fr)_minmax(16rem,1fr)]">
+              <div className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(14rem,0.8fr)]">
                 <div className="min-w-0">
                   <BandTitle title={t("agentComposition")} detail={t("tokens")} />
                   <BreakdownRows
@@ -666,50 +684,59 @@ export default function Dashboard() {
                     projectLabels
                   />
                 </div>
-                <div
-                  aria-busy={throughputLoading}
-                  className="min-w-0 pt-1 xl:pl-2"
-                >
-                  <header className="mb-3 flex min-w-0 flex-wrap items-end justify-between gap-2">
-                    <div className="min-w-0">
-                      <h2 className="flex items-center gap-1 text-sm font-semibold">
-                        <span className="truncate">{t("localObservedThroughput")}</span>
-                        <HelpTooltip label={t("localObservedThroughputHelp")} align="left" />
-                      </h2>
+              </div>
+            </section>
+
+            <section data-testid="dashboard-band-rhythm" className="px-1 py-4">
+              <BandTitle title={t("activityHeatmap")} detail={t("tokens")} />
+              <ActivityHeatmap cells={data.heatmap} t={t} />
+            </section>
+
+            <section data-testid="dashboard-band-throughput" className="px-1 py-4">
+              <div aria-busy={throughputLoading} className="min-w-0">
+                <header className="mb-3 flex min-w-0 flex-wrap items-end justify-between gap-2">
+                  <div className="min-w-0">
+                    <h2 className="flex items-center gap-1 text-sm font-semibold">
+                      <span className="truncate">{t("localObservedThroughput")}</span>
+                      <HelpTooltip label={t("localObservedThroughputHelp")} align="left" />
+                    </h2>
+                  </div>
+                  <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+                    <div className="inline-flex rounded-md border border-border bg-card p-0.5" aria-label={t("throughputScaleMode")}>
+                      {(["trend", "absolute"] as const).map((mode) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          aria-pressed={throughputMode === mode}
+                          onClick={() => { setThroughputMode(mode); localStorage.setItem("au-throughput-mode", mode); }}
+                          className={`px-2 py-1 text-[10px] font-medium ${throughputMode === mode ? "rounded bg-foreground text-background" : "text-muted-foreground hover:text-foreground"}`}
+                        >{t(mode === "trend" ? "throughputTrendMode" : "throughputAbsoluteMode")}</button>
+                      ))}
                     </div>
-                    <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
-                      <div className="inline-flex rounded-md border border-border bg-card p-0.5" aria-label={t("throughputScaleMode")}>
-                        {(["trend", "absolute"] as const).map((mode) => (
-                          <button
-                            key={mode}
-                            type="button"
-                            aria-pressed={throughputMode === mode}
-                            onClick={() => { setThroughputMode(mode); localStorage.setItem("au-throughput-mode", mode); }}
-                            className={`px-2 py-1 text-[10px] font-medium ${throughputMode === mode ? "rounded bg-foreground text-background" : "text-muted-foreground hover:text-foreground"}`}
-                          >{t(mode === "trend" ? "throughputTrendMode" : "throughputAbsoluteMode")}</button>
+                    <label className="flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground">
+                      <span>{t("throughputModel")}</span>
+                      <select
+                        aria-label={t("throughputModel")}
+                        value={throughputModel}
+                        onChange={(event) => setThroughputModel(event.target.value)}
+                        className="max-w-36 rounded-md border border-border bg-card px-2 py-1 text-xs text-foreground"
+                      >
+                        <option value="">{t("allModels")}</option>
+                        {data.models.filter((row) => row.key).map((row) => (
+                          <option key={row.key} value={row.key}>{row.key}</option>
                         ))}
-                      </div>
-                      <label className="flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground">
-                        <span>{t("throughputModel")}</span>
-                        <select
-                          aria-label={t("throughputModel")}
-                          value={throughputModel}
-                          onChange={(event) => setThroughputModel(event.target.value)}
-                          className="max-w-36 rounded-md border border-border bg-card px-2 py-1 text-xs text-foreground"
-                        >
-                          <option value="">{t("allModels")}</option>
-                          {data.models.filter((row) => row.key).map((row) => (
-                            <option key={row.key} value={row.key}>{row.key}</option>
-                          ))}
-                        </select>
-                      </label>
-                    </div>
-                  </header>
-                  <ThroughputMatrix throughput={throughput} t={t} />
-                  {throughputError && (
-                    <p className="mt-2 break-words text-xs text-red-500">{throughputError}</p>
-                  )}
-                  <ChartCard title={t("observedTPMTrend")} option={throughputOption} className="mt-3 h-48" />
+                      </select>
+                    </label>
+                  </div>
+                </header>
+                <div className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[minmax(0,32rem)_minmax(0,1fr)]">
+                  <div className="min-w-0">
+                    <ThroughputMatrix throughput={throughput} t={t} />
+                    {throughputError && (
+                      <p className="mt-2 break-words text-xs text-red-500">{throughputError}</p>
+                    )}
+                  </div>
+                  <ChartCard title={t("observedTPMTrend")} option={throughputOption} className="h-48" />
                 </div>
               </div>
             </section>

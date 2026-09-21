@@ -74,4 +74,19 @@ describe("Layout", () => {
     expect(screen.getByRole("banner")).toHaveClass("sticky");
     expect(screen.getByRole("main")).toHaveClass("overflow-y-auto");
   });
+
+  it("mirrors the UI language onto the document for screen readers", () => {
+    localStorage.setItem("au-theme", "light");
+    document.documentElement.lang = "en";
+
+    render(
+      <MemoryRouter>
+        <Layout>
+          <div>content</div>
+        </Layout>
+      </MemoryRouter>,
+    );
+
+    expect(document.documentElement.lang).toBe("zh");
+  });
 });

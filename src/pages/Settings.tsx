@@ -24,9 +24,10 @@ const COLLECTOR_LABELS: Record<CollectorName, string> = {
   codex: "codex",
   openclaw: "openClaw",
   opencode: "openCode",
+  pi: "piAgent",
 };
 
-const FULL_RETROSPECTIVE = new Set<CollectorName>(["claude", "codex"]);
+const FULL_RETROSPECTIVE = new Set<CollectorName>(["claude", "codex", "pi"]);
 const LITELLM_PRICING_URL = "https://cdn.jsdelivr.net/gh/BerriAI/litellm@main/model_prices_and_context_window.json";
 
 function errorMessage(error: unknown): string {

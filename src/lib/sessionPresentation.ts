@@ -25,13 +25,27 @@ export function isSyntheticSessionTitle(value: string): boolean {
   return isTransportArtifactContent(value);
 }
 
+export function cwdBaseName(cwd: string): string {
+  const normalized = cwd.trim().replace(/[\\/]+$/, "");
+  if (!normalized) return "";
+  return normalized.split(/[\\/]/).pop() || normalized;
+}
+
 export function humanizeSessionTitle(title: string, project: string, cwd: string, sessionID: string): string {
   const normalizedTitle = stripTransportArtifacts(title);
   if (normalizedTitle && !isSyntheticSessionTitle(normalizedTitle)) return normalizedTitle;
+  // cwd wins over project: the stored project key is the mangled session directory.
+  const base = cwdBaseName(cwd);
+  if (base) return base;
   if (project.trim()) return project.trim();
-  const normalizedCwd = cwd.trim().replace(/[\\/]+$/, "");
-  if (normalizedCwd) return normalizedCwd.split(/[\\/]/).pop() || normalizedCwd;
   return sessionID;
+}
+
+// pi and claude name session directories after the whole cwd, so the project
+// key reads "--Users-me-work-app--". Only the recorded cwd can name the folder
+// unambiguously, so without it the key is shown untouched rather than guessed.
+export function shortProjectName(project: string, cwd: string): string {
+  return cwdBaseName(cwd) || project.trim();
 }
 
 export function isReadableSessionEvent(event: Pick<SessionEvent, "event_type" | "content">): boolean {

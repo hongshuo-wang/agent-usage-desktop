@@ -1,14 +1,10 @@
-import { Braces, LoaderCircle, X } from "lucide-react";
-import type { RawEventResponse, SessionEvent } from "../../lib/types";
+import { X } from "lucide-react";
+import type { SessionEvent } from "../../lib/types";
 
 type Translate = (key: string) => string;
 
 interface Props {
   event: SessionEvent;
-  raw: RawEventResponse | undefined;
-  rawLoading: boolean;
-  rawError: string | null;
-  onLoadRaw: () => void;
   onClose: () => void;
   t: Translate;
 }
@@ -22,7 +18,7 @@ function InspectorField({ label, value, fallback, mono = false }: { label: strin
   );
 }
 
-export default function EventInspector({ event, raw, rawLoading, rawError, onLoadRaw, onClose, t }: Props) {
+export default function EventInspector({ event, onClose, t }: Props) {
   const fallback = t("sourceDataUnavailable");
 
   return (
@@ -51,20 +47,6 @@ export default function EventInspector({ event, raw, rawLoading, rawError, onLoa
           <InspectorField label={t("toolInput")} value={event.tool_input} fallback={fallback} mono />
           <InspectorField label={t("toolOutput")} value={event.tool_output} fallback={fallback} mono />
         </dl>
-
-        {event.has_raw && !raw && (
-          <button type="button" aria-label={t("loadRawRecord")} onClick={onLoadRaw} disabled={rawLoading} className="my-3 flex w-full items-center justify-center gap-2 rounded border border-border px-3 py-2 text-xs font-medium hover:border-accent disabled:opacity-50">
-            {rawLoading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Braces className="h-4 w-4" />}
-            {rawLoading ? t("loading") : t("rawRecord")}
-          </button>
-        )}
-        {rawError && <p className="my-3 break-words text-xs text-red-500">{rawError}</p>}
-        {raw && (
-          <section className="my-3">
-            <h3 className="mb-2 text-xs font-semibold">{t("rawRecord")}</h3>
-            <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded border border-border bg-background p-3 font-mono text-xs leading-5">{raw.content}</pre>
-          </section>
-        )}
       </div>
     </aside>
   );

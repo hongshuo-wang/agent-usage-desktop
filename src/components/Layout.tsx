@@ -19,6 +19,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     applyTheme(localStorage.getItem("au-theme") || "system");
   }, []);
 
+  // Screen readers pick a pronunciation from the document language.
+  useEffect(() => {
+    document.documentElement.lang = i18n.language;
+  }, [i18n.language]);
+
   useEffect(() => {
     setSystemOpen(location.pathname.startsWith("/settings"));
   }, [location.pathname]);
@@ -41,7 +46,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       <aside className="app-rail hidden w-56 shrink-0 border-r border-border bg-card lg:flex lg:flex-col">
         <div className="px-5 py-5">
           <div className="text-sm font-semibold tracking-tight">Agent Usage</div>
-          <div className="mt-1 text-[10px] text-muted-foreground">Local observability</div>
+          <div className="mt-1 text-[10px] text-muted-foreground">{t("localObservability")}</div>
         </div>
         <nav
           aria-label="Primary"

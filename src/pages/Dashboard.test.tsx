@@ -105,6 +105,12 @@ const collectionStatus = {
   malformed_lines: 0,
 };
 
+const heatmapCells = [
+  { weekday: 1, hour: 9, calls: 12, tokens: 4_200_000, cost: 3.25 },
+  { weekday: 1, hour: 10, calls: 30, tokens: 9_600_000, cost: 7.5 },
+  { weekday: 6, hour: 23, calls: 2, tokens: 120_000, cost: 0.1 },
+];
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -118,6 +124,7 @@ function deferred<T>() {
 function defaultAPIResponse(path: string, params: Record<string, string | number | undefined> = {}) {
   if (path === "stats") return stats;
   if (path === "tokens-over-time") return tokenRows;
+  if (path === "activity-heatmap") return heatmapCells;
   if (path === "throughput") return throughput;
   if (path === "collection-index-status") return collectionStatus;
   if (path === "usage-breakdown") {
@@ -160,6 +167,8 @@ describe("Dashboard overview", () => {
       "dashboard-band-insight",
       "dashboard-band-analysis",
       "dashboard-band-detail",
+      "dashboard-band-rhythm",
+      "dashboard-band-throughput",
     ]);
     const core = screen.getByTestId("dashboard-band-core");
     expect(within(core).getByTestId("estimated-cost")).toHaveTextContent("$1.23");

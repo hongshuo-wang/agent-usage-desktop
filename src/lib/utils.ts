@@ -1,3 +1,12 @@
+/** Shortens a bucket label for chart axes; the tooltip keeps the full value. */
+export function shortBucket(label: string): string {
+  const match = label.match(/^\d{4}-(\d{2}-\d{2})(?:[ T](\d{1,2})(?::(\d{2}))?)?$/);
+  if (!match) return label;
+  const [, day, hour, minute] = match;
+  if (hour === undefined) return day;
+  return `${day} ${hour.padStart(2, "0")}:${minute ?? "00"}`;
+}
+
 export function fmtTokens(n: number): string {
   if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
   if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";

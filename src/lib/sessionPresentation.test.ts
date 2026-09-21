@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionEvent } from "./types";
-import { humanizeSessionTitle, isReadableSessionEvent } from "./sessionPresentation";
+import { cwdBaseName, humanizeSessionTitle, isReadableSessionEvent, shortProjectName } from "./sessionPresentation";
 
 const event = (event_type: SessionEvent["event_type"], content = ""): SessionEvent => ({
   id: 1,
@@ -15,7 +15,6 @@ const event = (event_type: SessionEvent["event_type"], content = ""): SessionEve
   tool_output: "",
   event_status: "",
   duration_ms: null,
-  has_raw: false,
 });
 
 describe("session presentation", () => {
@@ -25,6 +24,24 @@ describe("session presentation", () => {
     expect(humanizeSessionTitle('<image name=[Image #1] path="/tmp/synthetic.png">', "agent-usage", "/work/agent-usage", "id")).toBe("agent-usage");
     expect(humanizeSessionTitle("[Image #1]Explain the screenshot", "agent-usage", "/work/agent-usage", "id")).toBe("Explain the screenshot");
     expect(humanizeSessionTitle("Real request", "agent-usage", "/work/agent-usage", "id")).toBe("Real request");
+  });
+
+  it("shows the folder name from cwd instead of the mangled session directory", () => {
+    // pi / claude record the session directory name, which encodes the whole path.
+    expect(shortProjectName("--Users-me-Documents-work-agent-usage-desktop--", "/Users/me/Documents/work/agent-usage-desktop")).toBe("agent-usage-desktop");
+    // A hyphenated folder name cannot be recovered from the mangled key, so cwd wins.
+    expect(shortProjectName("--Users-me-work-capinfo-bj-promotion-hotline--", "/Users/me/work/capinfo/bj-promotion-hotline")).toBe("bj-promotion-hotline");
+    expect(shortProjectName("", "/Users/me/Documents/work/TomlJump/")).toBe("TomlJump");
+    // Without a cwd the mangled key stays untouched instead of guessing a folder.
+    expect(shortProjectName("--Users-me-work-local-captcha-solver--", "")).toBe("--Users-me-work-local-captcha-solver--");
+    expect(shortProjectName("agent-usage-desktop", "")).toBe("agent-usage-desktop");
+    expect(shortProjectName("", "")).toBe("");
+  });
+
+  it("reads the folder name from either separator style", () => {
+    expect(cwdBaseName("/Users/me/work/app/")).toBe("app");
+    expect(cwdBaseName("C:\\Users\\me\\work\\app")).toBe("app");
+    expect(cwdBaseName("   ")).toBe("");
   });
 
   it("keeps conversation, tools and errors readable while hiding technical events", () => {

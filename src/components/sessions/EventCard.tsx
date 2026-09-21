@@ -20,7 +20,7 @@ function initiallyExpanded(event: SessionEvent): boolean {
   return true;
 }
 
-function formatEventTime(timestamp: string, fallback: string): string {
+export function formatEventTime(timestamp: string, fallback: string): string {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return fallback;
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });

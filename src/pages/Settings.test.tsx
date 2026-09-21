@@ -25,6 +25,7 @@ const settings = {
     { name: "codex", enabled: true, paths: ["/codex"], scan_interval: "1m0s" },
     { name: "openclaw", enabled: true, paths: ["/openclaw"], scan_interval: "2m0s" },
     { name: "opencode", enabled: false, paths: ["/opencode.db"], scan_interval: "5m0s" },
+    { name: "pi", enabled: true, paths: ["/pi/sessions"], scan_interval: "1m0s" },
   ],
   pricing_sync_interval: "1h0m0s",
 };
@@ -85,13 +86,15 @@ describe("application settings", () => {
     expect(screen.getByRole("switch", { name: "collectorEnabled codex" })).toBeChecked();
     expect(screen.getByRole("switch", { name: "collectorEnabled openClaw" })).toBeChecked();
     expect(screen.getByRole("switch", { name: "collectorEnabled openCode" })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "collectorEnabled piAgent" })).toBeChecked();
     const capabilities = screen.getAllByLabelText("collectorCapabilities");
-    expect(capabilities).toHaveLength(4);
+    expect(capabilities).toHaveLength(5);
     expect(within(capabilities[0]).getByText("sessionReplayCapability")).toHaveClass("text-accent");
     expect(within(capabilities[1]).getByText("sessionReplayCapability")).toHaveClass("text-accent");
     expect(within(capabilities[2]).getByText("sessionReplayCapability")).toHaveClass("text-muted-foreground");
     expect(within(capabilities[3]).getByText("sessionReplayCapability")).toHaveClass("text-muted-foreground");
-    expect(screen.getAllByText("tokenUsageCapability")).toHaveLength(4);
+    expect(within(capabilities[4]).getByText("sessionReplayCapability")).toHaveClass("text-accent");
+    expect(screen.getAllByText("tokenUsageCapability")).toHaveLength(5);
     expect(screen.getByRole("textbox", { name: "collectorPaths claudeCode" })).toHaveValue("/claude/a\n/claude/b");
     expect(screen.queryByRole("textbox", { name: "pricingSyncInterval" })).not.toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: "notification" })).not.toBeInTheDocument();

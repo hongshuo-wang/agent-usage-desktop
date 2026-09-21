@@ -1,12 +1,14 @@
-import { ArrowLeft, LoaderCircle } from "lucide-react";
+import { ArrowLeft, ChevronRight, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 import type { SessionEvent, SessionSummary } from "../../lib/types";
 import { fmtCost, fmtTokens } from "../../lib/utils";
-import EventCard from "./EventCard";
+import EventCard, { formatEventTime } from "./EventCard";
 import { sessionStatusLabels } from "./SessionList";
-import { humanizeSessionTitle, isReadableSessionEvent, isTransportArtifactContent } from "../../lib/sessionPresentation";
+import { presentProjectKey } from "../../lib/queryPresentation";
+import { humanizeSessionTitle, isReadableSessionEvent, isTransportArtifactContent, shortProjectName } from "../../lib/sessionPresentation";
+import { groupSessionTurns, promptPreview } from "../../lib/sessionTurns";
 
-type Translate = (key: string) => string;
+type Translate = (key: string, options?: Record<string, unknown>) => string;
 
 interface Props {
   session: SessionSummary | null;
@@ -43,6 +45,7 @@ export default function SessionTimeline({
   const visibleEvents = events.filter((item) => (
     !isTransportArtifactContent(item.content) && (showTechnical || isReadableSessionEvent(item))
   ));
+  const turns = groupSessionTurns(visibleEvents);
 
   return (
     <section data-testid="session-timeline" className="flex min-h-0 min-w-0 flex-col bg-background">
@@ -59,7 +62,11 @@ export default function SessionTimeline({
         </div>
         <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-5">
           <HeaderField label={t("agent")} value={session.source} fallback={t("sourceDataUnavailable")} />
-          <HeaderField label={t("project")} value={session.project} fallback={t("sourceDataUnavailable")} />
+            <HeaderField
+              label={t("project")}
+              value={presentProjectKey(session.project).label === "unnamedProject" ? "" : shortProjectName(session.project, session.cwd)}
+              fallback={t("sourceDataUnavailable")}
+            />
           <HeaderField label={t("branch")} value={session.git_branch} fallback={t("sourceDataUnavailable")} />
           <HeaderField label={t("startTime")} value={session.start_time} fallback={t("sourceDataUnavailable")} mono />
           <HeaderField label={t("models")} value={session.models.join(", ")} fallback={t("sourceDataUnavailable")} />
@@ -108,7 +115,32 @@ export default function SessionTimeline({
           </div>
         ) : (
           <div className="mx-auto flex max-w-3xl flex-col gap-2">
-            {visibleEvents.map((item) => <EventCard key={item.id} event={item} onInspect={onInspect} t={t} />)}
+            {turns.map((turn) => (
+              <details
+                key={turn.key}
+                data-testid={`session-turn-${turn.key}`}
+                className="group overflow-hidden rounded-md bg-card/50"
+              >
+                <summary className="flex min-w-0 cursor-pointer list-none items-center gap-2 px-3 py-2.5 hover:bg-muted/70 [&::-webkit-details-marker]:hidden">
+                  <ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" />
+                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                    {turn.round === null ? t("sessionOpening") : t("roundNumber", { n: turn.round })}
+                  </span>
+                  {turn.prompt ? (
+                    <span className="min-w-0 flex-1 truncate text-xs font-medium">{promptPreview(turn.prompt.content)}</span>
+                  ) : <span className="flex-1" />}
+                  {turn.toolCalls > 0 && (
+                    <span className="shrink-0 text-[10px] text-muted-foreground">{t("turnToolCalls", { count: turn.toolCalls })}</span>
+                  )}
+                  <time dateTime={turn.events[0].timestamp} className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                    {formatEventTime(turn.events[0].timestamp, t("sourceDataUnavailable"))}
+                  </time>
+                </summary>
+                <div className="flex flex-col gap-2 border-t border-border/60 p-2">
+                  {turn.events.map((item) => <EventCard key={item.id} event={item} onInspect={onInspect} t={t} />)}
+                </div>
+              </details>
+            ))}
             {hasMore && (
               <button type="button" aria-label={t("loadMoreEvents")} onClick={onLoadMore} disabled={loadingMore} className="mt-2 rounded border border-border px-3 py-2 text-xs font-medium hover:bg-muted disabled:opacity-50">
                 {loadingMore ? t("loading") : t("loadMoreEvents")}

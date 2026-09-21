@@ -57,6 +57,14 @@ export interface ThroughputPoint extends ThroughputValues {
   minute: string;
 }
 
+export interface HeatmapCell {
+  weekday: number;
+  hour: number;
+  calls: number;
+  tokens: number;
+  cost: number;
+}
+
 export interface ThroughputResult {
   average_active_minute: ThroughputValues;
   peak_rolling_60s: ThroughputValues;
@@ -65,8 +73,9 @@ export interface ThroughputResult {
 }
 
 export interface CollectionIndexStatus {
-  status: "empty" | "stats_only" | "missing_source" | "rebuild_required" | "stale_parser" | "partial" | "available";
+  status: "empty" | "stats_only" | "missing_source" | "rebuild_required" | "stale_parser" | "partial" | "available" | "stale";
   last_indexed_at: string | null;
+  last_scan_at: string | null;
   source_count: number;
   file_count: number;
   complete_files: number;
@@ -125,18 +134,9 @@ export interface SessionEvent {
   tool_output: string;
   event_status: string;
   duration_ms: number | null;
-  has_raw: boolean;
 }
 
-export interface RawEventResponse {
-  path: string;
-  offset: number;
-  length: number;
-  content_type: string;
-  content: string;
-}
-
-export type CollectorName = "claude" | "codex" | "openclaw" | "opencode";
+export type CollectorName = "claude" | "codex" | "openclaw" | "opencode" | "pi";
 
 export interface CollectorSetting {
   name: CollectorName;
