@@ -71,6 +71,16 @@ type TimeSeriesPoint struct {
 	Model string  `json:"model,omitempty"`
 }
 
+// HeatmapCell is one weekday/hour bucket of activity. Weekday follows SQLite's
+// STRFTIME('%w'): 0 = Sunday.
+type HeatmapCell struct {
+	Weekday int     `json:"weekday"`
+	Hour    int     `json:"hour"`
+	Calls   int64   `json:"calls"`
+	Tokens  int64   `json:"tokens"`
+	Cost    float64 `json:"cost"`
+}
+
 // TokenTimeSeriesPoint represents daily token usage broken down by category.
 type TokenTimeSeriesPoint struct {
 	Date         string `json:"date"`
@@ -247,6 +257,39 @@ func (d *DB) GetTokensOverTime(from, to time.Time, granularity string, source st
 		return nil, err
 	}
 	return result, nil
+}
+
+// GetActivityHeatmap aggregates usage into local weekday/hour buckets so the UI
+// can show when work actually happens. Only buckets with activity are returned.
+func (d *DB) GetActivityHeatmap(from, to time.Time, source string, tzOffset int) ([]HeatmapCell, error) {
+	// timestamp is stored as "2006-01-02 15:04:05.999 +0000 UTC"; SQLite date
+	// functions only parse the leading 19 characters, so slice before shifting.
+	local := "SUBSTR(timestamp,1,19)"
+	if tzOffset != 0 {
+		local = fmt.Sprintf("DATETIME(SUBSTR(timestamp,1,19), '%+d minutes')", -tzOffset)
+	}
+	sf, sa := sourceFilter(source)
+	args := append([]interface{}{from, to}, sa...)
+	rows, err := d.db.Query(`SELECT CAST(STRFTIME('%w', `+local+`) AS INTEGER) AS weekday,
+			CAST(SUBSTR(`+local+`,12,2) AS INTEGER) AS hour,
+			COUNT(*) AS calls,
+			COALESCE(SUM(input_tokens+output_tokens+cache_read_input_tokens+cache_creation_input_tokens),0) AS tokens,
+			COALESCE(SUM(CASE WHEN pricing_status IN ('priced','legacy') THEN cost_usd ELSE 0 END),0) AS cost
+		FROM usage_records WHERE timestamp BETWEEN ? AND ?`+sf+`
+		GROUP BY weekday, hour ORDER BY weekday, hour`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []HeatmapCell
+	for rows.Next() {
+		var cell HeatmapCell
+		if err := rows.Scan(&cell.Weekday, &cell.Hour, &cell.Calls, &cell.Tokens, &cell.Cost); err != nil {
+			return nil, err
+		}
+		result = append(result, cell)
+	}
+	return result, rows.Err()
 }
 
 // GetSessions returns sessions with aggregated cost and token totals within the given time range.

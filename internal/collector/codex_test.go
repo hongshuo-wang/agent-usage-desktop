@@ -172,15 +172,6 @@ func TestCodexCollectorRebuildMissingAndLargeRecord(t *testing.T) {
 	if len(events) != 1 || events[0].Content != "x" {
 		t.Fatalf("truncation rebuild events = %+v", events)
 	}
-	inspection, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer inspection.Close()
-	var ftsBefore int
-	if err := inspection.QueryRow(`SELECT COUNT(*) FROM session_events_fts WHERE session_events_fts MATCH 'x'`).Scan(&ftsBefore); err != nil || ftsBefore != 1 {
-		t.Fatalf("FTS before missing = %d, %v", ftsBefore, err)
-	}
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
@@ -194,10 +185,6 @@ func TestCodexCollectorRebuildMissingAndLargeRecord(t *testing.T) {
 	events, _ = db.ListSessionEvents("codex", "codex-rebuild", 10, 0)
 	if len(events) != 0 {
 		t.Fatalf("missing source retained events = %+v", events)
-	}
-	var ftsAfter int
-	if err := inspection.QueryRow(`SELECT COUNT(*) FROM session_events_fts WHERE session_events_fts MATCH 'x'`).Scan(&ftsAfter); err != nil || ftsAfter != 0 {
-		t.Fatalf("FTS after missing = %d, %v", ftsAfter, err)
 	}
 	from := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)

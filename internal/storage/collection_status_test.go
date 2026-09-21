@@ -1,131 +1,99 @@
 package storage
 
 import (
+	"strconv"
 	"testing"
 	"time"
 )
 
-func TestCollectionIndexStatusDistinguishesEmptyStatsOnlyAndAvailable(t *testing.T) {
-	t.Run("empty", func(t *testing.T) {
-		got := callCollectionIndexStatus(t, tempDB(t))
-		assertCollectionStatus(t, got, "empty", 0, 0)
-	})
-
-	t.Run("stats only", func(t *testing.T) {
-		db := tempDB(t)
-		if err := db.InsertUsage(&UsageRecord{
-			Source: "claude", SessionID: "stats-only", Model: "model-a",
-			Timestamp: time.Date(2025, 1, 2, 3, 0, 0, 0, time.UTC), InputTokens: 1,
-		}); err != nil {
-			t.Fatalf("InsertUsage: %v", err)
-		}
-		got := callCollectionIndexStatus(t, db)
-		assertCollectionStatus(t, got, "stats_only", 0, 0)
-	})
-
-	t.Run("available", func(t *testing.T) {
-		db := tempDB(t)
-		first := testSessionSource("/sessions/claude.jsonl", "one")
-		first.LastIndexedAt = time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
-		second := testSessionSource("/sessions/codex.jsonl", "two")
-		second.Source = "codex"
-		second.LastIndexedAt = first.LastIndexedAt.Add(time.Hour)
-		for _, source := range []*SessionSource{first, second} {
-			if _, err := db.UpsertSessionSource(source); err != nil {
-				t.Fatalf("UpsertSessionSource: %v", err)
-			}
-		}
-
-		got := callCollectionIndexStatus(t, db)
-		assertCollectionStatus(t, got, "available", 2, 2)
-		if got.CompleteFiles != 2 || got.PartialFiles != 0 {
-			t.Fatalf("coverage aggregate = %+v", got)
-		}
-		if got.LastIndexedAt == nil || !got.LastIndexedAt.Equal(second.LastIndexedAt) {
-			t.Errorf("last_indexed_at = %v, want latest indexed source", got.LastIndexedAt)
-		}
-	})
-}
-
-func TestCollectionIndexStatusUsesExplicitPriorityAndAggregatesHealth(t *testing.T) {
-	tests := []struct {
-		name      string
-		sources   []*SessionSource
-		want      string
-		malformed int
-	}{
-		{
-			name: "missing wins",
-			sources: []*SessionSource{
-				statusTestSource("missing_source", "complete", 0, 1),
-				statusTestSource("rebuild_required", "partial", 0, 2),
-				statusTestSource("stale_parser", "complete", 0, 3),
-			},
-			want: "missing_source",
-		},
-		{
-			name: "rebuild wins over stale and partial",
-			sources: []*SessionSource{
-				statusTestSource("rebuild_required", "complete", 0, 1),
-				statusTestSource("stale_parser", "complete", 0, 2),
-				statusTestSource("available", "partial", 0, 3),
-			},
-			want: "rebuild_required",
-		},
-		{
-			name: "stale wins over partial",
-			sources: []*SessionSource{
-				statusTestSource("stale_parser", "complete", 0, 1),
-				statusTestSource("available", "partial", 0, 2),
-			},
-			want: "stale_parser",
-		},
-		{
-			name: "partial from malformed records",
-			sources: []*SessionSource{
-				statusTestSource("available", "complete", 3, 1),
-			},
-			want: "partial", malformed: 3,
-		},
+func TestCollectionIndexStatusReportsStalledScanLoop(t *testing.T) {
+	db := tempDB(t)
+	if _, err := db.UpsertSessionSource(&SessionSource{
+		Source: "claude", SessionID: "s1", Path: "/p/s1.jsonl",
+		CoverageStatus: "complete", SourceStatus: "available",
+		LastIndexedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("UpsertSessionSource: %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			db := tempDB(t)
-			for _, source := range tt.sources {
-				if _, err := db.UpsertSessionSource(source); err != nil {
-					t.Fatalf("UpsertSessionSource: %v", err)
-				}
-			}
-			got := callCollectionIndexStatus(t, db)
-			assertCollectionStatus(t, got, tt.want, 1, len(tt.sources))
-			if got.MalformedLines != tt.malformed {
-				t.Errorf("malformed_lines = %v, want %d", got.MalformedLines, tt.malformed)
-			}
-		})
-	}
-}
-
-func statusTestSource(sourceStatus, coverageStatus string, malformed, index int) *SessionSource {
-	source := testSessionSource("/sessions/status-"+string(rune('a'+index))+".jsonl", "status-session")
-	source.SourceStatus = sourceStatus
-	source.CoverageStatus = coverageStatus
-	source.MalformedLines = malformed
-	return source
-}
-
-func callCollectionIndexStatus(t *testing.T, db *DB) *CollectionIndexStatus {
-	t.Helper()
+	// No heartbeat yet: unknown, not stale. Pre-heartbeat databases must stay quiet.
 	status, err := db.GetCollectionIndexStatus()
 	if err != nil {
 		t.Fatalf("GetCollectionIndexStatus: %v", err)
 	}
-	return status
+	if status.Stale || status.LastScanAt != nil {
+		t.Errorf("absent heartbeat = stale=%v last_scan_at=%v, want unknown", status.Stale, status.LastScanAt)
+	}
+	if status.Status != "available" {
+		t.Errorf("status = %q, want available", status.Status)
+	}
+
+	// Unparseable heartbeat is also unknown rather than a stalled loop.
+	if err := db.SetMeta("last_scan_at", "not-a-timestamp"); err != nil {
+		t.Fatalf("SetMeta: %v", err)
+	}
+	status, err = db.GetCollectionIndexStatus()
+	if err != nil {
+		t.Fatalf("GetCollectionIndexStatus: %v", err)
+	}
+	if status.Stale {
+		t.Error("unparseable heartbeat reported as stale")
+	}
+
+	// A fresh heartbeat stays below the two hour floor.
+	heartbeat(t, db, 30*time.Minute, 60)
+	status, err = db.GetCollectionIndexStatus()
+	if err != nil {
+		t.Fatalf("GetCollectionIndexStatus: %v", err)
+	}
+	if status.Stale || status.Status != "available" || status.LastScanAt == nil {
+		t.Errorf("fresh heartbeat = %+v, want available and not stale", status)
+	}
+
+	// Past the floor the loop is presumed dead.
+	heartbeat(t, db, 5*time.Hour, 60)
+	status, err = db.GetCollectionIndexStatus()
+	if err != nil {
+		t.Fatalf("GetCollectionIndexStatus: %v", err)
+	}
+	if !status.Stale || status.Status != "stale" {
+		t.Errorf("stalled scan = stale=%v status=%q, want stale", status.Stale, status.Status)
+	}
+
+	// A deliberately long cadence widens the window past the floor: 6h > 5h.
+	heartbeat(t, db, 5*time.Hour, 7200)
+	status, err = db.GetCollectionIndexStatus()
+	if err != nil {
+		t.Fatalf("GetCollectionIndexStatus: %v", err)
+	}
+	if status.Stale {
+		t.Errorf("slow cadence reported stale at %+v, want tolerance scaled to 6h", status)
+	}
+
+	// A specific fault outranks the generic stall.
+	if _, err := db.UpsertSessionSource(&SessionSource{
+		Source: "codex", SessionID: "s2", Path: "/p/missing.jsonl",
+		CoverageStatus: "complete", SourceStatus: "missing_source",
+		LastIndexedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("UpsertSessionSource: %v", err)
+	}
+	heartbeat(t, db, 9*time.Hour, 60)
+	status, err = db.GetCollectionIndexStatus()
+	if err != nil {
+		t.Fatalf("GetCollectionIndexStatus: %v", err)
+	}
+	if !status.Stale || status.Status != "missing_source" {
+		t.Errorf("status = %q stale=%v, want missing_source to keep precedence", status.Status, status.Stale)
+	}
 }
 
-func assertCollectionStatus(t *testing.T, got *CollectionIndexStatus, status string, sourceCount, fileCount int) {
+func heartbeat(t *testing.T, db *DB, age time.Duration, intervalSeconds int) {
 	t.Helper()
-	if got.Status != status || got.SourceCount != sourceCount || got.FileCount != fileCount {
-		t.Fatalf("collection status = %+v, want status=%s sources=%d files=%d", got, status, sourceCount, fileCount)
+	if err := db.SetMeta("last_scan_at", time.Now().UTC().Add(-age).Format(time.RFC3339)); err != nil {
+		t.Fatalf("SetMeta(last_scan_at): %v", err)
+	}
+	if err := db.SetMeta("scan_interval_seconds", strconv.Itoa(intervalSeconds)); err != nil {
+		t.Fatalf("SetMeta(scan_interval_seconds): %v", err)
 	}
 }

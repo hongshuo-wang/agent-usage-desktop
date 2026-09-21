@@ -34,6 +34,7 @@ func TestCollectionIndexStatusEndpointContract(t *testing.T) {
 	wantKeys := []string{
 		"status", "last_indexed_at", "source_count", "file_count", "complete_files",
 		"partial_files", "missing_files", "rebuild_required_files", "stale_parser_files", "malformed_lines",
+		"last_scan_at", "stale",
 	}
 	if len(payload) != len(wantKeys) {
 		t.Fatalf("response keys = %v, want exactly %v", payload, wantKeys)
@@ -45,6 +46,11 @@ func TestCollectionIndexStatusEndpointContract(t *testing.T) {
 	}
 	if payload["status"] != "partial" || payload["malformed_lines"] != float64(2) {
 		t.Errorf("response = %+v", payload)
+	}
+	// Without a recorded heartbeat the scan state is unknown, which must not be
+	// reported as a stalled collector.
+	if payload["stale"] != false || payload["last_scan_at"] != nil {
+		t.Errorf("heartbeat-less response = %+v, want unknown scan state", payload)
 	}
 
 	request = httptest.NewRequest(http.MethodPost, "/api/collection-index-status", nil)

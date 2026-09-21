@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"testing"
 	"time"
 
@@ -233,30 +232,6 @@ func TestSessionSearchIntersectsFiltersAndAggregates(t *testing.T) {
 	}
 }
 
-func TestSessionSearchUsesLiteralFTSAcrossIndexedColumns(t *testing.T) {
-	fx := seedSessionAPI(t)
-	queries := []string{`Investigate "build" #42?`, "Read.Tool", "a.go", "needle-output"}
-	for _, query := range queries {
-		var sessions []storage.SessionSummary
-		values := url.Values{"from": {"2025-01-10"}, "to": {"2025-01-10"}, "q": {query}}
-		if status := requestJSON(t, fx.handler, http.MethodGet, "/api/sessions?"+values.Encode(), &sessions); status != http.StatusOK {
-			t.Fatalf("q=%q status = %d", query, status)
-		}
-		if len(sessions) != 1 || sessions[0].Source != "claude" {
-			t.Errorf("q=%q returned %+v", query, sessions)
-		}
-	}
-
-	var sessions []storage.SessionSummary
-	values := url.Values{"from": {"2025-01-10"}, "to": {"2025-01-10"}, "q": {"needle-output OR Codex"}}
-	if status := requestJSON(t, fx.handler, http.MethodGet, "/api/sessions?"+values.Encode(), &sessions); status != http.StatusOK {
-		t.Fatalf("operator-like literal status = %d", status)
-	}
-	if len(sessions) != 0 {
-		t.Fatalf("raw FTS operator changed semantics: %+v", sessions)
-	}
-}
-
 func TestSessionSearchNewestPaginationIsStable(t *testing.T) {
 	db := tempDB(t)
 	ts := time.Date(2025, 1, 10, 12, 0, 0, 0, time.UTC)
@@ -309,10 +284,6 @@ func TestSessionEventsAreChronologicalPagedAndSourceBound(t *testing.T) {
 	if len(events) != 2 || events[0].EventType != "tool_call" || events[1].EventType != "tool_result" {
 		t.Fatalf("unexpected chronological page: %+v", events)
 	}
-	if !events[0].HasRaw || events[1].HasRaw {
-		t.Errorf("raw availability is wrong: %+v", events)
-	}
-
 	events = nil
 	if status := requestJSON(t, fx.handler, http.MethodGet, "/api/sessions/codex/shared/events", &events); status != http.StatusOK {
 		t.Fatalf("codex events status = %d", status)
@@ -378,127 +349,6 @@ func TestSessionEventsRejectInvalidInputAndMethods(t *testing.T) {
 	}
 }
 
-func TestSessionRawReturnsExactJSONAndTextRecords(t *testing.T) {
-	fx := seedSessionAPI(t)
-	cases := []struct {
-		key, content, contentType string
-	}{
-		{"claude:user_message", `{"kind":"json","value":42}`, "json"},
-		{"claude:tool_call", "plain text record", "text"},
-	}
-	for _, tc := range cases {
-		var raw RawEventResponse
-		target := fmt.Sprintf("/api/sessions/claude/shared/events/%d/raw", fx.eventIDs[tc.key])
-		if status := requestJSON(t, fx.handler, http.MethodGet, target, &raw); status != http.StatusOK {
-			t.Fatalf("%s status = %d", tc.key, status)
-		}
-		if raw.Content != tc.content || raw.ContentType != tc.contentType || raw.Path != fx.rawPath {
-			t.Errorf("%s raw response = %+v", tc.key, raw)
-		}
-		if raw.Length != int64(len(tc.content)) || string(fx.rawBytes[raw.Offset:raw.Offset+raw.Length]) != tc.content {
-			t.Errorf("%s locator is not exact: %+v", tc.key, raw)
-		}
-	}
-}
-
-func TestSessionRawRejectsRewrittenIndexedSnapshot(t *testing.T) {
-	fx := seedSessionAPI(t)
-	rewritten := append([]byte(nil), fx.rawBytes...)
-	rewritten[0] ^= 0xff
-	if err := os.WriteFile(fx.rawPath, rewritten, 0o600); err != nil {
-		t.Fatalf("rewrite source: %v", err)
-	}
-	target := fmt.Sprintf("/api/sessions/claude/shared/events/%d/raw", fx.eventIDs["claude:user_message"])
-	if status := requestJSON(t, fx.handler, http.MethodGet, target, nil); status != http.StatusGone {
-		t.Errorf("rewritten snapshot status = %d, want 410", status)
-	}
-}
-
-func TestSessionRawAllowsAppendOnlyGrowth(t *testing.T) {
-	fx := seedSessionAPI(t)
-	file, err := os.OpenFile(fx.rawPath, os.O_APPEND|os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatalf("open source for append: %v", err)
-	}
-	if _, err := file.WriteString("appended record\n"); err != nil {
-		file.Close()
-		t.Fatalf("append source: %v", err)
-	}
-	if err := file.Close(); err != nil {
-		t.Fatalf("close appended source: %v", err)
-	}
-
-	var raw RawEventResponse
-	target := fmt.Sprintf("/api/sessions/claude/shared/events/%d/raw", fx.eventIDs["claude:user_message"])
-	if status := requestJSON(t, fx.handler, http.MethodGet, target, &raw); status != http.StatusOK {
-		t.Fatalf("appended snapshot status = %d, want 200", status)
-	}
-	if raw.Content != `{"kind":"json","value":42}` {
-		t.Errorf("raw content after append = %q", raw.Content)
-	}
-}
-
-func TestSessionRawRejectsUnsafeOrUnavailableLocators(t *testing.T) {
-	fx := seedSessionAPI(t)
-	claudeEventID := fx.eventIDs["claude:user_message"]
-	if status := requestJSON(t, fx.handler, http.MethodGet, fmt.Sprintf("/api/sessions/codex/shared/events/%d/raw", claudeEventID), nil); status != http.StatusNotFound {
-		t.Errorf("source-mismatched event status = %d, want 404", status)
-	}
-	if status := requestJSON(t, fx.handler, http.MethodGet, "/api/sessions/claude/shared/events/999999/raw", nil); status != http.StatusNotFound {
-		t.Errorf("unknown event status = %d, want 404", status)
-	}
-
-	missingSource := &storage.SessionSource{Source: "claude", SessionID: "missing-file", Path: filepath.Join(t.TempDir(), "gone.jsonl"), ParserVersion: "v1", SourceStatus: "available"}
-	missingID, err := fx.db.UpsertSessionSourceWithEvents(missingSource, []storage.SessionEventRecord{{
-		Source: "claude", SessionID: "missing-file", EventType: "user_message", Timestamp: fx.day, RawOffset: 0, RawLength: 5,
-	}})
-	if err != nil {
-		t.Fatalf("seed missing file: %v", err)
-	}
-	missingEvents, _ := fx.db.ListSessionEvents("claude", "missing-file", 10, 0)
-	if len(missingEvents) != 1 || missingID == 0 {
-		t.Fatalf("missing-file event not seeded: %+v", missingEvents)
-	}
-	if status := requestJSON(t, fx.handler, http.MethodGet, fmt.Sprintf("/api/sessions/claude/missing-file/events/%d/raw", missingEvents[0].ID), nil); status != http.StatusGone {
-		t.Errorf("missing file status = %d, want 410", status)
-	}
-
-	for name, locator := range map[string]struct {
-		offset int64
-		length int64
-		status int
-	}{
-		"invalid":   {-1, 5, http.StatusBadRequest},
-		"oversized": {300, rawRecordMaxBytes + 1, http.StatusRequestEntityTooLarge},
-	} {
-		if err := fx.db.InsertSessionEvents([]storage.SessionEventRecord{{
-			SessionSourceID: fx.sourceIDs["claude"], Source: "claude", SessionID: "shared",
-			EventType: "system", Timestamp: fx.day, RawOffset: locator.offset, RawLength: locator.length, RawIndex: 9,
-		}}); err != nil {
-			t.Fatalf("seed %s locator: %v", name, err)
-		}
-		events, _ := fx.db.ListSessionEvents("claude", "shared", 100, 0)
-		var eventID int64
-		for _, event := range events {
-			if event.RawOffset == locator.offset && event.RawLength == locator.length {
-				eventID = event.ID
-			}
-		}
-		if eventID == 0 {
-			t.Fatalf("%s locator event not found", name)
-		}
-		target := fmt.Sprintf("/api/sessions/claude/shared/events/%d/raw", eventID)
-		if status := requestJSON(t, fx.handler, http.MethodGet, target, nil); status != locator.status {
-			t.Errorf("%s locator status = %d, want %d", name, status, locator.status)
-		}
-	}
-
-	target := fmt.Sprintf("/api/sessions/claude/shared/events/%d/raw", claudeEventID)
-	if status := requestJSON(t, fx.handler, http.MethodPost, target, nil); status != http.StatusMethodNotAllowed {
-		t.Errorf("POST raw status = %d, want 405", status)
-	}
-}
-
 func TestSessionIndexRebuildPreservesHistoryAndMarksSources(t *testing.T) {
 	fx := seedSessionAPI(t)
 	if err := fx.db.SetFileState(fx.rawPath, int64(len(fx.rawBytes)), int64(len(fx.rawBytes)), nil); err != nil {
@@ -539,10 +389,18 @@ func TestSessionIndexRebuildPreservesHistoryAndMarksSources(t *testing.T) {
 	if events, err := fx.db.ListSessionEvents("claude", "shared", 10, 0); err != nil || len(events) != 0 {
 		t.Errorf("normalized events remain: events=%+v err=%v", events, err)
 	}
+	// Rebuilding drops normalized events, so the persisted title is the only
+	// thing keeping the session identifiable afterwards.
 	var sessions []storage.SessionSummary
-	values := url.Values{"from": {"2025-01-10"}, "to": {"2025-01-10"}, "q": {"needle-output"}}
-	if status := requestJSON(t, fx.handler, http.MethodGet, "/api/sessions?"+values.Encode(), &sessions); status != http.StatusOK || len(sessions) != 0 {
-		t.Errorf("FTS content remains after rebuild: status=%d sessions=%+v", status, sessions)
+	values := url.Values{"from": {"2025-01-10"}, "to": {"2025-01-10"}}
+	if status := requestJSON(t, fx.handler, http.MethodGet, "/api/sessions?"+values.Encode(), &sessions); status != http.StatusOK || len(sessions) != 2 {
+		t.Errorf("session list after rebuild: status=%d sessions=%+v", status, sessions)
+	} else {
+		for _, session := range sessions {
+			if session.Title == "" {
+				t.Errorf("persisted title lost after rebuild: %+v", session)
+			}
+		}
 	}
 	size, offset, _, err := fx.db.GetFileState(fx.rawPath)
 	if err != nil || size != int64(len(fx.rawBytes)) || offset != int64(len(fx.rawBytes)) {
@@ -559,15 +417,5 @@ func TestSessionIndexRebuildPreservesHistoryAndMarksSources(t *testing.T) {
 func TestSessionSearchDefaultsLimit(t *testing.T) {
 	if searchDefaultLimit <= 0 || searchDefaultLimit > searchMaxLimit {
 		t.Fatalf("invalid test contract for default limit")
-	}
-}
-
-func TestSessionRawEventIDMustBeInteger(t *testing.T) {
-	fx := seedSessionAPI(t)
-	if status := requestJSON(t, fx.handler, http.MethodGet, "/api/sessions/claude/shared/events/not-a-number/raw", nil); status != http.StatusBadRequest {
-		t.Errorf("non-integer event id status = %d, want 400", status)
-	}
-	if _, err := strconv.ParseInt("not-a-number", 10, 64); err == nil {
-		t.Fatal("invalid test setup")
 	}
 }

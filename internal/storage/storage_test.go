@@ -797,7 +797,7 @@ func TestFreshDatabaseContainsOnlyProductSchema(t *testing.T) {
 
 	for _, table := range []string{
 		"usage_records", "pricing", "sessions", "prompt_events",
-		"session_sources", "session_events", "session_events_fts",
+		"session_sources", "session_events",
 	} {
 		if !sqliteTableExists(t, db.db, table) {
 			t.Errorf("fresh database missing core table %q", table)
@@ -875,6 +875,15 @@ func TestMigration009PreservesLegacyCostWithoutInventingSnapshot(t *testing.T) {
 		CREATE TABLE file_state (path TEXT PRIMARY KEY, size INTEGER DEFAULT 0, last_offset INTEGER DEFAULT 0, scan_context TEXT DEFAULT '');
 		CREATE TABLE pricing (model TEXT PRIMARY KEY, input_cost_per_token REAL DEFAULT 0, output_cost_per_token REAL DEFAULT 0,
 			cache_read_input_token_cost REAL DEFAULT 0, cache_creation_input_token_cost REAL DEFAULT 0, updated_at DATETIME);
+		CREATE TABLE session_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, session_source_id INTEGER NOT NULL,
+			source TEXT NOT NULL, session_id TEXT NOT NULL, event_type TEXT NOT NULL,
+			source_event_type TEXT NOT NULL DEFAULT '', timestamp DATETIME, role TEXT NOT NULL DEFAULT '',
+			content TEXT NOT NULL DEFAULT '', tool_name TEXT NOT NULL DEFAULT '', tool_call_id TEXT NOT NULL DEFAULT '',
+			tool_input TEXT NOT NULL DEFAULT '', tool_output TEXT NOT NULL DEFAULT '', event_status TEXT NOT NULL DEFAULT '',
+			duration_ms INTEGER, raw_offset INTEGER NOT NULL DEFAULT 0, raw_length INTEGER NOT NULL DEFAULT 0,
+			raw_index INTEGER NOT NULL DEFAULT 0, UNIQUE(session_source_id, raw_offset, raw_index)
+		);
 		CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT DEFAULT '');
 		INSERT INTO usage_records(source, session_id, model, cost_usd, timestamp)
 			VALUES('claude', 'legacy-priced', 'legacy-model', 4.25, '2025-01-01 12:00:00+00:00');
@@ -1267,75 +1276,6 @@ func sqliteIndexExists(t *testing.T, db *sql.DB, index string) bool {
 		t.Fatalf("inspect sqlite index %q: %v", index, err)
 	}
 	return count != 0
-}
-
-func TestMigration007RollsBackSchemaWhenFTSCreationFails(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "atomic.db")
-	db, err := Open(dbPath)
-	if err != nil {
-		t.Fatalf("Open seed database: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close seed database: %v", err)
-	}
-
-	raw, err := sql.Open("sqlite", dbPath+"?_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatalf("open raw database: %v", err)
-	}
-	revert007 := `
-		DROP TRIGGER session_events_fts_update;
-		DROP TRIGGER session_events_fts_delete;
-		DROP TRIGGER session_events_fts_insert;
-		DROP TABLE session_events_fts;
-		DROP TABLE session_events;
-		DROP TABLE session_sources;
-		CREATE TABLE sessions_legacy (
-			id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL, session_id TEXT NOT NULL UNIQUE,
-			project TEXT DEFAULT '', cwd TEXT DEFAULT '', version TEXT DEFAULT '', git_branch TEXT DEFAULT '',
-			start_time DATETIME, prompts INTEGER DEFAULT 0
-		);
-		INSERT INTO sessions_legacy SELECT * FROM sessions;
-		DROP TABLE sessions;
-		ALTER TABLE sessions_legacy RENAME TO sessions;
-		DROP INDEX idx_usage_dedup;
-		CREATE UNIQUE INDEX idx_usage_dedup ON usage_records(session_id, model, timestamp, input_tokens, output_tokens);
-		DROP INDEX idx_prompt_dedup;
-		CREATE UNIQUE INDEX idx_prompt_dedup ON prompt_events(session_id, timestamp);
-		DELETE FROM meta WHERE key='migration_007_session_event_index';
-		CREATE TABLE session_events_fts(blocker TEXT);
-	`
-	if _, err := raw.Exec(revert007); err != nil {
-		raw.Close()
-		t.Fatalf("restore pre-007 schema: %v", err)
-	}
-	if err := raw.Close(); err != nil {
-		t.Fatalf("close raw database: %v", err)
-	}
-
-	if reopened, err := Open(dbPath); err == nil {
-		reopened.Close()
-		t.Fatal("expected migration failure from conflicting FTS table")
-	}
-
-	check, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("open database after failed migration: %v", err)
-	}
-	defer check.Close()
-	var markerCount, sourceTableCount int
-	if err := check.QueryRow(`SELECT COUNT(*) FROM meta WHERE key='migration_007_session_event_index'`).Scan(&markerCount); err != nil {
-		t.Fatalf("read migration marker: %v", err)
-	}
-	if err := check.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='session_sources'`).Scan(&sourceTableCount); err != nil {
-		t.Fatalf("read session_sources schema: %v", err)
-	}
-	if markerCount != 0 || sourceTableCount != 0 {
-		t.Fatalf("failed migration left partial state: marker=%d session_sources=%d", markerCount, sourceTableCount)
-	}
-	if _, err := check.Exec(`INSERT INTO sessions(source,session_id) VALUES('claude','same'),('codex','same')`); err == nil {
-		t.Fatal("sessions table rebuild was not rolled back")
-	}
 }
 
 func TestInsertPromptBatchAndDedup(t *testing.T) {

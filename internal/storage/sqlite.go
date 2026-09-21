@@ -256,31 +256,6 @@ func migrate(db *sql.DB) error {
 				CREATE INDEX idx_session_events_session_time ON session_events(source, session_id, timestamp, id);
 				CREATE INDEX idx_session_events_session_type ON session_events(source, session_id, event_type);
 				CREATE INDEX idx_session_events_source_id ON session_events(session_source_id);
-
-				CREATE VIRTUAL TABLE session_events_fts USING fts5(
-					content,
-					tool_name,
-					tool_input,
-					tool_output,
-					content='session_events',
-					content_rowid='id',
-					tokenize='unicode61'
-				);
-
-				CREATE TRIGGER session_events_fts_insert AFTER INSERT ON session_events BEGIN
-					INSERT INTO session_events_fts(rowid, content, tool_name, tool_input, tool_output)
-					VALUES (new.id, new.content, new.tool_name, new.tool_input, new.tool_output);
-				END;
-				CREATE TRIGGER session_events_fts_delete AFTER DELETE ON session_events BEGIN
-					INSERT INTO session_events_fts(session_events_fts, rowid, content, tool_name, tool_input, tool_output)
-					VALUES ('delete', old.id, old.content, old.tool_name, old.tool_input, old.tool_output);
-				END;
-				CREATE TRIGGER session_events_fts_update AFTER UPDATE ON session_events BEGIN
-					INSERT INTO session_events_fts(session_events_fts, rowid, content, tool_name, tool_input, tool_output)
-					VALUES ('delete', old.id, old.content, old.tool_name, old.tool_input, old.tool_output);
-					INSERT INTO session_events_fts(rowid, content, tool_name, tool_input, tool_output)
-					VALUES (new.id, new.content, new.tool_name, new.tool_input, new.tool_output);
-				END;
 			`,
 		},
 		{
@@ -333,6 +308,49 @@ func migrate(db *sql.DB) error {
 				DELETE FROM prompt_events;
 				UPDATE sessions SET prompts=0;
 				DELETE FROM file_state;
+			`,
+		},
+		{
+			// Session explorer columns now survive session_events pruning. The
+			// filters below are frozen: later changes belong in
+			// refreshSessionMetricsTx, which owns the live ranking.
+			"011_session_event_counters", `
+				ALTER TABLE sessions ADD COLUMN title TEXT NOT NULL DEFAULT '';
+				ALTER TABLE sessions ADD COLUMN tool_calls INTEGER NOT NULL DEFAULT 0;
+				ALTER TABLE sessions ADD COLUMN errors INTEGER NOT NULL DEFAULT 0;
+
+				UPDATE sessions SET
+					tool_calls = (SELECT COUNT(*) FROM session_events e
+						WHERE e.source = sessions.source AND e.session_id = sessions.session_id
+							AND e.event_type = 'tool_call'),
+					errors = (SELECT COUNT(*) FROM session_events e
+						WHERE e.source = sessions.source AND e.session_id = sessions.session_id
+							AND e.event_type = 'error'),
+					title = COALESCE((SELECT e.content FROM session_events e
+						WHERE e.source = sessions.source AND e.session_id = sessions.session_id
+							AND e.event_type = 'user_message'
+							AND e.content != ''
+							AND e.content NOT LIKE '<environment_context>%'
+							AND e.content NOT LIKE '<permissions instructions>%'
+							AND e.content NOT LIKE '<collaboration_mode%'
+							AND e.content NOT LIKE '<user_shell_command>%'
+							AND e.content NOT LIKE '<image name=%'
+							AND e.content NOT LIKE '</image>%'
+							AND e.content NOT LIKE '<turn_aborted>%'
+							AND e.content NOT LIKE '# AGENTS.md instructions%'
+						ORDER BY e.timestamp, e.raw_offset, e.raw_index, e.id LIMIT 1), '')
+				WHERE EXISTS (SELECT 1 FROM session_events e
+					WHERE e.source = sessions.source AND e.session_id = sessions.session_id);
+			`,
+		},
+		{
+			// Session explorer content is no longer full-text searchable; the
+			// persisted sessions.title column carries the only text we surface.
+			"012_drop_session_events_fts", `
+				DROP TRIGGER IF EXISTS session_events_fts_insert;
+				DROP TRIGGER IF EXISTS session_events_fts_delete;
+				DROP TRIGGER IF EXISTS session_events_fts_update;
+				DROP TABLE IF EXISTS session_events_fts;
 			`,
 		},
 	}

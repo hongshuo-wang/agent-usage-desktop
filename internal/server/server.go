@@ -93,13 +93,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/cost-over-time", s.handleCostOverTime)
 	mux.HandleFunc("/api/tokens-over-time", s.handleTokensOverTime)
 	mux.HandleFunc("GET /api/throughput", s.handleThroughput)
+	mux.HandleFunc("GET /api/activity-heatmap", s.handleActivityHeatmap)
 	mux.HandleFunc("GET /api/usage-breakdown", s.handleUsageBreakdown)
 	mux.HandleFunc("GET /api/collection-index-status", s.handleCollectionIndexStatus)
 	mux.HandleFunc("GET /api/settings/collectors", s.handleCollectorSettingsGet)
 	mux.HandleFunc("PUT /api/settings/collectors", s.handleCollectorSettingsPut)
 	mux.HandleFunc("GET /api/sessions", s.handleSessionSearch)
 	mux.HandleFunc("GET /api/sessions/{source}/{session_id}/events", s.handleSessionEventsRoute)
-	mux.HandleFunc("GET /api/sessions/{source}/{session_id}/events/{event_id}/raw", s.handleSessionRawRoute)
 	mux.HandleFunc("POST /api/session-index/rebuild", s.handleSessionIndexRebuild)
 	mux.HandleFunc("POST /api/pricing/import", s.handlePricingImport)
 	mux.HandleFunc("POST /api/pricing/sync", s.handlePricingSync)
@@ -222,13 +222,19 @@ func (s *Server) parseTimeRange(r *http.Request) (time.Time, time.Time, int, err
 	if from != "" {
 		var err error
 		fromTime, fromDateOnly, err = parseRangeBound(from, "from")
-		if err != nil { return time.Time{}, time.Time{}, 0, err }
+		if err != nil {
+			return time.Time{}, time.Time{}, 0, err
+		}
 	}
 	if to != "" {
 		var err error
 		toTime, toDateOnly, err = parseRangeBound(to, "to")
-		if err != nil { return time.Time{}, time.Time{}, 0, err }
-		if toDateOnly { toTime = toTime.Add(24*time.Hour - time.Second) }
+		if err != nil {
+			return time.Time{}, time.Time{}, 0, err
+		}
+		if toDateOnly {
+			toTime = toTime.Add(24*time.Hour - time.Second)
+		}
 	}
 	if fromTime.IsZero() {
 		fromTime = time.Now().AddDate(0, -1, 0)
@@ -293,6 +299,23 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, stats)
+}
+
+func (s *Server) handleActivityHeatmap(w http.ResponseWriter, r *http.Request) {
+	from, to, tzOffset, err := s.parseTimeRange(r)
+	if err != nil {
+		badRequest(w, err)
+		return
+	}
+	cells, err := s.db.GetActivityHeatmap(from, to, r.URL.Query().Get("source"), tzOffset)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	if cells == nil {
+		cells = []storage.HeatmapCell{}
+	}
+	writeJSON(w, cells)
 }
 
 func (s *Server) handleUsageBreakdown(w http.ResponseWriter, r *http.Request) {

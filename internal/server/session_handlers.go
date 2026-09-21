@@ -1,14 +1,8 @@
 package server
 
 import (
-	"crypto/sha256"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"math"
 	"net/http"
-	"os"
 	"strconv"
 	"time"
 
@@ -20,10 +14,9 @@ const (
 	sessionSearchMaxLimit     = 200
 	sessionEventsDefaultLimit = 100
 	sessionEventsMaxLimit     = 500
-	sessionRawMaxBytes        = 16 << 20
 )
 
-// SessionEventResponse adds raw-record availability to a normalized event.
+// SessionEventResponse is a normalized event as served to the session explorer.
 type SessionEventResponse struct {
 	ID              int64  `json:"id"`
 	EventType       string `json:"event_type"`
@@ -37,16 +30,6 @@ type SessionEventResponse struct {
 	ToolOutput      string `json:"tool_output"`
 	EventStatus     string `json:"event_status"`
 	DurationMS      *int64 `json:"duration_ms"`
-	HasRaw          bool   `json:"has_raw"`
-}
-
-// RawEventResponse returns the exact bytes addressed by an event locator.
-type RawEventResponse struct {
-	Path        string `json:"path"`
-	Offset      int64  `json:"offset"`
-	Length      int64  `json:"length"`
-	ContentType string `json:"content_type"`
-	Content     string `json:"content"`
 }
 
 func (s *Server) handleSessionSearch(w http.ResponseWriter, r *http.Request) {
@@ -67,7 +50,7 @@ func (s *Server) handleSessionSearch(w http.ResponseWriter, r *http.Request) {
 	query := storage.SessionQuery{
 		From: from, To: to, Source: r.URL.Query().Get("source"),
 		Model: r.URL.Query().Get("model"), Project: r.URL.Query().Get("project"),
-		Search: r.URL.Query().Get("q"), Limit: limit, Offset: offset,
+		Limit: limit, Offset: offset,
 	}
 	data, err := s.db.SearchSessions(query)
 	if err != nil {
@@ -79,15 +62,6 @@ func (s *Server) handleSessionSearch(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSessionEventsRoute(w http.ResponseWriter, r *http.Request) {
 	s.handleSessionEvents(w, r, r.PathValue("source"), r.PathValue("session_id"))
-}
-
-func (s *Server) handleSessionRawRoute(w http.ResponseWriter, r *http.Request) {
-	eventID, err := strconv.ParseInt(r.PathValue("event_id"), 10, 64)
-	if err != nil || eventID <= 0 {
-		badRequest(w, fmt.Errorf("event id must be a positive integer"))
-		return
-	}
-	s.handleSessionRaw(w, r, r.PathValue("source"), r.PathValue("session_id"), eventID)
 }
 
 func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request, source, sessionID string) {
@@ -114,152 +88,21 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request, sou
 		serverError(w, err)
 		return
 	}
-	writeJSON(w, buildSessionEventResponses(events, rawSnapshotAvailable))
+	writeJSON(w, buildSessionEventResponses(events))
 }
 
-type rawSnapshotValidator func(*storage.RawEventLocator) (int64, bool)
-
-func buildSessionEventResponses(events []storage.SessionEventRecord, validate rawSnapshotValidator) []SessionEventResponse {
-	type snapshotKey struct {
-		path, status, headHash string
-		fileSize               int64
-	}
-	type snapshotState struct {
-		size      int64
-		available bool
-	}
-	cache := make(map[snapshotKey]snapshotState)
+// buildSessionEventResponses projects stored events for the session explorer.
+func buildSessionEventResponses(events []storage.SessionEventRecord) []SessionEventResponse {
 	response := make([]SessionEventResponse, 0, len(events))
 	for _, event := range events {
-		item := SessionEventResponse{
+		response = append(response, SessionEventResponse{
 			ID: event.ID, EventType: event.EventType, SourceEventType: event.SourceEventType,
 			Timestamp: event.Timestamp.UTC().Format(time.RFC3339Nano), Role: event.Role, Content: event.Content,
 			ToolName: event.ToolName, ToolCallID: event.ToolCallID, ToolInput: event.ToolInput,
 			ToolOutput: event.ToolOutput, EventStatus: event.EventStatus, DurationMS: event.DurationMS,
-		}
-		locator := event.RawLocator
-		if rawLocatorRangeValid(locator) {
-			key := snapshotKey{locator.Path, locator.SourceStatus, locator.HeadHash, locator.FileSize}
-			state, ok := cache[key]
-			if !ok {
-				state.size, state.available = validate(locator)
-				cache[key] = state
-			}
-			item.HasRaw = state.available && locator.RawOffset+locator.RawLength <= state.size
-		}
-		response = append(response, item)
+		})
 	}
 	return response
-}
-
-func (s *Server) handleSessionRaw(w http.ResponseWriter, r *http.Request, source, sessionID string, eventID int64) {
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-	locator, err := s.db.GetRawEventLocator(source, sessionID, eventID)
-	if err != nil {
-		serverError(w, err)
-		return
-	}
-	if locator == nil {
-		http.NotFound(w, r)
-		return
-	}
-	if locator.SourceStatus != "available" || locator.Path == "" {
-		http.Error(w, "source unavailable", http.StatusGone)
-		return
-	}
-	if locator.RawOffset < 0 || locator.RawLength <= 0 {
-		badRequest(w, fmt.Errorf("invalid raw locator"))
-		return
-	}
-	if locator.RawLength > sessionRawMaxBytes {
-		http.Error(w, "raw record too large", http.StatusRequestEntityTooLarge)
-		return
-	}
-	if locator.RawOffset > math.MaxInt64-locator.RawLength {
-		badRequest(w, fmt.Errorf("invalid raw locator"))
-		return
-	}
-	file, err := os.Open(locator.Path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			http.Error(w, "source unavailable", http.StatusGone)
-			return
-		}
-		serverError(w, err)
-		return
-	}
-	defer file.Close()
-	fileSize, available := validateOpenRawSnapshot(file, locator)
-	if !available || locator.RawOffset+locator.RawLength > fileSize {
-		http.Error(w, "source unavailable", http.StatusGone)
-		return
-	}
-	content := make([]byte, int(locator.RawLength))
-	read, err := file.ReadAt(content, locator.RawOffset)
-	if err != nil && err != io.EOF {
-		serverError(w, err)
-		return
-	}
-	if int64(read) != locator.RawLength {
-		http.Error(w, "source unavailable", http.StatusGone)
-		return
-	}
-	fileSize, available = validateOpenRawSnapshot(file, locator)
-	if !available || locator.RawOffset+locator.RawLength > fileSize {
-		http.Error(w, "source unavailable", http.StatusGone)
-		return
-	}
-	contentType := "text"
-	if json.Valid(content) {
-		contentType = "json"
-	}
-	writeJSON(w, RawEventResponse{
-		Path: locator.Path, Offset: locator.RawOffset, Length: locator.RawLength,
-		ContentType: contentType, Content: string(content),
-	})
-}
-
-func rawLocatorRangeValid(locator *storage.RawEventLocator) bool {
-	return locator != nil && locator.SourceStatus == "available" && locator.Path != "" &&
-		locator.RawOffset >= 0 && locator.RawLength > 0 && locator.RawLength <= sessionRawMaxBytes &&
-		locator.RawOffset <= math.MaxInt64-locator.RawLength
-}
-
-func rawSnapshotAvailable(locator *storage.RawEventLocator) (int64, bool) {
-	if !rawLocatorRangeValid(locator) {
-		return 0, false
-	}
-	file, err := os.Open(locator.Path)
-	if err != nil {
-		return 0, false
-	}
-	defer file.Close()
-	return validateOpenRawSnapshot(file, locator)
-}
-
-func validateOpenRawSnapshot(file *os.File, locator *storage.RawEventLocator) (int64, bool) {
-	if locator.FileSize < 0 || locator.HeadHash == "" {
-		return 0, false
-	}
-	info, err := file.Stat()
-	if err != nil || info.IsDir() || info.Size() < locator.FileSize {
-		return 0, false
-	}
-	prefixSize := locator.FileSize
-	if prefixSize > 4096 {
-		prefixSize = 4096
-	}
-	hash := sha256.New()
-	if _, err := io.CopyN(hash, io.NewSectionReader(file, 0, prefixSize), prefixSize); err != nil {
-		return 0, false
-	}
-	if fmt.Sprintf("%x", hash.Sum(nil)) != locator.HeadHash {
-		return 0, false
-	}
-	return info.Size(), true
 }
 
 func (s *Server) handleSessionIndexRebuild(w http.ResponseWriter, r *http.Request) {

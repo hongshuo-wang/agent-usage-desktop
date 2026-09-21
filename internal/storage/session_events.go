@@ -2,6 +2,7 @@ package storage
 
 import (
 	"database/sql"
+	"strconv"
 	"time"
 )
 
@@ -43,17 +44,6 @@ type SessionEventRecord struct {
 	RawOffset       int64
 	RawLength       int64
 	RawIndex        int
-	RawLocator      *RawEventLocator
-}
-
-// RawEventLocator is the source-file location for one source-qualified event.
-type RawEventLocator struct {
-	Path         string
-	SourceStatus string
-	FileSize     int64
-	HeadHash     string
-	RawOffset    int64
-	RawLength    int64
 }
 
 // UpsertSessionSource inserts or replaces source metadata keyed by path.
@@ -133,6 +123,64 @@ func upsertSessionSourceTx(tx *sql.Tx, source *SessionSource) (int64, error) {
 	return id, nil
 }
 
+// sessionTitleFilter selects the first real user prompt of a session, skipping
+// the scaffolding blocks the agents inject themselves.
+const sessionTitleFilter = `content != ''
+				AND content NOT LIKE '<environment_context>%'
+				AND content NOT LIKE '<permissions instructions>%'
+				AND content NOT LIKE '<collaboration_mode%'
+				AND content NOT LIKE '<user_shell_command>%'
+				AND content NOT LIKE '<image name=%'
+				AND content NOT LIKE '</image>%'
+				AND content NOT LIKE '<turn_aborted>%'
+				AND content NOT LIKE '# AGENTS.md instructions%'`
+
+// sessionTitleLimit bounds a persisted title. It is only ever shown as a list
+// label, so storing the whole first prompt would be dead weight in the row.
+const sessionTitleLimit = 200
+
+// refreshSessionMetricsTx persists the event-derived session columns so session
+// explorer metrics survive session_events pruning. It recounts from the events
+// currently stored instead of counting the incoming batch, because
+// insertSessionEventsTx uses INSERT OR IGNORE and a rescan would double-count.
+// The title is write-once: the first prompt of a session never changes, so a
+// later partial scan must not replace it with a newer candidate.
+func refreshSessionMetricsTx(tx *sql.Tx, source, sessionID string) error {
+	// Collectors register the session before its first event batch, but the
+	// counters and title must survive a batch that arrives without one.
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO sessions(source, session_id) VALUES(?, ?)`,
+		source, sessionID); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`UPDATE sessions SET
+		tool_calls = (SELECT COUNT(*) FROM session_events e
+			WHERE e.source=? AND e.session_id=? AND e.event_type='tool_call'),
+		errors = (SELECT COUNT(*) FROM session_events e
+			WHERE e.source=? AND e.session_id=? AND e.event_type='error'),
+		title = CASE WHEN title != '' THEN title ELSE COALESCE(substr((SELECT e.content FROM session_events e
+			WHERE e.source=? AND e.session_id=? AND e.event_type='user_message' AND `+sessionTitleFilter+`
+			ORDER BY e.timestamp, e.raw_offset, e.raw_index, e.id LIMIT 1),1,`+strconv.Itoa(sessionTitleLimit)+`), '') END
+		WHERE source=? AND session_id=?`,
+		source, sessionID, source, sessionID, source, sessionID, source, sessionID)
+	return err
+}
+
+// refreshSessionMetricsForEvents refreshes each session touched by a batch.
+func refreshSessionMetricsForEvents(tx *sql.Tx, events []SessionEventRecord) error {
+	seen := make(map[[2]string]bool)
+	for _, event := range events {
+		key := [2]string{event.Source, event.SessionID}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if err := refreshSessionMetricsTx(tx, event.Source, event.SessionID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // UpsertSessionSourceWithEvents commits source metadata and its event batch atomically.
 func (d *DB) UpsertSessionSourceWithEvents(source *SessionSource, events []SessionEventRecord) (int64, error) {
 	d.mu.Lock()
@@ -152,6 +200,9 @@ func (d *DB) UpsertSessionSourceWithEvents(source *SessionSource, events []Sessi
 		events[i].SessionSourceID = sourceID
 	}
 	if err := insertSessionEventsTx(tx, events); err != nil {
+		return 0, err
+	}
+	if err := refreshSessionMetricsForEvents(tx, events); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -192,6 +243,9 @@ func (d *DB) ReplaceSessionSourceWithEvents(source *SessionSource, events []Sess
 	if err := insertSessionEventsTx(tx, events); err != nil {
 		return 0, err
 	}
+	if err := refreshSessionMetricsForEvents(tx, events); err != nil {
+		return 0, err
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
@@ -212,6 +266,9 @@ func (d *DB) InsertSessionEvents(events []SessionEventRecord) error {
 	}
 	defer tx.Rollback()
 	if err := insertSessionEventsTx(tx, events); err != nil {
+		return err
+	}
+	if err := refreshSessionMetricsForEvents(tx, events); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -367,9 +424,8 @@ func (d *DB) ListSessionEvents(source, sessionID string, limit, offset int) ([]S
 	rows, err := d.db.Query(`SELECT e.id, e.session_source_id, e.source, e.session_id,
 		e.event_type, e.source_event_type, e.timestamp, e.role, e.content, e.tool_name,
 		e.tool_call_id, e.tool_input, e.tool_output, e.event_status, e.duration_ms,
-		e.raw_offset, e.raw_length, e.raw_index,
-		ss.path, ss.source_status, ss.file_size, ss.head_hash
-		FROM session_events e JOIN session_sources ss ON ss.id=e.session_source_id
+		e.raw_offset, e.raw_length, e.raw_index
+		FROM session_events e
 		WHERE e.source=? AND e.session_id=?
 		ORDER BY e.timestamp, e.raw_offset, e.raw_index, e.id LIMIT ? OFFSET ?`,
 		source, sessionID, limit, offset)
@@ -379,7 +435,7 @@ func (d *DB) ListSessionEvents(source, sessionID string, limit, offset int) ([]S
 	defer rows.Close()
 	var events []SessionEventRecord
 	for rows.Next() {
-		event, err := scanSessionEventWithLocator(rows)
+		event, err := scanSessionEvent(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -420,24 +476,6 @@ func (d *DB) SessionIdentityExists(source, sessionID string) (bool, error) {
 	return exists != 0, err
 }
 
-// GetRawEventLocator resolves an event and its source path in one query.
-func (d *DB) GetRawEventLocator(source, sessionID string, eventID int64) (*RawEventLocator, error) {
-	row := d.db.QueryRow(`SELECT ss.path, ss.source_status, ss.file_size, ss.head_hash,
-		e.raw_offset, e.raw_length
-		FROM session_events e JOIN session_sources ss ON ss.id=e.session_source_id
-		WHERE e.id=? AND e.source=? AND e.session_id=?
-			AND ss.source=e.source AND ss.session_id=e.session_id`, eventID, source, sessionID)
-	var locator RawEventLocator
-	if err := row.Scan(&locator.Path, &locator.SourceStatus, &locator.FileSize, &locator.HeadHash,
-		&locator.RawOffset, &locator.RawLength); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &locator, nil
-}
-
 // RebuildSessionIndex clears normalized content and marks every source for re-indexing.
 func (d *DB) RebuildSessionIndex() (int64, error) {
 	d.mu.Lock()
@@ -466,6 +504,51 @@ func (d *DB) RebuildSessionIndex() (int64, error) {
 	return count, nil
 }
 
+// sessionEventRetentionInterval is the minimum time between retention passes.
+const sessionEventRetentionInterval = 24 * time.Hour
+
+// PruneSessionEvents deletes indexed session content older than retentionDays,
+// keeping usage records, prompts, and session metadata intact. It runs at most
+// once every 24h. retentionDays <= 0 disables pruning and returns 0. Call Vacuum
+// afterwards to actually reclaim the freed space.
+//
+// session_sources is deliberately left untouched: resetting indexed_offset or
+// source_status would make the next collector scan treat the file as unindexed
+// and re-insert everything this prune just removed.
+func (d *DB) PruneSessionEvents(retentionDays int) (int64, error) {
+	if retentionDays <= 0 {
+		return 0, nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if last, err := d.GetMeta(sessionEventPrunedAtKey); err == nil && last != "" {
+		if at, err := time.Parse(time.RFC3339, last); err == nil && time.Since(at) < sessionEventRetentionInterval {
+			return 0, nil
+		}
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
+	result, err := d.db.Exec(`DELETE FROM session_events WHERE timestamp < ?`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return deleted, d.SetMeta(sessionEventPrunedAtKey, time.Now().UTC().Format(time.RFC3339))
+}
+
+const sessionEventPrunedAtKey = "session_events_pruned_at"
+
+// Vacuum rebuilds the database file, reclaiming space freed by pruning.
+func (d *DB) Vacuum() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, err := d.db.Exec("VACUUM")
+	return err
+}
+
 type rowScanner interface {
 	Scan(dest ...interface{}) error
 }
@@ -489,33 +572,6 @@ func scanSessionEvent(row rowScanner) (SessionEventRecord, error) {
 	if duration.Valid {
 		event.DurationMS = &duration.Int64
 	}
-	return event, nil
-}
-
-func scanSessionEventWithLocator(row rowScanner) (SessionEventRecord, error) {
-	var event SessionEventRecord
-	var timestamp sql.NullTime
-	var duration sql.NullInt64
-	var locator RawEventLocator
-	err := row.Scan(
-		&event.ID, &event.SessionSourceID, &event.Source, &event.SessionID,
-		&event.EventType, &event.SourceEventType, &timestamp, &event.Role, &event.Content,
-		&event.ToolName, &event.ToolCallID, &event.ToolInput, &event.ToolOutput,
-		&event.EventStatus, &duration, &event.RawOffset, &event.RawLength, &event.RawIndex,
-		&locator.Path, &locator.SourceStatus, &locator.FileSize, &locator.HeadHash,
-	)
-	if err != nil {
-		return SessionEventRecord{}, err
-	}
-	if timestamp.Valid {
-		event.Timestamp = timestamp.Time
-	}
-	if duration.Valid {
-		event.DurationMS = &duration.Int64
-	}
-	locator.RawOffset = event.RawOffset
-	locator.RawLength = event.RawLength
-	event.RawLocator = &locator
 	return event, nil
 }
 

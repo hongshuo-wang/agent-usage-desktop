@@ -127,14 +127,12 @@ func TestSanitizedSessionFixturesExerciseCollectorsAndSQLite(t *testing.T) {
 
 	from := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
 	to := from.Add(24*time.Hour - time.Nanosecond)
-	sessions, err := db.SearchSessions(storage.SessionQuery{
-		From: from, To: to, Search: "fixture", Limit: 10,
-	})
+	sessions, err := db.SearchSessions(storage.SessionQuery{From: from, To: to, Limit: 10})
 	if err != nil {
-		t.Fatalf("FTS fixture search: %v", err)
+		t.Fatalf("list fixture sessions: %v", err)
 	}
 	if len(sessions) != 2 || sessions[0].Source == sessions[1].Source {
-		t.Fatalf("FTS fixture sessions = %+v, want Claude and Codex", sessions)
+		t.Fatalf("fixture sessions = %+v, want Claude and Codex", sessions)
 	}
 
 	throughput, err := db.GetThroughput(from, to, "", "", 0)

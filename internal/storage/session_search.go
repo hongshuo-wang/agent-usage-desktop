@@ -14,7 +14,6 @@ type SessionQuery struct {
 	Source  string
 	Model   string
 	Project string
-	Search  string
 	Limit   int
 	Offset  int
 }
@@ -100,14 +99,6 @@ func searchSessions(db sessionQueryer, query SessionQuery) ([]SessionSummary, er
 		args = append(args, query.Project, query.From, query.To, query.Project, query.Project, query.Project, query.Project,
 			query.From, query.To, query.Project, query.From, query.To, query.Project)
 	}
-	search := strings.TrimSpace(query.Search)
-	if search != "" {
-		clauses = append(clauses, `EXISTS (SELECT 1 FROM session_events qe
-			JOIN session_events_fts ON session_events_fts.rowid=qe.id
-			WHERE qe.source=a.source AND qe.session_id=a.session_id
-				AND qe.timestamp BETWEEN ? AND ? AND session_events_fts MATCH ?)`)
-		args = append(args, query.From, query.To, literalFTSQuery(search))
-	}
 	args = append(args, query.Limit, query.Offset)
 
 	rows, err := db.Query(`WITH activity AS (
@@ -164,7 +155,7 @@ func searchSessions(db sessionQueryer, query SessionQuery) ([]SessionSummary, er
 	if err := loadSessionPrompts(db, query, identities, indices, result); err != nil {
 		return nil, err
 	}
-	if err := loadSessionEventSummaries(db, query, identities, indices, result); err != nil {
+	if err := loadSessionEventSummaries(db, identities, indices, result); err != nil {
 		return nil, err
 	}
 	if err := loadSessionSourceSummaries(db, identities, indices, result); err != nil {
@@ -295,35 +286,15 @@ func loadSessionPrompts(db sessionQueryer, query SessionQuery, identities []sess
 	return rows.Err()
 }
 
-func loadSessionEventSummaries(db sessionQueryer, query SessionQuery, identities []sessionIdentity, indices map[sessionKey]int, result []SessionSummary) error {
+// loadSessionEventSummaries reads the event-derived columns persisted on the
+// sessions row. They are written during collection so session explorer metrics
+// and titles survive session_events pruning.
+func loadSessionEventSummaries(db sessionQueryer, identities []sessionIdentity, indices map[sessionKey]int, result []SessionSummary) error {
 	cte, args := selectedSessionsCTE(identities)
-	args = append(args, query.From, query.To)
-	rows, err := db.Query(cte+`, event_counts AS (
-		SELECT e.source, e.session_id,
-			SUM(CASE WHEN e.event_type='tool_call' THEN 1 ELSE 0 END) AS tool_calls,
-			SUM(CASE WHEN e.event_type='error' THEN 1 ELSE 0 END) AS errors
-		FROM session_events e JOIN selected x ON x.source=e.source AND x.session_id=e.session_id
-		WHERE e.timestamp BETWEEN ? AND ? GROUP BY e.source, e.session_id
-	), ranked_titles AS (
-		SELECT e.source, e.session_id, e.content,
-			ROW_NUMBER() OVER (PARTITION BY e.source, e.session_id
-				ORDER BY e.timestamp, e.raw_offset, e.raw_index, e.id) AS title_rank
-		FROM session_events e JOIN selected x ON x.source=e.source AND x.session_id=e.session_id
-		WHERE e.event_type='user_message' AND e.content!=''
-			AND e.content NOT LIKE '<environment_context>%'
-			AND e.content NOT LIKE '<permissions instructions>%'
-			AND e.content NOT LIKE '<collaboration_mode%'
-			AND e.content NOT LIKE '<user_shell_command>%'
-			AND e.content NOT LIKE '<image name=%'
-			AND e.content NOT LIKE '</image>%'
-			AND e.content NOT LIKE '<turn_aborted>%'
-			AND e.content NOT LIKE '# AGENTS.md instructions%'
-	)
-	SELECT x.source, x.session_id, COALESCE(ec.tool_calls,0), COALESCE(ec.errors,0),
-		COALESCE(rt.content,'')
+	rows, err := db.Query(cte+` SELECT x.source, x.session_id,
+		COALESCE(s.tool_calls,0), COALESCE(s.errors,0), COALESCE(s.title,'')
 	FROM selected x
-	LEFT JOIN event_counts ec ON ec.source=x.source AND ec.session_id=x.session_id
-	LEFT JOIN ranked_titles rt ON rt.source=x.source AND rt.session_id=x.session_id AND rt.title_rank=1`, args...)
+	LEFT JOIN sessions s ON s.source=x.source AND s.session_id=x.session_id`, args...)
 	if err != nil {
 		return err
 	}
@@ -381,8 +352,4 @@ func loadSessionSourceSummaries(db sessionQueryer, identities []sessionIdentity,
 		}
 	}
 	return rows.Err()
-}
-
-func literalFTSQuery(value string) string {
-	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
 }
