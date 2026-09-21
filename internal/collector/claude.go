@@ -110,7 +110,10 @@ func (c *ClaudeCollector) Scan() error {
 	for _, basePath := range c.paths {
 		projects, err := os.ReadDir(basePath)
 		if err != nil {
-			log.Printf("claude: cannot read %s: %v", basePath, err)
+			// A missing base path just means Claude Code never ran here.
+			if !os.IsNotExist(err) {
+				log.Printf("claude: cannot read %s: %v", basePath, err)
+			}
 			continue
 		}
 		for _, proj := range projects {

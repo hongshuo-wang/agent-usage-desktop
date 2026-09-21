@@ -51,7 +51,10 @@ func (c *OpenClawCollector) Scan() error {
 	for _, basePath := range c.paths {
 		agents, err := os.ReadDir(basePath)
 		if err != nil {
-			log.Printf("openclaw: cannot read %s: %v", basePath, err)
+			// A missing base path just means OpenClaw is not installed here.
+			if !os.IsNotExist(err) {
+				log.Printf("openclaw: cannot read %s: %v", basePath, err)
+			}
 			continue
 		}
 		for _, agent := range agents {
