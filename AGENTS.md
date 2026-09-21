@@ -64,7 +64,7 @@ Single-binary Go application that collects AI coding agent token usage from loca
 
 The desktop app uses a layered architecture:
 
-- **Go sidecar** — the same Go binary, bundled inside the Tauri app via `externalBin`. Tauri's Rust layer spawns it with `--port <dynamic>` and `--config ~/.config/agent-usage/config.yaml`. Port is discovered via `find_available_port()` (bind to `:0`), health-checked via `/api/health`.
+- **Go sidecar** — the same Go binary, bundled inside the Tauri app via `externalBin`. Tauri's Rust layer spawns it with `--port <dynamic>` and `--config ~/.config/agent-usage/config.yaml`. Port is discovered via `find_available_port()` (bind to `:0`), health-checked via `/api/health`. The sidecar holds the SQLite file, so it must not outlive the app: `RunEvent::Exit` in `main.rs` kills it on every graceful exit, and `watchParentExit()` in `main.go` exits it when its stdin pipe closes, which covers crashes and force-quits that run no Rust handler at all.
 - **Rust layer** (`src-tauri/src/`) — manages sidecar lifecycle (start, health check, crash recovery), system tray, autostart, OS notifications, and Tauri commands.
 - **React frontend** (`src/`) — React 18 + TypeScript + Vite + Tailwind CSS v4. Communicates with Go backend via HTTP (port obtained through Tauri `invoke`). i18n (en/zh), dark/light/system theme.
 

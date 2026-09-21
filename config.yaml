@@ -18,8 +18,19 @@ collectors:
     enabled: true
     paths: ["~/.local/share/opencode/opencode.db"]
     scan_interval: 60s
+  pi:
+    enabled: true
+    paths: ["~/.pi/agent/sessions"]
+    scan_interval: 60s
 storage:
   path: "./agent-usage.db"
+  # Indexed session content (tool calls and transcripts) older than this many
+  # days is deleted on startup and the database is compacted. Session metadata,
+  # including title, tool call and error counts, is kept and never pruned.
+  # usage_records, prompt_events, and sessions are never pruned.
+  # Set to 0 to keep session content forever.
+  session_event_retention_days: 30
 pricing:
-  # Prices are fetched from GitHub (litellm). Set HTTPS_PROXY env var if this fails.
+  # Prices are fetched from GitHub (litellm). Set HTTPS_PROXY env var if this
+  # fails.
   sync_interval: 1h

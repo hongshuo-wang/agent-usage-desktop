@@ -1,4 +1,4 @@
-# agent-usage.db
+agent-usage.db
 *.db-shm
 *.db-wal
 config.local.yaml
