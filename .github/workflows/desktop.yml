@@ -102,6 +102,7 @@ jobs:
 
       - name: Verify Go and frontend
         run: |
+          python3 scripts/test-release-publish.py
           go test ./...
           go vet ./...
           npm test
@@ -168,8 +169,11 @@ jobs:
           EXT=""
           if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
           BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          BUILD_FLAGS="-s -w -X main.version=${GITHUB_REF_NAME}"
+          BUILD_FLAGS+=" -X main.commit=${GITHUB_SHA}"
+          BUILD_FLAGS+=" -X main.date=${BUILD_DATE}"
           go build \
-            -ldflags "-s -w -X main.version=${GITHUB_REF_NAME} -X main.commit=${GITHUB_SHA} -X main.date=${BUILD_DATE}" \
+            -ldflags "$BUILD_FLAGS" \
             -o "src-tauri/binaries/agent-usage-${{ matrix.target }}${EXT}" .
 
       - uses: actions/setup-node@v5
@@ -197,7 +201,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-assets
-          echo "$ARTIFACT_PATHS" | jq -r '.[]' | tr -d '\r' | while IFS= read -r artifact; do
+          echo "$ARTIFACT_PATHS" | jq -r '.[]' | tr -d '\r' |
+          while IFS= read -r artifact; do
             artifact="${artifact//\\//}"
             if [ ! -f "$artifact" ]; then
               echo "Missing Tauri artifact: $artifact" >&2
@@ -238,7 +243,7 @@ jobs:
           path: release-assets
           merge-multiple: true
 
-      - name: Create GitHub Release
+      - name: Publish GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -250,11 +255,22 @@ jobs:
             exit 1
           fi
 
-          RELEASE_FLAGS=(--verify-tag --title "$GITHUB_REF_NAME" --notes-file release-notes/release-notes.md)
+          RELEASE_FLAGS=(
+            --verify-tag --title "$GITHUB_REF_NAME"
+            --notes-file release-notes/release-notes.md
+          )
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then
             RELEASE_FLAGS+=(--prerelease)
           else
             RELEASE_FLAGS+=(--latest)
           fi
 
-          gh release create "$GITHUB_REF_NAME" "${ASSETS[@]}" "${RELEASE_FLAGS[@]}"
+          EXISTING_RELEASE=$(gh api \
+            "repos/$GITHUB_REPOSITORY/releases" --paginate \
+            --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id")
+          if [ -n "$EXISTING_RELEASE" ]; then
+            gh release upload "$GITHUB_REF_NAME" "${ASSETS[@]}" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              "${ASSETS[@]}" "${RELEASE_FLAGS[@]}"
+          fi
