@@ -28,8 +28,8 @@ interface Props {
 function HeaderField({ label, value, fallback, mono = false }: { label: string; value: string; fallback: string; mono?: boolean }) {
   return (
     <div className="min-w-0">
-      <dt className="text-[10px] text-muted-foreground">{label}</dt>
-      <dd className={`truncate text-xs ${mono ? "font-mono" : ""}`}>{value || fallback}</dd>
+      <dt className="text-2xs text-muted-foreground">{label}</dt>
+      <dd className={`truncate text-xs ${mono ? "font-semibold tabular-nums" : ""}`}>{value || fallback}</dd>
     </div>
   );
 }
@@ -49,7 +49,7 @@ export default function SessionTimeline({
 
   return (
     <section data-testid="session-timeline" className="flex min-h-0 min-w-0 flex-col bg-background">
-      <header className="bg-card/35 px-4 py-3">
+      <header className="border-b border-border bg-subtle px-4 py-3">
         <div className="flex min-w-0 items-center gap-2">
           {isMobile && (
             <button type="button" aria-label={t("backToSessions")} onClick={onBack} className="flex h-8 w-8 shrink-0 items-center justify-center rounded hover:bg-muted">
@@ -71,10 +71,10 @@ export default function SessionTimeline({
           <HeaderField label={t("startTime")} value={session.start_time} fallback={t("sourceDataUnavailable")} mono />
           <HeaderField label={t("models")} value={session.models.join(", ")} fallback={t("sourceDataUnavailable")} />
         </dl>
-        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1 text-[10px] text-muted-foreground">
+        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1 text-2xs text-muted-foreground">
           <span>{t("coverageStatus")}:</span>
           {sessionStatusLabels(session).map((label) => (
-            <span key={label} className="border-l-2 border-accent px-1.5">{t(label)}</span>
+            <span key={label} className="chip chip-accent">{t(label)}</span>
           ))}
         </div>
         <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-4">
@@ -90,13 +90,13 @@ export default function SessionTimeline({
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        <div className="mx-auto mb-3 flex max-w-3xl items-center justify-between gap-3 text-[10px] text-muted-foreground">
+        <div className="mx-auto mb-3 flex max-w-3xl items-center justify-between gap-3 text-2xs text-muted-foreground">
           <span>{showTechnical ? t("allEventsVisible") : t("readableConversation")}</span>
           <button
             type="button"
             aria-pressed={showTechnical}
             onClick={() => setShowTechnical((current) => !current)}
-            className="rounded-md border border-border bg-card px-2.5 py-1.5 font-medium hover:bg-muted"
+            className="btn btn-quiet h-7"
           >{showTechnical ? t("readableMode") : t("allEventsMode")}</button>
         </div>
         {loading && events.length === 0 ? (
@@ -105,8 +105,8 @@ export default function SessionTimeline({
           </div>
         ) : error ? (
           <div className="py-12 text-center">
-            <p className="break-words text-sm text-red-500">{error}</p>
-            <button type="button" onClick={onRetry} className="mt-3 rounded bg-accent px-3 py-1.5 text-sm font-medium text-white">{t("retry")}</button>
+            <p className="break-words text-sm text-danger">{error}</p>
+            <button type="button" onClick={onRetry} className="btn btn-primary mx-auto mt-3">{t("retry")}</button>
           </div>
         ) : visibleEvents.length === 0 ? (
           <div className="py-12 text-center">
@@ -119,30 +119,30 @@ export default function SessionTimeline({
               <details
                 key={turn.key}
                 data-testid={`session-turn-${turn.key}`}
-                className="group overflow-hidden rounded-md bg-card/50"
+                className="group overflow-hidden rounded-lg border border-border"
               >
-                <summary className="flex min-w-0 cursor-pointer list-none items-center gap-2 px-3 py-2.5 hover:bg-muted/70 [&::-webkit-details-marker]:hidden">
+                <summary className="flex min-w-0 cursor-pointer list-none items-center gap-2 px-3 py-2.5 transition-colors hover:bg-subtle [&::-webkit-details-marker]:hidden">
                   <ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" />
-                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                  <span className="chip shrink-0">
                     {turn.round === null ? t("sessionOpening") : t("roundNumber", { n: turn.round })}
                   </span>
                   {turn.prompt ? (
                     <span className="min-w-0 flex-1 truncate text-xs font-medium">{promptPreview(turn.prompt.content)}</span>
                   ) : <span className="flex-1" />}
                   {turn.toolCalls > 0 && (
-                    <span className="shrink-0 text-[10px] text-muted-foreground">{t("turnToolCalls", { count: turn.toolCalls })}</span>
+                    <span className="shrink-0 text-2xs text-muted-foreground">{t("turnToolCalls", { count: turn.toolCalls })}</span>
                   )}
-                  <time dateTime={turn.events[0].timestamp} className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                  <time dateTime={turn.events[0].timestamp} className="shrink-0 text-2xs tabular-nums text-muted-foreground">
                     {formatEventTime(turn.events[0].timestamp, t("sourceDataUnavailable"))}
                   </time>
                 </summary>
-                <div className="flex flex-col gap-2 border-t border-border/60 p-2">
+                <div className="flex flex-col gap-2 border-t border-border p-2">
                   {turn.events.map((item) => <EventCard key={item.id} event={item} onInspect={onInspect} t={t} />)}
                 </div>
               </details>
             ))}
             {hasMore && (
-              <button type="button" aria-label={t("loadMoreEvents")} onClick={onLoadMore} disabled={loadingMore} className="mt-2 rounded border border-border px-3 py-2 text-xs font-medium hover:bg-muted disabled:opacity-50">
+              <button type="button" aria-label={t("loadMoreEvents")} onClick={onLoadMore} disabled={loadingMore} className="btn btn-quiet mx-auto mt-2">
                 {loadingMore ? t("loading") : t("loadMoreEvents")}
               </button>
             )}

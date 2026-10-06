@@ -17,14 +17,17 @@ vi.mock("react-i18next", () => ({
 }));
 
 vi.mock("../components/TimeRangeSelector", () => ({
-  default: ({ source, onSourceChange, filters, onFiltersApply }: { source: string; onSourceChange: (source: string) => void; filters?: { model: string; project: string }; onFiltersApply?: (next: unknown) => void }) => (
+  default: ({ filters, onFiltersApply, onClearFilters }: {
+    filters: { source: string; model: string; project: string };
+    onFiltersApply: (next: unknown) => void;
+    onClearFilters: () => void;
+  }) => (
     <div data-testid="time-range-selector">
-      <output>{source || "allSources"}</output>
-      <button type="button" onClick={() => onSourceChange("codex")}>chooseCodex</button>
-      {filters && onFiltersApply && <>
-        <input aria-label="queryModel" value={filters.model} onChange={(event) => onFiltersApply({ ...filters, model: event.target.value })} />
-        <input aria-label="queryProject" value={filters.project} onChange={(event) => onFiltersApply({ ...filters, project: event.target.value })} />
-      </>}
+      <output>{filters.source || "allSources"}</output>
+      <button type="button" onClick={() => onFiltersApply({ ...filters, source: "codex" })}>chooseCodex</button>
+      <button type="button" onClick={() => onClearFilters()}>clearAllFilters</button>
+      <input aria-label="queryModel" value={filters.model} onChange={(event) => onFiltersApply({ ...filters, model: event.target.value })} />
+      <input aria-label="queryProject" value={filters.project} onChange={(event) => onFiltersApply({ ...filters, project: event.target.value })} />
     </div>
   ),
 }));
@@ -193,20 +196,20 @@ describe("session retrospective center", () => {
     expect(restored).toHaveTextContent("loadMoreSessions");
   });
 
-  it("shows inherited Dashboard filters and clears all drill-down context at once", async () => {
+  it("sends the inherited Dashboard filters to the backend and clears them all at once", async () => {
     const user = userEvent.setup();
     renderSessions("/sessions?from=2026-07-01&to=2026-07-03&source=claude&model=sonnet&project=console");
 
-    const context = await screen.findByTestId("session-filter-context");
-    for (const value of ["2026-07-01", "2026-07-03", "claude", "sonnet", "console"]) {
-      expect(context).toHaveTextContent(value);
-    }
+    expect(await screen.findByTestId("time-range-selector")).toHaveTextContent("claude");
     expect(fetchAPI).toHaveBeenCalledWith("sessions", expect.objectContaining({
       from: "2026-07-01", to: "2026-07-03", source: "claude", model: "sonnet", project: "console",
     }), expect.anything());
 
-    await user.click(within(context).getByRole("button", { name: "clearAllFilters" }));
-    await waitFor(() => expect(screen.queryByTestId("session-filter-context")).not.toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "clearAllFilters" }));
+    await waitFor(() => {
+      const sessionsCalls = vi.mocked(fetchAPI).mock.calls.filter(([path]) => path === "sessions");
+      expect(sessionsCalls[sessionsCalls.length - 1]?.[1]).toMatchObject({ source: undefined, model: undefined, project: undefined });
+    });
   });
 
   it("uses spacing and surface states instead of stacked horizontal rules", async () => {
@@ -216,7 +219,6 @@ describe("session retrospective center", () => {
     const list = screen.getByTestId("session-list").querySelector("ol");
     expect(list).not.toHaveClass("divide-y");
     expect(card).not.toHaveClass("border");
-    expect(screen.getByTestId("session-filter-context")).not.toHaveClass("border-y");
     expect(screen.getByTestId("session-center-grid")).not.toHaveClass("border-y");
   });
 

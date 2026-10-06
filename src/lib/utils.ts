@@ -58,13 +58,18 @@ export function relativeTime(ts: string, t: (key: string) => string): string {
   return d.toLocaleDateString();
 }
 
+/**
+ * Mid-luminance series palette so every colour stays legible on both the light
+ * and the dark surface. Index order is semantic: 0 input, 1 output,
+ * 2 cache create, 3 cache read, 5 requests/min. Hues follow the logo.
+ */
 export const CHART_COLORS = [
-  "#0071e3",
-  "#5ac8fa",
-  "#64d2ff",
-  "#8e8e93",
-  "#34c759",
-  "#ff9f0a",
-  "#5856d6",
-  "#af52de",
+  "#1677ea", // input — logo meter blue
+  "#2ec4a6", // output — logo teal
+  "#f0a02c", // cache create — amber
+  "#8b95a6", // cache read — slate
+  "#7a63d6", // violet
+  "#ff7968", // requests/min — logo coral
+  "#3aa6e8", // sky
+  "#c96aa8", // plum
 ];

@@ -1,9 +1,10 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Dashboard from "./Dashboard";
 import { fetchAPI } from "../lib/api";
+import type { UsageFilters } from "../lib/types";
 import en from "../lib/locales/en.json";
 import zh from "../lib/locales/zh.json";
 
@@ -14,19 +15,18 @@ vi.mock("react-i18next", () => ({
 vi.mock("../components/TimeRangeSelector", () => ({
   default: ({
     preset,
-    onSourceChange,
-    onGranularityChange,
+    filters,
+    onFiltersApply,
     onRefresh,
   }: {
     preset: string;
-    onSourceChange: (source: string) => void;
-    onGranularityChange: (granularity: string) => void;
+    filters: UsageFilters;
+    onFiltersApply: (next: UsageFilters) => void;
     onRefresh: () => void;
   }) => (
     <div data-testid="time-range-selector">
       {preset}
-      <button type="button" onClick={() => onSourceChange("codex")}>change-overview-source</button>
-      <button type="button" onClick={() => onGranularityChange("1d")}>change-granularity</button>
+      <button type="button" onClick={() => onFiltersApply({ ...filters, source: "codex" })}>change-overview-source</button>
       <button type="button" onClick={onRefresh}>refresh-overview</button>
     </div>
   ),
@@ -447,7 +447,7 @@ describe("Dashboard overview", () => {
     await waitFor(() => expect(statsCalls).toBe(1));
     await userEvent.setup().click(screen.getByRole("button", { name: "change-overview-source" }));
     expect(await screen.findByText("902")).toBeInTheDocument();
-    await userEvent.setup().click(screen.getByRole("button", { name: "change-granularity" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "trendGranularity" }), { target: { value: "1d" } });
     await waitFor(() => expect(statsCalls).toBe(3));
 
     await act(async () => oldStats.reject(new Error("stale overview error")));

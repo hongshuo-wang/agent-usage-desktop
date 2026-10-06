@@ -1,38 +1,23 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 import EventInspector from "../components/sessions/EventInspector";
+import PageHeader from "../components/PageHeader";
 import SessionList, { sessionIdentity } from "../components/sessions/SessionList";
 import SessionTimeline from "../components/sessions/SessionTimeline";
 import TimeRangeSelector from "../components/TimeRangeSelector";
 import { fetchAPI } from "../lib/api";
 import type { SessionEvent, SessionSummary, UsageFilters } from "../lib/types";
 import { buildSessionsSearch, DEFAULT_USAGE_FILTERS, getInitialUsageFilters, persistUsageFilters } from "../lib/usageFilters";
-import { getTimeRange, type TimePreset } from "../lib/utils";
+import { getTimeRange } from "../lib/utils";
 
 const SESSION_PAGE_SIZE = 50;
 const EVENT_PAGE_SIZE = 100;
 const MOBILE_QUERY = "(max-width: 899px)";
 
-type DrilldownContext = Pick<UsageFilters, "from" | "to" | "source" | "model" | "project">;
-
 const isAbortError = (error: unknown) =>
   typeof error === "object" && error !== null && "name" in error && error.name === "AbortError";
 
-function initialDrilldown(search: string): DrilldownContext {
-  const query = new URLSearchParams(search);
-  return {
-    from: query.get("from") || "",
-    to: query.get("to") || "",
-    source: query.get("source") || "",
-    model: query.get("model") || "",
-    project: query.get("project") || "",
-  };
-}
-
-function hasDrilldown(context: DrilldownContext): boolean {
-  return Object.values(context).some(Boolean);
-}
 
 function useMobileLayout(): boolean {
   const [mobile, setMobile] = useState(() => window.matchMedia(MOBILE_QUERY).matches);
@@ -60,8 +45,6 @@ export default function Sessions() {
   const navigate = useNavigate();
   const isMobile = useMobileLayout();
   const [filters, setFilters] = useState<UsageFilters>(() => getInitialUsageFilters(location.search));
-  const [drilldown, setDrilldown] = useState<DrilldownContext>(() => initialDrilldown(location.search));
-  const [granularity, setGranularity] = useState(localStorage.getItem("au-granularity") || "1h");
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [selected, setSelected] = useState<SessionSummary | null>(null);
   const [listLoading, setListLoading] = useState(true);
@@ -229,27 +212,18 @@ export default function Sessions() {
     setInspectedEvent(null);
   }, []);
 
-  const updatePreset = (preset: TimePreset) => setFilters((current) => ({
-    ...current,
-    preset,
-    ...getTimeRange(preset, current.from, current.to),
-  }));
-
   const clearAllFilters = () => {
     const range = getTimeRange(DEFAULT_USAGE_FILTERS.preset);
     setFilters({ ...DEFAULT_USAGE_FILTERS, ...range });
-    setDrilldown({ from: "", to: "", source: "", model: "", project: "" });
     navigate({ pathname: "/sessions", search: "" }, { replace: true });
   };
 
   const applyQueryFilters = (next: UsageFilters) => {
     setFilters(next);
-    setDrilldown({ from: next.from, to: next.to, source: next.source, model: next.model, project: next.project });
     navigate({ pathname: "/sessions", search: buildSessionsSearch(next) }, { replace: true });
   };
 
   const selectedKey = selected ? sessionIdentity(selected) : null;
-  const contextItems = useMemo(() => Object.entries(drilldown).filter(([, value]) => value), [drilldown]);
 
   const list = (
     <SessionList
@@ -292,40 +266,21 @@ export default function Sessions() {
   ) : null;
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+    <div className="mx-auto flex min-h-0 w-full min-w-0 max-w-[1400px] flex-1 flex-col gap-3">
+      <PageHeader title={t("sessionLog")} hint={t("sessionRetrospective")} />
       <TimeRangeSelector
         preset={filters.preset}
-        onPresetChange={updatePreset}
-        granularity={granularity}
-        onGranularityChange={(value) => { setGranularity(value); localStorage.setItem("au-granularity", value); }}
         source={filters.source}
-        onSourceChange={(source) => setFilters((current) => ({ ...current, source }))}
         onRefresh={() => setListRetry((value) => value + 1)}
-        customFrom={filters.from}
-        customTo={filters.to}
-        onCustomFromChange={(from) => setFilters((current) => ({ ...current, preset: "custom", from }))}
-        onCustomToChange={(to) => setFilters((current) => ({ ...current, preset: "custom", to }))}
         filters={filters}
         onFiltersApply={applyQueryFilters}
         onClearFilters={clearAllFilters}
       />
 
-      {hasDrilldown(drilldown) && (
-        <aside data-testid="session-filter-context" className="flex min-w-0 flex-wrap items-center gap-2 rounded-md bg-muted/55 px-3 py-2 text-xs">
-          <span className="font-medium text-muted-foreground">{t("inheritedFilters")}</span>
-          {contextItems.map(([key, value]) => (
-            <span key={key} className="max-w-full truncate border-l-2 border-accent px-2">{t(key)}: {value}</span>
-          ))}
-          <button type="button" aria-label={t("clearAllFilters")} onClick={clearAllFilters} className="ml-auto rounded border border-border px-2 py-1 font-medium hover:bg-muted">
-            {t("clearAll")}
-          </button>
-        </aside>
-      )}
-
       <main
         data-testid="session-center-grid"
         data-inspector-open={String(Boolean(inspectedEvent))}
-        className="session-center-grid min-h-0 min-w-0 flex-1 overflow-hidden bg-card/20"
+        className="session-center-grid min-h-0 min-w-0 flex-1 overflow-hidden"
       >
         {isMobile ? (
           mobileDetailVisible ? (inspector || timeline) : list

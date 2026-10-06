@@ -1,11 +1,14 @@
+import { CalendarDays, ChevronDown, RefreshCw, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, RefreshCw, SlidersHorizontal, X } from "lucide-react";
+import { DayPicker, type DateRange } from "react-day-picker";
+import { enUS, zhCN } from "date-fns/locale";
+import { format } from "date-fns";
 import { useTranslation } from "react-i18next";
 import type { UsageFilters } from "../lib/types";
 import { getActiveQueryChips, presentProjectKey } from "../lib/queryPresentation";
 import { getTimeRange, type TimePreset } from "../lib/utils";
 
-const PRESETS: TimePreset[] = ["today", "thisWeek", "thisMonth", "thisYear", "last3d", "last7d", "last30d", "custom"];
+const PRESETS: TimePreset[] = ["today", "thisWeek", "thisMonth", "thisYear", "last7d", "last30d", "custom"];
 const SOURCES = [
   { value: "", label: "allSources" },
   { value: "claude", label: "claudeCode" },
@@ -15,148 +18,195 @@ const SOURCES = [
   { value: "pi", label: "piAgent" },
 ];
 
-function isPreciseRange(value?: string): boolean {
-  return Boolean(value?.includes("T"));
+function parseCalendarDate(value?: string): Date | undefined {
+  if (!value) return undefined;
+  const [date] = value.split("T");
+  const [year, month, day] = date.split("-").map(Number);
+  if (!year || !month || !day) return undefined;
+  const parsed = new Date(year, month - 1, day);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 }
 
-function dateTimeInputValue(value?: string): string {
-  if (!value || !isPreciseRange(value)) return value || "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const pad = (part: number) => String(part).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+function formatFilterDate(value: Date | undefined, language: string): string {
+  if (!value) return "";
+  return format(value, language.startsWith("zh") ? "yyyy年M月d日" : "MMM d, yyyy", {
+    locale: language.startsWith("zh") ? zhCN : enUS,
+  });
 }
 
 interface Props {
   preset: TimePreset;
-  onPresetChange: (p: TimePreset) => void;
-  granularity: string;
-  onGranularityChange: (g: string) => void;
   source: string;
-  onSourceChange: (s: string) => void;
   onRefresh: () => void;
-  customFrom?: string;
-  customTo?: string;
-  onCustomFromChange?: (v: string) => void;
-  onCustomToChange?: (v: string) => void;
-  filters?: UsageFilters;
-  onFiltersApply?: (filters: UsageFilters) => void;
-  onClearFilters?: () => void;
+  filters: UsageFilters;
+  onFiltersApply: (filters: UsageFilters) => void;
+  onClearFilters: () => void;
 }
 
-export default function TimeRangeSelector({
-  preset, onPresetChange,
-  source, onSourceChange, onRefresh, customFrom, customTo,
-  onCustomFromChange, onCustomToChange,
-  filters, onFiltersApply, onClearFilters,
-}: Props) {
-  const { t } = useTranslation();
-  const editorRef = useRef<HTMLDivElement>(null);
-  const firstFieldRef = useRef<HTMLSelectElement>(null);
-  const [editorOpen, setEditorOpen] = useState(false);
-  const [draft, setDraft] = useState<UsageFilters>(() => filters || {
-    preset,
-    from: customFrom || "",
-    to: customTo || "",
-    source,
-    model: "",
-    project: "",
-  });
-  const activeFilters = filters ? getActiveQueryChips(filters) : [];
-  const preciseRange = isPreciseRange(draft.from) || isPreciseRange(draft.to);
+/** A compact filter bar with a keyboard-friendly range calendar instead of native date inputs. */
+export default function TimeRangeSelector({ preset, onRefresh, filters, onFiltersApply, onClearFilters }: Props) {
+  const { t, i18n } = useTranslation();
+  const language = i18n?.language || "zh";
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const calendarRef = useRef<HTMLDivElement>(null);
+  const precise = Boolean(filters.from?.includes("T") || filters.to?.includes("T"));
+  const presets = PRESETS.includes(preset) ? PRESETS : [preset, ...PRESETS];
+  const chips = getActiveQueryChips(filters).filter((chip) => chip.key !== "source");
+  const selectedRange: DateRange = {
+    from: parseCalendarDate(filters.from),
+    to: parseCalendarDate(filters.to),
+  };
 
   useEffect(() => {
-    if (!editorOpen) setDraft(filters || { preset, from: customFrom || "", to: customTo || "", source, model: "", project: "" });
-  }, [customFrom, customTo, editorOpen, filters, preset, source]);
-
-  useEffect(() => {
-    if (!editorOpen) return undefined;
-    firstFieldRef.current?.focus();
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setEditorOpen(false);
+    if (!calendarOpen) return;
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (!calendarRef.current?.contains(event.target as Node)) setCalendarOpen(false);
     };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [editorOpen]);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setCalendarOpen(false);
+    };
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [calendarOpen]);
 
-  const commit = () => {
-    if (onFiltersApply) onFiltersApply(draft);
-    else {
-      onPresetChange(draft.preset);
-      onSourceChange(draft.source);
-      onCustomFromChange?.(draft.from);
-      onCustomToChange?.(draft.to);
-    }
-    setEditorOpen(false);
+  const apply = (patch: Partial<UsageFilters>) => onFiltersApply({ ...filters, ...patch });
+  const choosePreset = (next: TimePreset) => {
+    apply({ preset: next, ...getTimeRange(next, filters.from, filters.to) });
+    if (next !== "custom") setCalendarOpen(false);
   };
-
-  const removeFilter = (key: "source" | "model" | "project") => {
-    const next = { ...(filters || draft), [key]: "" } as UsageFilters;
-    if (onFiltersApply) onFiltersApply(next);
-    else if (key === "source") onSourceChange("");
+  const chooseRange = (range: DateRange | undefined) => {
+    if (!range?.from) return;
+    const toISODate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    };
+    const nextFrom = toISODate(range.from);
+    const nextTo = range.to ? toISODate(range.to) : nextFrom;
+    apply({ preset: "custom", from: precise ? `${nextFrom}T00:00:00.000Z` : nextFrom, to: precise ? `${nextTo}T23:59:59.999Z` : nextTo });
+    if (range.to) setCalendarOpen(false);
   };
-
-  const updateDraftPreset = (nextPreset: TimePreset) => {
-    setDraft((current) => ({ ...current, preset: nextPreset, ...getTimeRange(nextPreset, current.from, current.to) }));
-  };
-
-  const handleDateChange = (value: string, key: "from" | "to") => {
-    if (preciseRange && value) {
-      const parsed = new Date(value);
-      setDraft((current) => ({ ...current, preset: "custom", [key]: Number.isNaN(parsed.getTime()) ? value : parsed.toISOString() }));
-      return;
-    }
-    setDraft((current) => ({ ...current, preset: "custom", [key]: value }));
-  };
-
-  const summaryPreset = t(draft.preset);
-  const summarySource = draft.source ? t(SOURCES.find((item) => item.value === draft.source)?.label || draft.source) : t("allSources");
+  const chipText = (chip: { key: string; value: string }) =>
+    chip.key === "project" && presentProjectKey(chip.value).label === "unnamedProject" ? t("unnamedProject") : chip.value;
+  const dateFromLabel = formatFilterDate(selectedRange.from, language) || t("from");
+  const dateToLabel = formatFilterDate(selectedRange.to, language) || t("to");
 
   return (
-    <div className="relative z-20 min-w-0">
-      <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-border/80 bg-card px-3 py-2">
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-sm">
-            <span className="shrink-0 text-[11px] font-medium text-muted-foreground">{t("currentQuery")}</span>
-            <span className="truncate font-semibold">{summaryPreset} · {summarySource}</span>
-            <span className="truncate text-xs text-muted-foreground">{draft.from} {t("to")} {draft.to}</span>
-          </div>
-          {activeFilters.length > 0 && (
-            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5" aria-label={t("activeFilters")}>
-              {activeFilters.map((chip) => (
-                <span key={chip.key} className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-muted/50 px-2 py-0.5 text-[11px] text-muted-foreground" title={chip.value}>
-                  <span className="truncate">{t(chip.key === "source" ? "source" : chip.key === "model" ? "model" : "project")}: {chip.key === "project" && presentProjectKey(chip.value).label === "unnamedProject" ? t("unnamedProject") : chip.value}</span>
-                  <button type="button" aria-label={`${t("removeFilter")} ${chip.value}`} onClick={() => removeFilter(chip.key)} className="rounded-full p-0.5 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><X className="h-3 w-3" /></button>
-                </span>
-              ))}
-            </div>
-          )}
+    <div className="filter-bar flex min-w-0 flex-col gap-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
+        <div role="group" aria-label={t("queryTimeRange")} className="range-presets flex min-w-0 flex-wrap items-center gap-1">
+          {presets.map((item) => (
+            <button
+              key={item}
+              type="button"
+              aria-pressed={preset === item}
+              onClick={() => choosePreset(item)}
+              className={`range-preset inline-flex h-8 items-center rounded-lg px-2.5 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                preset === item ? "is-active bg-accent text-on-accent" : "border border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+              }`}
+            >
+              {t(item)}
+            </button>
+          ))}
         </div>
-        <button type="button" onClick={() => setEditorOpen((open) => !open)} aria-expanded={editorOpen} aria-controls="query-editor" className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-xs font-semibold text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
-          <SlidersHorizontal className="h-3.5 w-3.5" />
-          {t("editQuery")}
-          <ChevronDown className={`h-3.5 w-3.5 transition-transform ${editorOpen ? "rotate-180" : ""}`} />
+
+        {preset === "custom" && (
+          <div ref={calendarRef} className="date-picker-wrap">
+            <button
+              type="button"
+              aria-label={t("queryTimeRange")}
+              aria-expanded={calendarOpen}
+              onClick={() => setCalendarOpen((open) => !open)}
+              className="date-range-fields date-range-trigger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              <CalendarDays className="date-range-icon" aria-hidden="true" />
+              <span className="date-field-value">{dateFromLabel}</span>
+              <span className="date-range-separator" aria-hidden="true">–</span>
+              <span className="date-field-value">{dateToLabel}</span>
+              <ChevronDown className={`date-range-chevron ${calendarOpen ? "is-open" : ""}`} aria-hidden="true" />
+            </button>
+            {calendarOpen && (
+              <div className="date-picker-popover" role="dialog" aria-label={t("queryTimeRange")}>
+                <DayPicker
+                  mode="range"
+                  selected={selectedRange}
+                  onSelect={chooseRange}
+                  defaultMonth={selectedRange.from || new Date()}
+                  locale={language.startsWith("zh") ? zhCN : enUS}
+                  weekStartsOn={language.startsWith("zh") ? 1 : 0}
+                  showOutsideDays
+                  fixedWeeks
+                  classNames={{
+                    months: "rdp-months",
+                    month: "rdp-month",
+                    month_caption: "rdp-caption",
+                    caption_label: "rdp-caption-label",
+                    nav: "rdp-nav",
+                    button_previous: "rdp-nav-button",
+                    button_next: "rdp-nav-button",
+                    month_grid: "rdp-table",
+                    weekdays: "rdp-weekdays",
+                    weekday: "rdp-weekday",
+                    week: "rdp-week",
+                    day: "rdp-day",
+                    day_button: "rdp-day-button",
+                    range_start: "rdp-range-start",
+                    range_middle: "rdp-range-middle",
+                    range_end: "rdp-range-end",
+                    today: "rdp-today",
+                    outside: "rdp-outside",
+                  }}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
+        <select
+          aria-label={t("queryAgent")}
+          value={filters.source}
+          onChange={(event) => apply({ source: event.target.value })}
+          className="field h-8 w-auto"
+        >
+          {SOURCES.map((item) => <option key={item.value} value={item.value}>{t(item.label)}</option>)}
+        </select>
+
+        <button
+          type="button"
+          onClick={onRefresh}
+          aria-label={t("refresh")}
+          title={t("refresh")}
+          className="icon-button ml-auto border border-border text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
-        <button type="button" onClick={onRefresh} aria-label={t("refresh")} title={t("refresh")} className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><RefreshCw className="h-3.5 w-3.5" /></button>
       </div>
 
-      {editorOpen && (
-        <>
-          <button type="button" aria-label={t("cancelQuery")} onClick={() => setEditorOpen(false)} className="fixed inset-0 z-30 cursor-default bg-black/10" />
-          <div ref={editorRef} id="query-editor" role="dialog" aria-modal="true" aria-label={t("queryEditor")} className="absolute right-0 top-[calc(100%+0.5rem)] z-40 w-full max-w-md rounded-lg border border-border bg-card p-4 shadow-[0_18px_60px_rgba(0,0,0,0.18)] sm:w-[25rem]">
-            <div className="flex items-center justify-between"><div><h2 className="text-sm font-semibold">{t("queryEditor")}</h2><p className="mt-0.5 text-[11px] text-muted-foreground">{t("currentQuery")}</p></div><button type="button" onClick={() => setEditorOpen(false)} aria-label={t("cancelQuery")} className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><X className="h-4 w-4" /></button></div>
-            <div className="mt-4 space-y-4">
-              <fieldset><legend className="text-[11px] font-semibold text-muted-foreground">{t("queryTimeRange")}</legend><div className="mt-2 flex flex-wrap gap-1.5">{PRESETS.map((item) => <button key={item} type="button" onClick={() => updateDraftPreset(item)} className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${draft.preset === item ? "bg-accent text-white" : "border border-border text-muted-foreground hover:bg-muted hover:text-foreground"}`}>{t(item)}</button>)}</div>{draft.preset === "custom" && <div className="mt-2 flex items-center gap-2"><input aria-label={`${t("queryTimeRange")} ${t("from")}`} type={preciseRange ? "datetime-local" : "date"} value={dateTimeInputValue(draft.from)} onChange={(event) => handleDateChange(event.target.value, "from")} className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs" /><span className="text-xs text-muted-foreground">{t("to")}</span><input aria-label={`${t("queryTimeRange")} ${t("to")}`} type={preciseRange ? "datetime-local" : "date"} value={dateTimeInputValue(draft.to)} onChange={(event) => handleDateChange(event.target.value, "to")} className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs" /></div>}</fieldset>
-              <label className="block"><span className="text-[11px] font-semibold text-muted-foreground">{t("queryAgent")}</span><select ref={firstFieldRef} aria-label={t("queryAgent")} value={draft.source} onChange={(event) => setDraft((current) => ({ ...current, source: event.target.value }))} className="mt-1.5 h-9 w-full rounded-md border border-border bg-background px-2.5 text-xs text-foreground">{SOURCES.map((item) => <option key={item.value} value={item.value}>{t(item.label)}</option>)}</select></label>
-              <label className="block"><span className="text-[11px] font-semibold text-muted-foreground">{t("queryProject")}</span><input aria-label={t("queryProject")} value={draft.project} onChange={(event) => setDraft((current) => ({ ...current, project: event.target.value }))} placeholder={t("allProjects")} className="mt-1.5 h-9 w-full rounded-md border border-border bg-background px-2.5 text-xs text-foreground placeholder:text-muted-foreground" /></label>
-              <label className="block"><span className="text-[11px] font-semibold text-muted-foreground">{t("queryModel")}</span><input aria-label={t("queryModel")} value={draft.model} onChange={(event) => setDraft((current) => ({ ...current, model: event.target.value }))} placeholder={t("allModels")} className="mt-1.5 h-9 w-full rounded-md border border-border bg-background px-2.5 text-xs text-foreground placeholder:text-muted-foreground" /></label>
-            </div>
-            <div className="mt-5 flex items-center justify-end gap-2 border-t border-border pt-3"><button type="button" onClick={() => { setDraft(filters || draft); setEditorOpen(false); }} className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground">{t("cancelQuery")}</button><button type="button" onClick={commit} className="rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">{t("applyQuery")}</button></div>
-          </div>
-        </>
+      {chips.length > 0 && (
+        <div className="filter-chips flex min-w-0 flex-wrap items-center gap-1.5" aria-label={t("activeFilters")}>
+          {chips.map((chip) => (
+            <span key={chip.key} className="chip chip-accent max-w-full" title={chip.value}>
+              <span className="truncate">{t(chip.key)}: {chipText(chip)}</span>
+              <button
+                type="button"
+                aria-label={`${t("removeFilter")} ${chip.value}`}
+                onClick={() => apply({ [chip.key]: "" })}
+                className="rounded-full p-0.5 hover:bg-accent/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              >
+                <X className="h-3 w-3" aria-hidden="true" />
+              </button>
+            </span>
+          ))}
+          <button type="button" onClick={onClearFilters} className="text-2xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground">
+            {t("clearAll")}
+          </button>
+        </div>
       )}
-
-      {onClearFilters && activeFilters.length > 0 && <button type="button" onClick={onClearFilters} className="mt-1 text-[11px] font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground">{t("clearAll")}</button>}
     </div>
   );
 }

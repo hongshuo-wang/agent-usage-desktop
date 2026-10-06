@@ -9,10 +9,13 @@ i18n
   .use(initReactI18next)
   .init({
     resources: { en: { translation: en }, zh: { translation: zh } },
-    fallbackLng: "en",
+    // Chinese is the product default; the toggle in the rail persists to localStorage.
+    fallbackLng: "zh",
+    supportedLngs: ["zh", "en"],
     interpolation: { escapeValue: false },
     detection: {
-      order: ["localStorage", "navigator"],
+      order: ["localStorage"],
+      caches: ["localStorage"],
       lookupLocalStorage: "au-lang",
     },
   });

@@ -17,7 +17,7 @@ import (
 )
 
 var (
-	version = "dev"
+	version = "2.1.0"
 	commit  = "none"
 	date    = "unknown"
 )
@@ -134,7 +134,7 @@ func main() {
 	// Start web server first so health check is immediately available.
 	// Data initialization (pricing sync, collector scan) runs in the background.
 	addr := fmt.Sprintf("%s:%d", cfg.Server.BindAddress, cfg.Server.Port)
-	srv := server.New(db, addr, server.WithConfigPath(resolvedConfigPath))
+	srv := server.New(db, addr, server.WithConfigPath(resolvedConfigPath), server.WithAppInfo(version, "https://github.com/hongshuo-wang/agent-usage-desktop"))
 	go func() {
 		log.Fatal(srv.Start())
 	}()

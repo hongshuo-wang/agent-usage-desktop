@@ -95,3 +95,84 @@ func TestPruneSessionEventsDisabledWhenRetentionIsZero(t *testing.T) {
 		t.Fatalf("expected event to survive, got %d events, err=%v", len(events), err)
 	}
 }
+
+func TestPurgeSessionEventsIgnoresThrottleAndCanWipeEverything(t *testing.T) {
+	db := tempDB(t)
+	sourceID, err := db.UpsertSessionSource(testSessionSource("/sessions/one.jsonl", "session-one"))
+	if err != nil {
+		t.Fatalf("UpsertSessionSource: %v", err)
+	}
+	old := testSessionEvent(sourceID, "session-one", 100)
+	old.Timestamp = time.Now().UTC().AddDate(0, 0, -90)
+	recent := testSessionEvent(sourceID, "session-one", 200)
+	recent.Timestamp = time.Now().UTC().Add(-time.Hour)
+	if err := db.InsertSessionEvents([]SessionEventRecord{old, recent}); err != nil {
+		t.Fatalf("InsertSessionEvents: %v", err)
+	}
+	if _, err := db.PruneSessionEvents(30); err != nil {
+		t.Fatalf("PruneSessionEvents: %v", err)
+	}
+
+	// The automatic pass is now throttled, but a user-triggered purge is not.
+	older := testSessionEvent(sourceID, "session-one", 300)
+	older.Timestamp = time.Now().UTC().AddDate(0, 0, -60)
+	if err := db.InsertSessionEvents([]SessionEventRecord{older}); err != nil {
+		t.Fatalf("InsertSessionEvents: %v", err)
+	}
+	deleted, err := db.PurgeSessionEvents(30)
+	if err != nil {
+		t.Fatalf("PurgeSessionEvents: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected the throttle to be bypassed, got %d deleted", deleted)
+	}
+
+	deleted, err = db.PurgeSessionEvents(0)
+	if err != nil {
+		t.Fatalf("PurgeSessionEvents(0): %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected retention 0 to wipe everything, got %d deleted", deleted)
+	}
+	if events, err := db.ListSessionEvents("claude", "session-one", 10, 0); err != nil || len(events) != 0 {
+		t.Fatalf("expected an empty index, got %d events, err=%v", len(events), err)
+	}
+}
+
+func TestForgetPruneThrottleLetsTheNextPassRun(t *testing.T) {
+	db := tempDB(t)
+	sourceID, err := db.UpsertSessionSource(testSessionSource("/sessions/one.jsonl", "session-one"))
+	if err != nil {
+		t.Fatalf("UpsertSessionSource: %v", err)
+	}
+	event := testSessionEvent(sourceID, "session-one", 100)
+	event.Timestamp = time.Now().UTC().AddDate(0, 0, -90)
+	if err := db.InsertSessionEvents([]SessionEventRecord{event}); err != nil {
+		t.Fatalf("InsertSessionEvents: %v", err)
+	}
+	if _, err := db.PruneSessionEvents(30); err != nil {
+		t.Fatalf("PruneSessionEvents: %v", err)
+	}
+	stale := testSessionEvent(sourceID, "session-one", 200)
+	stale.Timestamp = time.Now().UTC().AddDate(0, 0, -90)
+	if err := db.InsertSessionEvents([]SessionEventRecord{stale}); err != nil {
+		t.Fatalf("InsertSessionEvents: %v", err)
+	}
+	if err := db.ForgetPruneThrottle(); err != nil {
+		t.Fatalf("ForgetPruneThrottle: %v", err)
+	}
+	deleted, err := db.PruneSessionEvents(30)
+	if err != nil {
+		t.Fatalf("PruneSessionEvents: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected the throttle to be forgotten, got %d deleted", deleted)
+	}
+}
+
+func TestSizeBytesReportsTheDatabaseFile(t *testing.T) {
+	db := tempDB(t)
+	if size := db.SizeBytes(); size <= 0 {
+		t.Fatalf("SizeBytes=%d, want a positive size", size)
+	}
+}

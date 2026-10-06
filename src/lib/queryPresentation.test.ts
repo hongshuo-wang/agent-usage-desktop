@@ -1,16 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { formatQuerySummary, getActiveQueryChips, presentProjectKey } from "./queryPresentation";
+import { getActiveQueryChips, presentProjectKey } from "./queryPresentation";
 
 describe("query presentation", () => {
-  it("formats the compact summary from committed filters", () => {
-    expect(formatQuerySummary({ preset: "last7d", from: "2026-07-19", to: "2026-07-25", source: "" })).toEqual([
-      "last7d",
-      "allSources",
-      "2026-07-19",
-      "2026-07-25",
-    ]);
-  });
-
   it("returns only active non-default chips", () => {
     expect(getActiveQueryChips({ source: "codex", model: "gpt-5.6", project: "console" })).toEqual([
       { key: "source", value: "codex" },

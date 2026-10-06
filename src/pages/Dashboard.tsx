@@ -4,6 +4,8 @@ import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Info } from "lucide-react";
 import ChartCard from "../components/ChartCard";
+import PageHeader from "../components/PageHeader";
+import Panel from "../components/Panel";
 import TimeRangeSelector from "../components/TimeRangeSelector";
 import TokenSummary from "../components/dashboard/TokenSummary";
 import UsageInsight from "../components/dashboard/UsageInsight";
@@ -26,7 +28,7 @@ import {
   getUsageRequestParams,
   persistUsageFilters,
 } from "../lib/usageFilters";
-import { CHART_COLORS, fmtCost, fmtTokens, getTimeRange, type TimePreset, shortBucket } from "../lib/utils";
+import { CHART_COLORS, fmtCost, fmtTokens, getTimeRange, shortBucket } from "../lib/utils";
 import { bucketThroughputSeries, buildThroughputView, type ThroughputViewMode } from "../lib/throughputScale";
 import { presentProjectKey } from "../lib/queryPresentation";
 
@@ -53,34 +55,19 @@ function Skeleton({ className = "" }: { className?: string }) {
 
 function DashboardSkeleton() {
   return (
-    <div className="dashboard-skeleton min-w-0 space-y-4 overflow-hidden" aria-label="loading">
-      <section className="dashboard-summary">
-        <div>
-          <Skeleton className="h-5 w-28" />
-          <Skeleton className="mt-3 h-12 w-52" />
-        </div>
-        <Skeleton className="h-28 w-full" />
-      </section>
-      <Skeleton className="h-20 w-full" />
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(16rem,1fr)]">
+    <div className="min-w-0 space-y-4" aria-label="loading">
+      <Skeleton className="h-36 w-full" />
+      <Skeleton className="h-24 w-full" />
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.55fr)_minmax(17rem,1fr)]">
         <Skeleton className="h-80" />
         <Skeleton className="h-80" />
       </div>
-      <div className="grid gap-5 xl:grid-cols-3">
-        <Skeleton className="h-64" />
-        <Skeleton className="h-64" />
-        <Skeleton className="h-64" />
+      <div className="grid gap-4 xl:grid-cols-2">
+        <Skeleton className="h-56" />
+        <Skeleton className="h-56" />
       </div>
+      <Skeleton className="h-52 w-full" />
     </div>
-  );
-}
-
-function BandTitle({ title, detail }: { title: string; detail?: string }) {
-  return (
-    <header className="mb-3 flex min-w-0 items-baseline justify-between gap-3">
-      <h2 className="truncate text-sm font-semibold">{title}</h2>
-      {detail && <p className="truncate text-xs text-muted-foreground">{detail}</p>}
-    </header>
   );
 }
 
@@ -105,7 +92,7 @@ function BreakdownRows({
   const maxTokens = Math.max(...rows.map((row) => row.total_tokens), 1);
   const totalTokens = rows.reduce((sum, row) => sum + row.total_tokens, 0);
   return (
-    <div className="min-w-0 space-y-1">
+    <div className="min-w-0 space-y-0.5">
       {rows.slice(0, compact ? 6 : 8).map((row, index) => {
         const projectPresentation = projectLabels ? presentProjectKey(row.key) : { label: row.key };
         const visibleKey = projectPresentation.label === "unnamedProject" ? t("unnamedProject") : projectPresentation.label;
@@ -117,31 +104,31 @@ function BreakdownRows({
             type="button"
             aria-label={`${t("viewSessionsFor")} ${visibleKey || t("unknown")}`}
             onClick={() => onSelect(row.key)}
-            className="group grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            className="group grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
             <span className="min-w-0">
               <span className="block truncate text-xs font-medium" title={projectPresentation.detail || row.key}>{visibleKey || t("unknown")}</span>
-              {projectPresentation.detail && <span className="block truncate text-[10px] text-muted-foreground" title={projectPresentation.detail}>{projectPresentation.detail}</span>}
-              <span className="mt-1 block h-1 overflow-hidden rounded bg-muted">
+              {projectPresentation.detail && <span className="block truncate text-2xs text-muted-foreground" title={projectPresentation.detail}>{projectPresentation.detail}</span>}
+              <span className="mt-1.5 block h-1 overflow-hidden rounded-full bg-muted">
                 <span
                   data-testid={composition ? "composition-share" : undefined}
-                  className="block h-full rounded bg-accent transition-[width] duration-200"
+                  className="block h-full rounded-full bg-accent transition-[width] duration-200"
                   style={{ width: `${composition ? barWidth : Math.max(3, barWidth)}%` }}
                 />
               </span>
             </span>
             <span className="text-right">
-              <span className="block font-mono text-xs font-semibold tabular-nums">{fmtTokens(row.total_tokens)}</span>
+              <span className="block text-xs font-semibold tabular-nums">{fmtTokens(row.total_tokens)}</span>
               {composition ? (
                 <>
-                  <span className="block font-mono text-[10px] tabular-nums text-muted-foreground">
+                  <span className="block text-2xs tabular-nums text-muted-foreground">
                     {fmtCost(row.total_cost)}
                   </span>
-                  <span className="block font-mono text-[10px] tabular-nums text-muted-foreground">{share.toFixed(1)}%</span>
-                  <span className="block text-[10px] text-muted-foreground">{row.sessions} {t("sessions")}</span>
+                  <span className="block text-2xs tabular-nums text-muted-foreground">{share.toFixed(1)}%</span>
+                  <span className="block text-2xs text-muted-foreground">{row.sessions} {t("sessions")}</span>
                 </>
               ) : (
-                <span className="block text-[10px] text-muted-foreground">
+                <span className="block text-2xs text-muted-foreground">
                   {row.sessions} {t("sessions")} / {row.calls} {t("calls")}
                 </span>
               )}
@@ -221,7 +208,7 @@ function HelpTooltip({ label, align = "right" }: { label: string; align?: "left"
           id={tooltipID}
           role="tooltip"
           style={{ left: position.left, top: position.top }}
-          className="pointer-events-none fixed z-[100] w-max max-w-64 rounded-md border border-border bg-card px-2.5 py-2 text-left font-sans text-[11px] font-normal leading-4 text-foreground shadow-lg"
+          className="pointer-events-none fixed z-[100] w-max max-w-64 rounded-lg border border-border bg-card px-2.5 py-2 text-left font-sans text-2xs font-normal leading-4 text-foreground shadow-lg"
         >
           {label}
         </span>,
@@ -251,7 +238,7 @@ function ThroughputMatrix({ throughput, t }: {
   ] as const;
   return (
     <div data-testid="throughput-matrix" className="min-w-0 overflow-x-auto">
-      <table className="w-full min-w-[32rem] text-[10px]">
+      <table className="w-full min-w-[32rem] text-2xs">
         <thead className="text-left text-muted-foreground">
           <tr>
             {columns.map(([key, label, help], index) => (
@@ -267,10 +254,10 @@ function ThroughputMatrix({ throughput, t }: {
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-border font-mono tabular-nums">
+        <tbody className="divide-y divide-border tabular-nums">
           {rows.map(([testID, label, values]) => (
             <tr key={testID} data-testid={testID}>
-              <th className="py-1.5 pr-2 text-left font-sans font-medium">{label}</th>
+              <th className="py-1.5 pr-2 text-left font-medium">{label}</th>
               <td className="py-1.5 pr-2 text-right">{formatThroughput(values.rpm)}</td>
               <td className="py-1.5 pr-2 text-right font-semibold">{formatThroughput(values.total_tpm)}</td>
               <td className="py-1.5 pr-2 text-right">{formatThroughput(values.input_tpm)}</td>
@@ -311,7 +298,7 @@ function ModelUsageRows({ rows, onSelect, t }: {
 
   const totalTokens = rows.reduce((sum, row) => sum + row.total_tokens, 0);
   return (
-    <div className="min-w-0 space-y-1">
+    <div className="min-w-0 space-y-0.5">
       {rows.slice(0, 8).map((row, index) => {
         const share = totalTokens > 0 ? (row.total_tokens / totalTokens) * 100 : 0;
         const displayShare = share > 0 ? share : 0;
@@ -321,11 +308,11 @@ function ModelUsageRows({ rows, onSelect, t }: {
             type="button"
             aria-label={`${t("viewSessionsFor")} ${row.key || t("unknown")}`}
             onClick={() => onSelect(row.key)}
-            className="group grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 rounded-md px-2 py-2.5 text-left transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            className="group grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
             <span className="min-w-0">
               <span className="block truncate text-xs font-medium">{row.key || t("unknown")}</span>
-              <span className="mt-1.5 block h-2 overflow-hidden rounded bg-muted">
+              <span className="mt-1.5 block h-1.5 overflow-hidden rounded-full bg-muted">
                 <span
                   data-testid="model-usage-share"
                   role="progressbar"
@@ -333,18 +320,18 @@ function ModelUsageRows({ rows, onSelect, t }: {
                   aria-valuemin={0}
                   aria-valuemax={100}
                   aria-valuenow={Math.round(displayShare)}
-                  className="block h-full rounded bg-accent transition-[width] duration-200"
+                  className="block h-full rounded-full bg-accent transition-[width] duration-200"
                   style={{ width: `${displayShare}%` }}
                 />
               </span>
             </span>
             <span className="text-right">
-              <span className="block font-mono text-xs font-semibold tabular-nums">{fmtTokens(row.total_tokens)}</span>
-              <span className="block font-mono text-[10px] tabular-nums text-muted-foreground">
+              <span className="block text-xs font-semibold tabular-nums">{fmtTokens(row.total_tokens)}</span>
+              <span className="block text-2xs tabular-nums text-muted-foreground">
                 <span>{fmtCost(row.total_cost)}</span>
                 <span> / {share.toFixed(1)}%</span>
               </span>
-              <span className="block text-[10px] text-muted-foreground">
+              <span className="block text-2xs text-muted-foreground">
                 {`${row.sessions} ${t("sessions")} / ${row.calls} ${t("calls")}`}
               </span>
             </span>
@@ -452,14 +439,6 @@ export default function Dashboard() {
 
   useEffect(() => { void fetchThroughput(); }, [fetchThroughput]);
 
-  const updatePreset = (preset: TimePreset) => {
-    setFilters((current) => ({
-      ...current,
-      preset,
-      ...getTimeRange(preset, current.from, current.to),
-    }));
-  };
-
   const updateGranularity = (value: string) => {
     setGranularity(value);
     localStorage.setItem("au-granularity", value);
@@ -546,31 +525,30 @@ export default function Dashboard() {
     && !data.sources.length && !data.models.length && !data.projects.length);
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
-      <TimeRangeSelector
-        preset={filters.preset}
-        onPresetChange={updatePreset}
-        granularity={granularity}
-        onGranularityChange={updateGranularity}
-        source={filters.source}
-        onSourceChange={(source) => setFilters((current) => ({ ...current, source }))}
-        onRefresh={() => { void fetchData(); void fetchThroughput(); }}
-        customFrom={filters.from}
-        customTo={filters.to}
-        onCustomFromChange={(from) => setFilters((current) => ({ ...current, preset: "custom", from }))}
-        onCustomToChange={(to) => setFilters((current) => ({ ...current, preset: "custom", to }))}
-        filters={filters}
-        onFiltersApply={applyQueryFilters}
-        onClearFilters={clearAllQueryFilters}
-      />
+    <div className="mx-auto flex min-h-0 w-full min-w-0 max-w-[1180px] flex-1 flex-col gap-3 overflow-hidden">
+      <section className="panel relative min-w-0 overflow-visible border-b border-border pb-3">
+        <div className="pb-2">
+          <PageHeader title={t("title")} hint={t("localObservability")} />
+        </div>
+        <div className="border-t border-border/70 pt-2.5">
+          <TimeRangeSelector
+            preset={filters.preset}
+            source={filters.source}
+            onRefresh={() => { void fetchData(); void fetchThroughput(); }}
+            filters={filters}
+            onFiltersApply={applyQueryFilters}
+            onClearFilters={clearAllQueryFilters}
+          />
+        </div>
+      </section>
 
       {data?.collectionStatus && collectionNeedsAttention && (
         <aside
           data-testid="collection-index-status"
-          className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs"
+          className="panel flex min-w-0 flex-row flex-wrap items-center gap-x-3 gap-y-1 px-3.5 py-2.5 text-xs"
         >
+          <span className="chip chip-warn">{t(COLLECTION_STATUS_KEYS[data.collectionStatus.status])}</span>
           <span className="font-medium">{t("collectionIndexStatus")}</span>
-          <span className="font-medium text-amber-600">{t(COLLECTION_STATUS_KEYS[data.collectionStatus.status])}</span>
           <span className="text-muted-foreground">{t("lastIndexUpdate")}</span>
           {data.collectionStatus.last_indexed_at ? (
             <time dateTime={data.collectionStatus.last_indexed_at} className="font-mono tabular-nums">
@@ -582,33 +560,33 @@ export default function Dashboard() {
           <span className="ml-auto text-muted-foreground">
             {data.collectionStatus.source_count} {t("indexedSources")} / {data.collectionStatus.file_count} {t("indexedFiles")} / {data.collectionStatus.malformed_lines} {t("malformedLines")}
           </span>
-          <button type="button" onClick={() => navigate("/settings/index-diagnostics")} className="font-medium text-amber-700 underline underline-offset-2 hover:text-foreground">
+          <button type="button" onClick={() => navigate("/settings/index-diagnostics")} className="font-medium text-warning underline underline-offset-2 hover:text-foreground">
             {t("openSystemDiagnostics")}
           </button>
         </aside>
       )}
 
-      {(filters.model || filters.project) && <p className="px-1 text-[11px] text-muted-foreground">{t("overviewFilterLimitation")}</p>}
+      {(filters.model || filters.project) && <p className="min-w-0 text-2xs text-muted-foreground">{t("overviewFilterLimitation")}</p>}
 
-      <main aria-busy={loading} className="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto pb-4">
+      <main aria-busy={loading} className="min-h-0 min-w-0 flex-1 overflow-y-auto pb-4">
         {loading && !data ? (
           <DashboardSkeleton />
         ) : error ? (
-          <section className="bg-red-500/5 px-4 py-12 text-center">
-            <p className="break-words text-sm text-red-500">{error}</p>
+          <section className="panel items-center px-4 py-12 text-center">
+            <p className="break-words text-sm text-danger">{error}</p>
             <button
               type="button"
               onClick={() => { void fetchData(); }}
-              className="mt-3 rounded bg-accent px-3 py-1.5 text-sm font-medium text-white hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              className="btn btn-primary mx-auto mt-4"
             >{t("retry")}</button>
           </section>
         ) : noUsage ? (
-          <section className="bg-card/30 px-4 py-16 text-center">
+          <section className="panel items-center px-4 py-16 text-center">
             <h2 className="text-sm font-semibold">{t("noUsageData")}</h2>
             <p className="mt-1 text-xs text-muted-foreground">{t("noUsageDataDetail")}</p>
           </section>
         ) : data && stats ? (
-          <>
+          <div className="stagger min-w-0 space-y-6">
             <TokenSummary stats={stats} rangeDetail={rangeDetail} />
             <UsageInsight
               insight={usageInsight}
@@ -617,130 +595,135 @@ export default function Dashboard() {
               onOpenProject={(project) => openSessions({ project })}
             />
 
-            <section data-testid="dashboard-band-analysis" className="px-1 py-4">
-              <div className="grid min-w-0 grid-cols-1 gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(16rem,1fr)]">
-                <div className="min-w-0">
-                  <header className="mb-3 flex min-w-0 flex-wrap items-end justify-between gap-2">
-                    <div className="min-w-0">
-                      <h2 className="truncate text-sm font-semibold">{t("tokenTrend")}</h2>
-                      <p className="truncate text-xs text-muted-foreground">{t("clickDateForSessions")}</p>
+            <section
+              data-testid="dashboard-band-analysis"
+              className="grid min-w-0 grid-cols-1 gap-x-8 gap-y-6 lg:grid-cols-[minmax(0,1.55fr)_minmax(17rem,1fr)]"
+            >
+              <Panel
+                title={t("tokenTrend")}
+                hint={t("clickDateForSessions")}
+                actions={
+                  <label className="flex items-center gap-1.5 text-2xs text-muted-foreground">
+                    <span>{t("trendGranularity")}</span>
+                    <select
+                      aria-label={t("trendGranularity")}
+                      value={granularity}
+                      onChange={(event) => updateGranularity(event.target.value)}
+                      className="field h-7 w-auto"
+                    >
+                      {["1m", "30m", "1h", "6h", "12h", "1d", "1w", "1M"].map((value) => <option key={value} value={value}>{t(`gran_${value}`)}</option>)}
+                    </select>
+                  </label>
+                }
+              >
+                <ChartCard
+                  option={tokenOption}
+                  className="h-60"
+                  onEvents={{
+                    click: ({ name }) => {
+                      const day = name?.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+                      if (day) openSessions({ from: day, to: day });
+                    },
+                  }}
+                />
+                <div data-testid="token-components" className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {[
+                    [t("input"), stats.input_tokens],
+                    [t("output"), stats.output_tokens],
+                    [t("cacheRead"), stats.cache_read],
+                    [t("cacheCreate"), stats.cache_create],
+                  ].map(([label, value]) => (
+                    <div key={String(label)} className="inset min-w-0 px-3 py-2">
+                      <div className="truncate text-2xs text-muted-foreground">{label}</div>
+                      <div className="mt-0.5 truncate text-[13px] font-semibold tabular-nums">{fmtTokens(Number(value))}</div>
                     </div>
-                    <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                      <span>{t("trendGranularity")}</span>
-                      <select aria-label={t("trendGranularity")} value={granularity} onChange={(event) => updateGranularity(event.target.value)} className="h-8 rounded-md border border-border bg-card px-2 text-xs text-foreground">
-                        {["1m", "30m", "1h", "6h", "12h", "1d", "1w", "1M"].map((value) => <option key={value} value={value}>{t(`gran_${value}`)}</option>)}
-                      </select>
-                    </label>
-                  </header>
-                  <ChartCard
-                    option={tokenOption}
-                    className="h-60"
-                    onEvents={{
-                      click: ({ name }) => {
-                        const day = name?.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
-                        if (day) openSessions({ from: day, to: day });
-                      },
-                    }}
-                  />
-                  <div data-testid="token-components" className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    {[
-                      [t("input"), stats.input_tokens],
-                      [t("output"), stats.output_tokens],
-                      [t("cacheRead"), stats.cache_read],
-                      [t("cacheCreate"), stats.cache_create],
-                    ].map(([label, value]) => (
-                      <div key={String(label)} className="min-w-0 rounded-md bg-muted/55 px-3 py-2">
-                        <div className="truncate text-[10px] text-muted-foreground">{label}</div>
-                        <div className="truncate font-mono text-sm font-semibold tabular-nums">{fmtTokens(Number(value))}</div>
-                      </div>
-                    ))}
-                  </div>
+                  ))}
                 </div>
-                <div className="min-w-0 pt-1 lg:pl-2">
-                  <BandTitle title={t("modelUsage")} />
-                  <ModelUsageRows rows={data.models} onSelect={(model) => openSessions({ model })} t={t} />
-                </div>
-              </div>
+              </Panel>
+              <Panel title={t("modelUsage")} hint={t("tokens")}>
+                <ModelUsageRows rows={data.models} onSelect={(model) => openSessions({ model })} t={t} />
+              </Panel>
             </section>
 
-            <section data-testid="dashboard-band-detail" className="px-1 py-4">
-              <div className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(14rem,0.8fr)]">
-                <div className="min-w-0">
-                  <BandTitle title={t("agentComposition")} detail={t("tokens")} />
-                  <BreakdownRows
-                    rows={data.sources}
-                    onSelect={(source) => openSessions({ source })}
-                    t={t}
-                    composition
-                  />
-                </div>
-                <div className="min-w-0 pt-1 xl:pl-2">
-                  <BandTitle title={t("projectRanking")} detail={t("tokens")} />
-                  <BreakdownRows
-                    rows={data.projects}
-                    onSelect={(project) => openSessions({ project })}
-                    t={t}
-                    compact
-                    projectLabels
-                  />
-                </div>
-              </div>
+            <section
+              data-testid="dashboard-band-detail"
+              className="grid min-w-0 grid-cols-1 gap-x-8 gap-y-6 xl:grid-cols-[minmax(0,1.45fr)_minmax(15rem,0.85fr)]"
+            >
+              <Panel title={t("agentComposition")} hint={t("tokens")}>
+                <BreakdownRows
+                  rows={data.sources}
+                  onSelect={(source) => openSessions({ source })}
+                  t={t}
+                  composition
+                />
+              </Panel>
+              <Panel title={t("projectRanking")} hint={t("tokens")}>
+                <BreakdownRows
+                  rows={data.projects}
+                  onSelect={(project) => openSessions({ project })}
+                  t={t}
+                  compact
+                  projectLabels
+                />
+              </Panel>
             </section>
 
-            <section data-testid="dashboard-band-rhythm" className="px-1 py-4">
-              <BandTitle title={t("activityHeatmap")} detail={t("tokens")} />
-              <ActivityHeatmap cells={data.heatmap} t={t} />
+            <section data-testid="dashboard-band-rhythm">
+              <Panel title={t("activityHeatmap")} hint={t("tokens")}>
+                <ActivityHeatmap cells={data.heatmap} t={t} rangeDetail={rangeDetail} />
+              </Panel>
             </section>
 
-            <section data-testid="dashboard-band-throughput" className="px-1 py-4">
+            <section data-testid="dashboard-band-throughput">
               <div aria-busy={throughputLoading} className="min-w-0">
-                <header className="mb-3 flex min-w-0 flex-wrap items-end justify-between gap-2">
-                  <div className="min-w-0">
-                    <h2 className="flex items-center gap-1 text-sm font-semibold">
-                      <span className="truncate">{t("localObservedThroughput")}</span>
-                      <HelpTooltip label={t("localObservedThroughputHelp")} align="left" />
-                    </h2>
-                  </div>
-                  <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
-                    <div className="inline-flex rounded-md border border-border bg-card p-0.5" aria-label={t("throughputScaleMode")}>
-                      {(["trend", "absolute"] as const).map((mode) => (
-                        <button
-                          key={mode}
-                          type="button"
-                          aria-pressed={throughputMode === mode}
-                          onClick={() => { setThroughputMode(mode); localStorage.setItem("au-throughput-mode", mode); }}
-                          className={`px-2 py-1 text-[10px] font-medium ${throughputMode === mode ? "rounded bg-foreground text-background" : "text-muted-foreground hover:text-foreground"}`}
-                        >{t(mode === "trend" ? "throughputTrendMode" : "throughputAbsoluteMode")}</button>
-                      ))}
-                    </div>
-                    <label className="flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground">
-                      <span>{t("throughputModel")}</span>
-                      <select
-                        aria-label={t("throughputModel")}
-                        value={throughputModel}
-                        onChange={(event) => setThroughputModel(event.target.value)}
-                        className="max-w-36 rounded-md border border-border bg-card px-2 py-1 text-xs text-foreground"
-                      >
-                        <option value="">{t("allModels")}</option>
-                        {data.models.filter((row) => row.key).map((row) => (
-                          <option key={row.key} value={row.key}>{row.key}</option>
+                <Panel
+                  title={
+                    <span className="truncate">{t("localObservedThroughput")}</span>
+                  }
+                  actions={
+                    <>
+                      <div className="inline-flex rounded-lg border border-border p-0.5" aria-label={t("throughputScaleMode")}>
+                        {(["trend", "absolute"] as const).map((mode) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            aria-pressed={throughputMode === mode}
+                            onClick={() => { setThroughputMode(mode); localStorage.setItem("au-throughput-mode", mode); }}
+                            className={`rounded-md px-2 py-1 text-2xs font-medium transition-colors ${throughputMode === mode ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"}`}
+                          >{t(mode === "trend" ? "throughputTrendMode" : "throughputAbsoluteMode")}</button>
                         ))}
-                      </select>
-                    </label>
+                      </div>
+                      <label className="flex min-w-0 items-center gap-1.5 text-2xs text-muted-foreground">
+                        <span>{t("throughputModel")}</span>
+                        <select
+                          aria-label={t("throughputModel")}
+                          value={throughputModel}
+                          onChange={(event) => setThroughputModel(event.target.value)}
+                          className="field h-7 w-auto max-w-36"
+                        >
+                          <option value="">{t("allModels")}</option>
+                          {data.models.filter((row) => row.key).map((row) => (
+                            <option key={row.key} value={row.key}>{row.key}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <HelpTooltip label={t("localObservedThroughputHelp")} align="left" />
+                    </>
+                  }
+                >
+                  <div className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[minmax(0,32rem)_minmax(0,1fr)]">
+                    <div className="min-w-0">
+                      <ThroughputMatrix throughput={throughput} t={t} />
+                      {throughputError && (
+                        <p className="mt-2 break-words text-xs text-danger">{throughputError}</p>
+                      )}
+                    </div>
+                    <ChartCard title={t("observedTPMTrend")} option={throughputOption} className="h-48" />
                   </div>
-                </header>
-                <div className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[minmax(0,32rem)_minmax(0,1fr)]">
-                  <div className="min-w-0">
-                    <ThroughputMatrix throughput={throughput} t={t} />
-                    {throughputError && (
-                      <p className="mt-2 break-words text-xs text-red-500">{throughputError}</p>
-                    )}
-                  </div>
-                  <ChartCard title={t("observedTPMTrend")} option={throughputOption} className="h-48" />
-                </div>
+                </Panel>
               </div>
             </section>
-          </>
+          </div>
         ) : null}
       </main>
     </div>

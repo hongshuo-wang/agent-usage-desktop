@@ -25,9 +25,10 @@ describe("Layout", () => {
     expect(screen.getAllByRole("link", { name: "title" })).not.toHaveLength(0);
     expect(screen.getAllByRole("link", { name: "sessionLog" })).not.toHaveLength(0);
     expect(screen.getAllByRole("link", { name: "settings" })).not.toHaveLength(0);
+    expect(screen.getAllByRole("link", { name: "about" })).not.toHaveLength(0);
     expect(screen.queryByRole("link", { name: "config" })).not.toBeInTheDocument();
     expect(new Set(screen.getAllByRole("link").map((link) => link.getAttribute("href")))).toEqual(
-      new Set(["/", "/sessions", "/settings/data-sources"]),
+      new Set(["/", "/sessions", "/settings/data-sources", "/settings/about"]),
     );
     expect(screen.getByTestId("desktop-navigation")).toBeInTheDocument();
     expect(screen.getByTestId("mobile-navigation")).toBeInTheDocument();
@@ -38,6 +39,22 @@ describe("Layout", () => {
     }
     expect(screen.getAllByRole("link", { name: "sessionLog" })[0]).not.toHaveAttribute("aria-current");
     expect(screen.getAllByRole("main")).toHaveLength(1);
+  });
+
+  it("keeps About outside the system settings submenu", () => {
+    localStorage.setItem("au-theme", "light");
+    render(
+      <MemoryRouter initialEntries={["/settings/about"]}>
+        <Layout><div>about content</div></Layout>
+      </MemoryRouter>,
+    );
+
+    const desktop = screen.getByTestId("desktop-navigation");
+    expect(within(desktop).getByRole("link", { name: "about" })).toHaveAttribute("aria-current", "page");
+    expect(within(desktop).getByRole("button", { name: "settings" })).not.toHaveClass("rail-link-active");
+    expect(within(desktop).getByRole("button", { name: "settings" })).toHaveAttribute("aria-expanded", "false");
+    expect(within(desktop).queryByRole("link", { name: "dataSources" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("mobile-navigation")).toBeInTheDocument();
   });
 
   it("expands system destinations in the primary rail on system routes", () => {

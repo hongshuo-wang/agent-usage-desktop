@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-03
+
+### English
+
+#### Highlights
+
+- Added a complete About & Support experience with app metadata, GitHub release history, update checks, and trusted external links.
+- Added localized date-range selection and refined the Dashboard, Sessions, navigation, responsive layout, and shared panel hierarchy.
+- Added session-content retention and purge controls with database vacuum support.
+- Improved chart lifecycle cleanup, sidecar rebuilding during Tauri development, loading states, and runtime error handling.
+
+### 中文
+
+#### 主要更新
+
+- 新增完整的关于与支持页面，包含应用版本、GitHub 版本记录、更新检查和可信外链。
+- 新增本地化日期范围选择，并重构 Dashboard、Sessions、导航、响应式布局和共享面板层级。
+- 新增会话内容保留期、清理和数据库压缩功能。
+- 修复图表生命周期、Tauri 开发模式 sidecar 构建、加载状态和运行时错误处理问题。
+
 ## [2.0.0] - 2026-07-29
 
 ### English

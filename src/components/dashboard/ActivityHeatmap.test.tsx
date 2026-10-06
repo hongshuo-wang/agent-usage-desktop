@@ -24,6 +24,21 @@ test("renders Sunday last, because SQLite numbers it 0", () => {
   expect(labels).toHaveLength(7 * 24);
 });
 
+test("shows explicit axes and the selected query range", () => {
+  render(
+    <ActivityHeatmap
+      cells={[{ weekday: 1, hour: 5, calls: 1, tokens: 10, cost: 0.5 }]}
+      t={t}
+      rangeDetail="2026-07-01 to 2026-07-03"
+    />,
+  );
+
+  expect(screen.getByLabelText("heatmapAxes")).toHaveTextContent("heatmapAxes");
+  expect(screen.getByText("heatmapRange: 2026-07-01 to 2026-07-03")).toBeInTheDocument();
+  expect(screen.getByText("03:00")).toBeInTheDocument();
+});
+
+
 test("keeps empty hours distinct from low-activity hours", () => {
   const { container } = render(
     <ActivityHeatmap

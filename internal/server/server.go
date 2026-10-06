@@ -7,6 +7,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +24,9 @@ type Server struct {
 	configPath  string
 	configMu    sync.Mutex
 	pricingSync func(*storage.DB) error
+	appVersion  string
+	repository  string
+	httpClient  *http.Client
 }
 
 // Option configures optional server features.
@@ -32,6 +36,14 @@ type Option func(*Server)
 func WithConfigPath(path string) Option {
 	return func(server *Server) {
 		server.configPath = path
+	}
+}
+
+// WithAppInfo exposes build metadata to the desktop UI.
+func WithAppInfo(version, repository string) Option {
+	return func(server *Server) {
+		server.appVersion = version
+		server.repository = repository
 	}
 }
 
@@ -47,7 +59,7 @@ func WithPricingSync(syncFunc func(*storage.DB) error) Option {
 
 // New creates a Server that will listen on the given address (host:port).
 func New(db *storage.DB, addr string, options ...Option) *Server {
-	server := &Server{db: db, addr: addr, pricingSync: pricing.Sync}
+	server := &Server{db: db, addr: addr, pricingSync: pricing.Sync, httpClient: &http.Client{Timeout: 10 * time.Second}}
 	for _, option := range options {
 		option(server)
 	}
@@ -88,6 +100,9 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/health", s.handleHealth)
+	mux.HandleFunc("GET /api/app-info", s.handleAppInfo)
+	mux.HandleFunc("GET /api/update-check", s.handleUpdateCheck)
+	mux.HandleFunc("GET /api/releases", s.handleReleases)
 	mux.HandleFunc("/api/stats", s.handleStats)
 	mux.HandleFunc("/api/cost-by-model", s.handleCostByModel)
 	mux.HandleFunc("/api/cost-over-time", s.handleCostOverTime)
@@ -101,11 +116,168 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/sessions", s.handleSessionSearch)
 	mux.HandleFunc("GET /api/sessions/{source}/{session_id}/events", s.handleSessionEventsRoute)
 	mux.HandleFunc("POST /api/session-index/rebuild", s.handleSessionIndexRebuild)
+	mux.HandleFunc("POST /api/maintenance/purge-session-events", s.handlePurgeSessionEvents)
 	mux.HandleFunc("POST /api/pricing/import", s.handlePricingImport)
 	mux.HandleFunc("POST /api/pricing/sync", s.handlePricingSync)
 	mux.HandleFunc("GET /api/pricing/models", s.handlePricingModels)
 
 	return corsMiddleware(mux)
+}
+
+func (s *Server) handleAppInfo(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, struct {
+		Version    string `json:"version"`
+		Repository string `json:"repository"`
+	}{Version: s.appVersion, Repository: s.repository})
+}
+
+func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	if s.repository == "" {
+		badRequestStatus(w, http.StatusNotImplemented, fmt.Errorf("repository is not configured"))
+		return
+	}
+	repository := strings.TrimRight(strings.TrimPrefix(strings.TrimPrefix(s.repository, "https://github.com/"), "http://github.com/"), "/")
+	apiURL := "https://api.github.com/repos/" + repository + "/releases/latest"
+	if parsed, err := url.Parse(apiURL); err != nil || parsed.Host != "api.github.com" {
+		badRequestStatus(w, http.StatusInternalServerError, fmt.Errorf("invalid repository URL"))
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, apiURL, nil)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "agent-usage-desktop")
+	res, err := s.httpClient.Do(req)
+	if err != nil {
+		badRequestStatus(w, http.StatusBadGateway, fmt.Errorf("check GitHub release: %w", err))
+		return
+	}
+	defer res.Body.Close()
+	if res.StatusCode == http.StatusNotFound {
+		writeJSON(w, struct {
+			CurrentVersion string `json:"current_version"`
+			ReleaseFound   bool   `json:"release_found"`
+		}{CurrentVersion: s.appVersion})
+		return
+	}
+	if res.StatusCode != http.StatusOK {
+		badRequestStatus(w, http.StatusBadGateway, fmt.Errorf("GitHub release check returned %s", res.Status))
+		return
+	}
+	var release struct {
+		TagName string `json:"tag_name"`
+		HTMLURL string `json:"html_url"`
+		Name    string `json:"name"`
+		Body    string `json:"body"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&release); err != nil {
+		serverError(w, err)
+		return
+	}
+	current := versionParts(s.appVersion)
+	latest := versionParts(release.TagName)
+	writeJSON(w, struct {
+		CurrentVersion  string `json:"current_version"`
+		ReleaseFound    bool   `json:"release_found"`
+		LatestVersion   string `json:"latest_version"`
+		UpdateAvailable bool   `json:"update_available"`
+		URL             string `json:"url"`
+		Name            string `json:"name"`
+		Body            string `json:"body"`
+	}{s.appVersion, true, release.TagName, compareVersions(latest, current) > 0, release.HTMLURL, release.Name, release.Body})
+}
+
+type githubRelease struct {
+	TagName     string    `json:"tag_name"`
+	HTMLURL     string    `json:"html_url"`
+	Name        string    `json:"name"`
+	Body        string    `json:"body"`
+	PublishedAt time.Time `json:"published_at"`
+	Draft       bool      `json:"draft"`
+	Prerelease  bool      `json:"prerelease"`
+}
+
+func (s *Server) githubReleasesURL() (string, error) {
+	if s.repository == "" {
+		return "", fmt.Errorf("repository is not configured")
+	}
+	repository := strings.TrimRight(strings.TrimPrefix(strings.TrimPrefix(s.repository, "https://github.com/"), "http://github.com/"), "/")
+	apiURL := "https://api.github.com/repos/" + repository + "/releases?per_page=30"
+	parsed, err := url.Parse(apiURL)
+	if err != nil || parsed.Host != "api.github.com" {
+		return "", fmt.Errorf("invalid repository URL")
+	}
+	return apiURL, nil
+}
+
+func (s *Server) handleReleases(w http.ResponseWriter, r *http.Request) {
+	apiURL, err := s.githubReleasesURL()
+	if err != nil {
+		badRequestStatus(w, http.StatusNotImplemented, err)
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, apiURL, nil)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "agent-usage-desktop")
+	res, err := s.httpClient.Do(req)
+	if err != nil {
+		badRequestStatus(w, http.StatusBadGateway, fmt.Errorf("load GitHub releases: %w", err))
+		return
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		badRequestStatus(w, http.StatusBadGateway, fmt.Errorf("GitHub releases returned %s", res.Status))
+		return
+	}
+	var releases []githubRelease
+	if err := json.NewDecoder(res.Body).Decode(&releases); err != nil {
+		serverError(w, err)
+		return
+	}
+	response := make([]githubRelease, 0, len(releases))
+	for _, release := range releases {
+		if release.Draft || release.Prerelease || release.HTMLURL == "" || release.TagName == "" {
+			continue
+		}
+		response = append(response, release)
+	}
+	writeJSON(w, response)
+}
+
+func versionParts(value string) []int {
+	value = strings.TrimPrefix(strings.TrimSpace(value), "v")
+	parts := strings.SplitN(value, ".", 3)
+	if len(parts) < 3 {
+		return nil
+	}
+	result := make([]int, 3)
+	for i, part := range parts {
+		if _, err := fmt.Sscanf(part, "%d", &result[i]); err != nil {
+			return nil
+		}
+	}
+	return result
+}
+
+func compareVersions(left, right []int) int {
+	if len(left) != 3 || len(right) != 3 {
+		return 0
+	}
+	for i := range left {
+		if left[i] > right[i] {
+			return 1
+		}
+		if left[i] < right[i] {
+			return -1
+		}
+	}
+	return 0
 }
 
 func (s *Server) handlePricingModels(w http.ResponseWriter, _ *http.Request) {
@@ -379,21 +551,6 @@ func (s *Server) handleTokensOverTime(w http.ResponseWriter, r *http.Request) {
 	granularity := r.URL.Query().Get("granularity")
 	source := r.URL.Query().Get("source")
 	data, err := s.db.GetTokensOverTime(from, to, granularity, source, tzOffset)
-	if err != nil {
-		serverError(w, err)
-		return
-	}
-	writeJSON(w, data)
-}
-
-func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
-	from, to, _, err := s.parseTimeRange(r)
-	if err != nil {
-		badRequest(w, err)
-		return
-	}
-	source := r.URL.Query().Get("source")
-	data, err := s.db.GetSessions(from, to, source)
 	if err != nil {
 		serverError(w, err)
 		return

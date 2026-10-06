@@ -27,7 +27,7 @@ export function formatEventTime(timestamp: string, fallback: string): string {
 }
 
 function EventIcon({ event }: { event: SessionEvent }) {
-  if (event.event_type === "error") return <AlertCircle aria-hidden="true" className="h-4 w-4 text-red-500" />;
+  if (event.event_type === "error") return <AlertCircle aria-hidden="true" className="h-4 w-4 text-danger" />;
   if (event.event_type === "tool_call" || event.event_type === "tool_result") return <Terminal aria-hidden="true" className="h-4 w-4 text-accent" />;
   if (event.role === "user") return <CircleUserRound aria-hidden="true" className="h-4 w-4" />;
   return <Bot aria-hidden="true" className="h-4 w-4" />;
@@ -49,15 +49,15 @@ export default function EventCard({ event, onInspect, t }: { event: SessionEvent
           onInspect(event);
         }
       }}
-      className={`rounded-md px-3 py-2.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent ${event.event_type === "error" ? "bg-red-500/8 hover:bg-red-500/12" : "bg-card/75 hover:bg-muted/80"}`}
+      className={`px-3 py-2.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent ${event.event_type === "error" ? "inset-danger" : "inset hover:bg-accent-dim"}`}
     >
       <header className="flex min-w-0 items-center gap-2">
         <EventIcon event={event} />
         <span className="min-w-0 flex-1 truncate text-xs font-semibold">
           {event.tool_name || t(`eventType_${event.event_type}`)}
         </span>
-        {event.duration_ms !== null && <span className="font-mono text-[10px] text-muted-foreground">{event.duration_ms}ms</span>}
-        <time dateTime={event.timestamp} className="shrink-0 font-mono text-[10px] text-muted-foreground">
+        {event.duration_ms !== null && <span className="text-2xs tabular-nums text-muted-foreground">{event.duration_ms}ms</span>}
+        <time dateTime={event.timestamp} className="shrink-0 text-2xs tabular-nums text-muted-foreground">
           {formatEventTime(event.timestamp, t("sourceDataUnavailable"))}
         </time>
         {canCollapse && (
@@ -76,7 +76,7 @@ export default function EventCard({ event, onInspect, t }: { event: SessionEvent
           {value || t("sourceDataUnavailable")}
         </pre>
       )}
-      {!expanded && <p className="mt-1 text-[10px] text-muted-foreground">{t("eventCollapsed")}</p>}
+      {!expanded && <p className="mt-1 text-2xs text-muted-foreground">{t("eventCollapsed")}</p>}
     </article>
   );
 }

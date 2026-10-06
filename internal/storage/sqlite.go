@@ -3,6 +3,7 @@ package storage
 import (
 	"database/sql"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -11,8 +12,9 @@ import (
 
 // DB wraps a SQLite database connection with a mutex for safe concurrent access.
 type DB struct {
-	db *sql.DB
-	mu sync.Mutex
+	db   *sql.DB
+	path string
+	mu   sync.Mutex
 }
 
 // UsageRecord represents a single API call's token usage and cost.
@@ -64,11 +66,22 @@ func Open(path string) (*DB, error) {
 		db.Close()
 		return nil, err
 	}
-	return &DB{db: db}, nil
+	return &DB{db: db, path: path}, nil
 }
 
 // Close closes the underlying database connection.
 func (d *DB) Close() error { return d.db.Close() }
+
+// SizeBytes reports the main database file size, or 0 when it cannot be read.
+// The write-ahead log is not counted: SQLite checkpoints and removes it when the
+// last connection closes.
+func (d *DB) SizeBytes() int64 {
+	info, err := os.Stat(d.path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
 
 func migrate(db *sql.DB) error {
 	_, err := db.Exec(`

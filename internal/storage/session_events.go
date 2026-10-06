@@ -509,8 +509,8 @@ const sessionEventRetentionInterval = 24 * time.Hour
 
 // PruneSessionEvents deletes indexed session content older than retentionDays,
 // keeping usage records, prompts, and session metadata intact. It runs at most
-// once every 24h. retentionDays <= 0 disables pruning and returns 0. Call Vacuum
-// afterwards to actually reclaim the freed space.
+// once every 24h so a restart loop cannot re-run it. retentionDays <= 0 disables
+// pruning and returns 0. Call Vacuum afterwards to actually reclaim the freed space.
 //
 // session_sources is deliberately left untouched: resetting indexed_offset or
 // source_status would make the next collector scan treat the file as unindexed
@@ -527,8 +527,37 @@ func (d *DB) PruneSessionEvents(retentionDays int) (int64, error) {
 			return 0, nil
 		}
 	}
-	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
-	result, err := d.db.Exec(`DELETE FROM session_events WHERE timestamp < ?`, cutoff)
+	return d.purgeSessionEventsLocked(retentionDays)
+}
+
+// PurgeSessionEvents deletes indexed session content immediately on user request,
+// ignoring the once-per-day throttle that automatic pruning uses. retentionDays
+// <= 0 deletes every indexed event. Call Vacuum afterwards to reclaim the space.
+func (d *DB) PurgeSessionEvents(retentionDays int) (int64, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.purgeSessionEventsLocked(retentionDays)
+}
+
+// ForgetPruneThrottle lets the next automatic retention pass run immediately.
+// Changing the retention setting must take effect on the next start, not a day later.
+func (d *DB) ForgetPruneThrottle() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.SetMeta(sessionEventPrunedAtKey, "")
+}
+
+func (d *DB) purgeSessionEventsLocked(retentionDays int) (int64, error) {
+	var (
+		result sql.Result
+		err    error
+	)
+	if retentionDays <= 0 {
+		result, err = d.db.Exec(`DELETE FROM session_events`)
+	} else {
+		cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
+		result, err = d.db.Exec(`DELETE FROM session_events WHERE timestamp < ?`, cutoff)
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -541,11 +570,16 @@ func (d *DB) PruneSessionEvents(retentionDays int) (int64, error) {
 
 const sessionEventPrunedAtKey = "session_events_pruned_at"
 
-// Vacuum rebuilds the database file, reclaiming space freed by pruning.
+// Vacuum rebuilds the database file, reclaiming space freed by pruning. VACUUM
+// writes the rebuilt pages through the write-ahead log, so the log is truncated
+// afterwards: without that the main file keeps its old size on disk.
 func (d *DB) Vacuum() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	_, err := d.db.Exec("VACUUM")
+	if _, err := d.db.Exec("VACUUM"); err != nil {
+		return err
+	}
+	_, err := d.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 	return err
 }
 

@@ -1,9 +1,9 @@
 {
   "productName": "Agent Usage",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "identifier": "com.agentusage.desktop",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run build:sidecar && npm run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
@@ -12,6 +12,7 @@
     "windows": [
       {
         "title": "Agent Usage",
+        "hiddenTitle": true,
         "width": 1200,
         "height": 800,
         "minWidth": 900,

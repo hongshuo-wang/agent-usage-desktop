@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { compactNumber } from "./chartUtils";
 import * as echarts from "echarts/core";
 import { BarChart, LineChart, PieChart } from "echarts/charts";
 import { GridComponent, LegendComponent, TooltipComponent } from "echarts/components";
@@ -11,17 +12,6 @@ interface ChartCardProps {
   option: object;
   className?: string;
   onEvents?: Record<string, (params: { name?: string }) => void>;
-}
-
-/** Axis labels stay short; tooltips carry the exact number. */
-export function compactNumber(value: number): string {
-  for (const [limit, unit] of [[1e9, "B"], [1e6, "M"], [1e3, "K"]] as const) {
-    if (Math.abs(value) < limit) continue;
-    const scaled = value / limit;
-    const text = Math.abs(scaled) >= 10 ? scaled.toFixed(0) : scaled.toFixed(1);
-    return `${text.replace(/\.0$/, "")}${unit}`;
-  }
-  return String(value);
 }
 
 function useIsDark() {
@@ -113,15 +103,24 @@ export default function ChartCard({ title, option, className, onEvents }: ChartC
     const container = containerRef.current;
     if (!container) return;
 
-    chartRef.current = echarts.init(container, undefined, { renderer: "canvas" });
+    const existing = echarts.getInstanceByDom(container);
+    if (existing && !existing.isDisposed()) existing.dispose();
+    const chart = echarts.init(container, undefined, { renderer: "canvas" });
+    chartRef.current = chart;
     return () => {
-      chartRef.current?.dispose();
-      chartRef.current = null;
+      // Keep cleanup tied to the instance created by this effect. A later HMR
+      // or StrictMode mount must never be disposed by an older cleanup.
+      if (chartRef.current === chart) chartRef.current = null;
+      if (!chart.isDisposed()) chart.dispose();
     };
   }, []);
 
   useEffect(() => {
-    chartRef.current?.setOption(themed(), true);
+    const chart = chartRef.current;
+    // StrictMode mounts, unmounts and remounts in one commit; a stale effect
+    // must not write to the instance that its cleanup already disposed.
+    if (!chart || chart.isDisposed()) return;
+    chart.setOption(themed(), true);
   }, [themed]);
 
   useEffect(() => {
@@ -133,6 +132,7 @@ export default function ChartCard({ title, option, className, onEvents }: ChartC
       return { event, listener };
     });
     return () => {
+      if (chart.isDisposed()) return;
       for (const { event, listener } of listeners) {
         chart.off(event, listener);
       }
@@ -143,18 +143,19 @@ export default function ChartCard({ title, option, className, onEvents }: ChartC
     const container = containerRef.current;
     if (!container) return;
     const ro = new ResizeObserver(() => {
-      chartRef.current?.resize();
+      const chart = chartRef.current;
+      if (chart && !chart.isDisposed()) chart.resize();
     });
     ro.observe(container);
     return () => ro.disconnect();
   }, []);
 
   return (
-    <div className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg bg-card p-3.5 ${className || ""}`}>
+    <div className={`flex min-h-0 min-w-0 flex-col ${className || ""}`}>
       {title ? (
-        <h3 className="mb-2 text-xs font-semibold text-muted-foreground">{title}</h3>
+        <h3 className="mb-2 truncate text-2xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</h3>
       ) : null}
-      <div ref={containerRef} className="flex-1 min-h-0" />
+      <div ref={containerRef} className="min-h-0 flex-1" />
     </div>
   );
 }

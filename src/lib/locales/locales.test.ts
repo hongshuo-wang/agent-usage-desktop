@@ -27,6 +27,9 @@ describe("locale contracts", () => {
     const removedKeys = [
       "config", "configManagement", "providers", "providerProfiles", "mcpServers",
       "skillsManagement", "backups", "syncStatus", "accountSettings", "teamSettings",
+      // The query editor dialog became one inline row; only its keys are gone.
+      "currentQuery", "editQuery", "queryEditor", "applyQuery", "cancelQuery",
+      "queryModel", "queryProject", "allProjects", "inheritedFilters", "clearAllFilters",
     ];
     for (const key of removedKeys) {
       expect(en).not.toHaveProperty(key);

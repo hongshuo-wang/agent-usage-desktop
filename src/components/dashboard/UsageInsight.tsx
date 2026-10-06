@@ -15,53 +15,40 @@ export default function UsageInsight({ insight, onOpenDay, onOpenModel, onOpenPr
 
   if (peak === null && topModel === null && topProject === null) return null;
 
+  const facts = [
+    peak && { key: "peakUsage", value: peak.timestamp, tokens: peak.totalTokens, onClick: () => onOpenDay(peak.day) },
+    topModel && { key: "topModel", value: topModel.key, tokens: topModel.totalTokens, onClick: () => onOpenModel(topModel.key) },
+    topProject && { key: "topProject", value: topProject.key, tokens: topProject.totalTokens, onClick: () => onOpenProject(topProject.key) },
+  ].filter((fact) => fact !== null);
+
   return (
     <section
       aria-labelledby="dashboard-insight-heading"
       data-testid="dashboard-band-insight"
-      className="dashboard-insight"
+      className="panel"
     >
-      <h2 id="dashboard-insight-heading" className="text-sm font-semibold">{t("usageOverview")}</h2>
-      <div className="dashboard-insight-facts">
-        {peak && (
+      <div className="panel-head">
+        <h2 id="dashboard-insight-heading" className="panel-title">{t("usageOverview")}</h2>
+      </div>
+      <div className="grid min-w-0 grid-cols-1 gap-2.5 pb-2 sm:grid-cols-3">
+        {facts.map((fact) => (
           <button
+            key={fact.key}
             type="button"
-            aria-label={t("peakUsage")}
+            aria-label={t(fact.key)}
             title={t("viewRelatedSessions")}
-            onClick={() => onOpenDay(peak.day)}
-            className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            onClick={fact.onClick}
+            className="inset min-w-0 px-3.5 py-3 text-left transition-colors hover:bg-accent-dim focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
-            <span>{t("peakUsage")}</span>
-            <strong>{peak.timestamp}</strong>
-            <small>{fmtTokens(peak.totalTokens)} {t("tokens")}</small>
+            <span className="block truncate text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
+              {t(fact.key)}
+            </span>
+            <strong className="mt-1 block truncate text-[13px] font-semibold">{fact.value}</strong>
+            <small className="mt-0.5 block truncate text-2xs tabular-nums text-muted-foreground">
+              {fmtTokens(fact.tokens)} {t("tokens")}
+            </small>
           </button>
-        )}
-        {topModel && (
-          <button
-            type="button"
-            aria-label={t("topModel")}
-            title={t("viewRelatedSessions")}
-            onClick={() => onOpenModel(topModel.key)}
-            className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          >
-            <span>{t("topModel")}</span>
-            <strong>{topModel.key}</strong>
-            <small>{fmtTokens(topModel.totalTokens)} {t("tokens")}</small>
-          </button>
-        )}
-        {topProject && (
-          <button
-            type="button"
-            aria-label={t("topProject")}
-            title={t("viewRelatedSessions")}
-            onClick={() => onOpenProject(topProject.key)}
-            className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          >
-            <span>{t("topProject")}</span>
-            <strong>{topProject.key}</strong>
-            <small>{fmtTokens(topProject.totalTokens)} {t("tokens")}</small>
-          </button>
-        )}
+        ))}
       </div>
     </section>
   );

@@ -5,10 +5,6 @@ export type ProjectPresentation = { label: string; detail?: string };
 
 const opaqueProjectPattern = /^[0-9a-f]{8}-[0-9a-f-]{20,}$/i;
 
-export function formatQuerySummary(filters: Pick<UsageFilters, "preset" | "from" | "to" | "source">): string[] {
-  return [filters.preset, filters.source || "allSources", filters.from, filters.to];
-}
-
 export function getActiveQueryChips(filters: Pick<UsageFilters, "source" | "model" | "project">): QueryChip[] {
   return (["source", "model", "project"] as const)
     .filter((key) => Boolean(filters[key]))

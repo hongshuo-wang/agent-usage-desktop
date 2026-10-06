@@ -21,9 +21,10 @@ function shade(tokens: number, peak: number): string {
   return "bg-accent/20";
 }
 
-export default function ActivityHeatmap({ cells, t }: {
+export default function ActivityHeatmap({ cells, t, rangeDetail }: {
   cells: HeatmapCell[];
   t: (key: string) => string;
+  rangeDetail?: string;
 }) {
   if (cells.length === 0) {
     return <div className="py-8 text-center text-xs text-muted-foreground">{t("noUsageData")}</div>;
@@ -34,18 +35,20 @@ export default function ActivityHeatmap({ cells, t }: {
 
   return (
     <div data-testid="activity-heatmap" className="min-w-0 overflow-x-auto">
-      <div className="min-w-[34rem]">
-        <div className="grid grid-cols-[2.25rem_repeat(24,minmax(0,1fr))] gap-[3px]">
-          <span aria-hidden="true" />
+      <div className="min-w-[38rem]">
+        <div className="grid grid-cols-[3.5rem_repeat(24,minmax(0,1fr))] gap-[3px]">
+          <span className="self-end pb-1 text-2xs leading-tight text-muted-foreground" aria-label={t("heatmapAxes")}>
+            {t("heatmapAxes")}
+          </span>
           {HOURS.map((hour) => (
-            <span key={hour} className="text-center text-[9px] tabular-nums text-muted-foreground">
-              {hour % 3 === 0 ? hour : ""}
+            <span key={hour} className="text-center text-2xs tabular-nums text-muted-foreground">
+              {hour % 3 === 0 ? `${String(hour).padStart(2, "0")}:00` : ""}
             </span>
           ))}
 
           {WEEK_ORDER.map((weekday) => (
             <Fragment key={weekday}>
-              <span className="self-center text-[10px] text-muted-foreground">
+              <span className="self-center text-2xs text-muted-foreground">
                 {t(WEEKDAY_KEYS[weekday])}
               </span>
               {HOURS.map((hour) => {
@@ -59,7 +62,7 @@ export default function ActivityHeatmap({ cells, t }: {
                     key={hour}
                     title={detail}
                     aria-label={detail}
-                    className={`h-8 rounded-[2px] ${shade(cell?.tokens ?? 0, peak)}`}
+                    className={`h-7 rounded-[3px] ${shade(cell?.tokens ?? 0, peak)}`}
                   />
                 );
               })}
@@ -67,10 +70,16 @@ export default function ActivityHeatmap({ cells, t }: {
           ))}
         </div>
 
-        <div className="mt-3 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+        {rangeDetail && (
+          <p className="mt-3 text-2xs text-muted-foreground">
+            {t("heatmapRange")}: {rangeDetail}
+          </p>
+        )}
+
+        <div className="mt-3 flex items-center gap-1.5 text-2xs text-muted-foreground">
           <span>{t("heatmapLess")}</span>
           {LEGEND_SHADES.map((step) => (
-            <span key={step} className={`h-3 w-3 rounded-[2px] ${step}`} />
+            <span key={step} className={`h-3 w-3 rounded-[3px] ${step}`} />
           ))}
           <span>{t("heatmapMore")}</span>
         </div>

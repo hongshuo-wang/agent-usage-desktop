@@ -148,6 +148,14 @@ export interface CollectorSetting {
 export interface CollectorSettings {
   collectors: CollectorSetting[];
   pricing_sync_interval: string;
+  /** Days of indexed session content to keep; 0 keeps everything. */
+  session_event_retention_days: number;
+}
+
+export interface PurgeSessionEventsResponse {
+  deleted: number;
+  vacuumed: boolean;
+  bytes_freed: number;
 }
 
 export interface SettingsUpdateResponse {
@@ -172,4 +180,27 @@ export interface PricingCatalog {
 export interface SessionIndexRebuildResponse {
   status: string;
   sources: number;
+}
+
+export interface AppInfo {
+  version: string;
+  repository: string;
+}
+
+export interface UpdateCheck {
+  current_version: string;
+  release_found: boolean;
+  latest_version?: string;
+  update_available?: boolean;
+  url?: string;
+  name?: string;
+  body?: string;
+}
+
+export interface Release {
+  tag_name: string;
+  html_url: string;
+  name: string;
+  body: string;
+  published_at: string;
 }

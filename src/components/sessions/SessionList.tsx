@@ -54,18 +54,14 @@ export default function SessionList({
   onRetry, hasMore, loadingMore, onLoadMore, t,
 }: Props) {
   return (
-    <aside data-testid="session-list" className="flex min-h-0 min-w-0 flex-col border-r border-border bg-card/20">
-      <header className="p-3 pb-2">
-        <h1 className="text-sm font-semibold">{t("sessionRetrospective")}</h1>
-      </header>
-
+    <aside data-testid="session-list" className="flex min-h-0 min-w-0 flex-col border-r border-border">
       <div className="min-h-0 flex-1 overflow-y-auto">
         {loading && sessions.length === 0 ? (
           <p className="px-4 py-10 text-center text-sm text-muted-foreground">{t("loadingSessions")}</p>
         ) : error ? (
           <div className="px-4 py-10 text-center">
-            <p className="break-words text-sm text-red-500">{error}</p>
-            <button type="button" onClick={onRetry} className="mt-3 rounded bg-accent px-3 py-1.5 text-sm font-medium text-white">
+            <p className="break-words text-sm text-danger">{error}</p>
+            <button type="button" onClick={onRetry} className="btn btn-primary mx-auto mt-3">
               {t("retry")}
             </button>
           </div>
@@ -75,7 +71,7 @@ export default function SessionList({
             <p className="mt-1 text-xs text-muted-foreground">{t("adjustSessionFilters")}</p>
           </div>
         ) : (
-          <ol className="space-y-1 px-2 pb-2">
+          <ol className="space-y-0.5 px-2 pb-2">
             {sessions.map((session) => {
               const key = sessionIdentity(session);
               const selected = selectedKey === key;
@@ -91,11 +87,11 @@ export default function SessionList({
                     type="button"
                     onClick={() => onSelect(session)}
                     aria-current={selected ? "true" : undefined}
-                    className={`w-full min-w-0 rounded-md px-3 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${selected ? "bg-accent-dim" : "hover:bg-muted/70"}`}
+                    className={`w-full min-w-0 rounded-lg px-3 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${selected ? "bg-accent-dim" : "hover:bg-subtle"}`}
                   >
                     <div className="flex min-w-0 items-start justify-between gap-2">
                       <span className="min-w-0 flex-1 truncate text-sm font-medium" title={session.cwd || projectPresentation.detail || rawProject}>{displayFolder}</span>
-                      <time className="shrink-0 text-[10px] text-muted-foreground" dateTime={session.last_activity}>
+                      <time className="shrink-0 text-2xs tabular-nums text-muted-foreground" dateTime={session.last_activity}>
                         {relativeTime(session.last_activity, t)}
                       </time>
                     </div>
@@ -103,18 +99,18 @@ export default function SessionList({
                       <span className="shrink-0 uppercase">{session.source}</span>
                       <span className="truncate" title={displayTitle}>{displayTitle}</span>
                     </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px] text-muted-foreground">
+                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs tabular-nums text-muted-foreground">
                       <span>{fmtTokens(session.total_tokens)} {t("tokens")}</span>
                       <span>{fmtCost(session.total_cost)}</span>
                       <span>{session.prompts} {t("prompts")}</span>
                     </div>
-                    <div className="mt-1 text-[10px] text-muted-foreground">
+                    <div className="mt-1 text-2xs text-muted-foreground">
                       {t("duration")}: {formatSessionDuration(session.start_time, session.last_activity, t("sourceDataUnavailable"))}
                     </div>
                     {sessionStatusLabels(session).length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-1">
                         {sessionStatusLabels(session).map((label) => (
-                          <span key={label} className="border-l-2 border-accent px-1.5 text-[10px] text-muted-foreground">{t(label)}</span>
+                          <span key={label} className="chip chip-accent">{t(label)}</span>
                         ))}
                       </div>
                     )}
@@ -127,7 +123,7 @@ export default function SessionList({
       </div>
 
       {hasMore && !error && (
-        <button type="button" onClick={onLoadMore} disabled={loadingMore} className="mx-2 mb-2 rounded-md bg-muted/50 px-3 py-2 text-xs font-medium hover:bg-muted disabled:opacity-50">
+        <button type="button" onClick={onLoadMore} disabled={loadingMore} className="btn btn-quiet mx-2 mb-2">
           {loadingMore ? t("loading") : t("loadMoreSessions")}
         </button>
       )}

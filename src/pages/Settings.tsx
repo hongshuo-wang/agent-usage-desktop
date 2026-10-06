@@ -1,23 +1,41 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, BarChart3, CircleCheck, CircleMinus, Database, MessageSquareText, RefreshCw, Save, Search, Star, StarOff, Upload, X } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, BarChart3, CircleCheck, CircleMinus, Database, ExternalLink, Heart, MessageSquareText, RefreshCw, Save, Search, Star, StarOff, Trash2, Upload, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { fetchAPI } from "../lib/api";
+import PageHeader from "../components/PageHeader";
+import Panel from "../components/Panel";
+import { releaseSummary } from "../lib/releaseSummary";
 import { applyOwnedHydration } from "./settingsHydration";
-import type { SystemSection } from "../lib/systemNavigation";
+import type { SettingsSection } from "../lib/systemNavigation";
 import type {
   CollectorName,
   CollectorSetting,
   CollectorSettings,
   SessionIndexRebuildResponse,
   PricingCatalog,
+  PurgeSessionEventsResponse,
   SettingsUpdateResponse,
+  AppInfo,
+  Release,
+  UpdateCheck,
 } from "../lib/types";
 
 type EditableCollector = CollectorSetting & { pathsText: string };
 type ActionState = "idle" | "pending" | "success" | "error";
 type SaveState = ActionState | "restartPending" | "restartError";
 type RebuildState = ActionState | "restartPending" | "restartError";
+type PurgeMode = "retention" | "all";
+
+function GitHubIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="currentColor" aria-hidden="true">
+      <path d="M12 .7a11.5 11.5 0 0 0-3.64 22.41c.58.11.79-.25.79-.56v-2.23c-3.22.7-3.9-1.37-3.9-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.77 2.72 1.26 3.38.96.1-.75.41-1.26.74-1.55-2.57-.29-5.27-1.28-5.27-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.16 1.18A11 11 0 0 1 12 6.11c.98 0 1.95.13 2.87.39 2.2-1.49 3.16-1.18 3.16-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.71 5.39-5.29 5.68.42.36.79 1.06.79 2.14v3.27c0 .31.21.68.8.56A11.5 11.5 0 0 0 12 .7Z" />
+    </svg>
+  );
+}
+
+const MAX_RETENTION_DAYS = 3650;
 
 const COLLECTOR_LABELS: Record<CollectorName, string> = {
   claude: "claudeCode",
@@ -29,6 +47,17 @@ const COLLECTOR_LABELS: Record<CollectorName, string> = {
 
 const FULL_RETROSPECTIVE = new Set<CollectorName>(["claude", "codex", "pi"]);
 const LITELLM_PRICING_URL = "https://cdn.jsdelivr.net/gh/BerriAI/litellm@main/model_prices_and_context_window.json";
+const REPOSITORY_URL = "https://github.com/hongshuo-wang/agent-usage-desktop";
+const RELEASES_URL = `${REPOSITORY_URL}/releases`;
+const KOFI_URL = "https://ko-fi.com/hongshuo-wang";
+
+function isTrustedExternalUrl(url: string): boolean {
+  return url === LITELLM_PRICING_URL
+    || url === REPOSITORY_URL
+    || url === KOFI_URL
+    || url === RELEASES_URL
+    || url.startsWith(`${RELEASES_URL}/`);
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -40,9 +69,8 @@ function formatPricePerMillion(pricePerToken: number): string {
 
 function openPricingSource(event: React.MouseEvent<HTMLAnchorElement>) {
   event.preventDefault();
-  void invoke("open_external_url", { url: LITELLM_PRICING_URL }).catch(() => {
-    window.open(LITELLM_PRICING_URL, "_blank", "noopener,noreferrer");
-  });
+  if (!isTrustedExternalUrl(LITELLM_PRICING_URL)) return;
+  void invoke("open_external_url", { url: LITELLM_PRICING_URL }).catch(() => {});
 }
 
 function Toggle({
@@ -88,7 +116,7 @@ function SegmentedControl({
           type="button"
           aria-pressed={value === option.value}
           onClick={() => onChange(option.value)}
-          className={`px-3 py-1.5 text-xs font-medium transition-colors ${value === option.value ? "bg-accent text-white" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+          className={`px-3 py-1.5 text-xs font-medium transition-colors ${value === option.value ? "bg-accent text-on-accent" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
         >
           {option.label}
         </button>
@@ -97,7 +125,7 @@ function SegmentedControl({
   );
 }
 
-export default function Settings({ section = "data-sources" }: { section?: SystemSection }) {
+export default function Settings({ section = "data-sources" }: { section?: SettingsSection }) {
   const { t, i18n } = useTranslation();
   const [autostart, setAutostart] = useState(false);
   const [theme, setTheme] = useState(localStorage.getItem("au-theme") || "system");
@@ -135,6 +163,18 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
   const [confirmRebuild, setConfirmRebuild] = useState(false);
   const [rebuildState, setRebuildState] = useState<RebuildState>("idle");
   const [rebuildError, setRebuildError] = useState<string | null>(null);
+  const [retentionInput, setRetentionInput] = useState("30");
+  const [purgeConfirm, setPurgeConfirm] = useState<PurgeMode | null>(null);
+  const [purgeState, setPurgeState] = useState<ActionState>("idle");
+  const [purgeError, setPurgeError] = useState<string | null>(null);
+  const [purgeResult, setPurgeResult] = useState<PurgeSessionEventsResponse | null>(null);
+  const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
+  const [updateCheck, setUpdateCheck] = useState<UpdateCheck | null>(null);
+  const [updateState, setUpdateState] = useState<ActionState>("idle");
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [releases, setReleases] = useState<Release[]>([]);
+  const [releasesState, setReleasesState] = useState<ActionState>("idle");
+  const [wechatQrOpen, setWechatQrOpen] = useState(false);
   const loadControllerRef = useRef<AbortController | null>(null);
   const loadGenerationRef = useRef(0);
   const pricingCatalogGenerationRef = useRef(0);
@@ -148,6 +188,8 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
   const rebuildDialogRef = useRef<HTMLElement>(null);
   const rebuildCancelRef = useRef<HTMLButtonElement>(null);
   const pricingImportCloseRef = useRef<HTMLButtonElement>(null);
+  const wechatQrTriggerRef = useRef<HTMLButtonElement>(null);
+  const wechatQrCloseRef = useRef<HTMLButtonElement>(null);
 
   const loadCollectorSettings = useCallback(async () => {
     loadControllerRef.current?.abort();
@@ -170,6 +212,7 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
         pathsText: collector.paths.join("\n"),
       })));
       setPricingInterval(response.pricing_sync_interval);
+      setRetentionInput(String(response.session_event_retention_days ?? 30));
     } catch (error) {
       if (!isCurrent()) return;
       setCollectors(null);
@@ -243,10 +286,42 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
   }, [pricingImportOpen]);
 
   useEffect(() => {
+    if (wechatQrOpen) wechatQrCloseRef.current?.focus();
+  }, [wechatQrOpen]);
+
+  useEffect(() => {
     if (section !== "pricing") return;
     void loadPricingCatalog();
     return () => { pricingCatalogGenerationRef.current += 1; };
   }, [loadPricingCatalog, section]);
+
+  useEffect(() => {
+    if (section !== "about") return;
+    let active = true;
+    void fetchAPI<AppInfo>("app-info", {}).then((info) => {
+      if (active) setAppInfo(info);
+    }).catch(() => {});
+    setReleasesState("pending");
+    void fetchAPI<UpdateCheck>("update-check", {}).then((release) => {
+      if (!active) return;
+      setUpdateCheck(release);
+      setUpdateState("success");
+      setUpdateError(null);
+    }).catch(() => {
+      if (!active) return;
+      setUpdateState("error");
+      setUpdateError(i18n.language.startsWith("zh") ? "暂时无法获取更新信息，请稍后再试。" : "Updates are temporarily unavailable. Please try again later.");
+    });
+    void fetchAPI<Release[]>("releases", {}).then((releaseList) => {
+      if (!active) return;
+      setReleases(releaseList);
+      setReleasesState("success");
+    }).catch(() => {
+      if (!active) return;
+      setReleasesState("error");
+    });
+    return () => { active = false; };
+  }, [section, i18n.language]);
 
   const visiblePricingModels = useMemo(() => {
     const search = pricingCatalogSearch.trim().toLowerCase();
@@ -321,6 +396,38 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
     setSaveError(null);
   };
 
+  // The input is kept as text so an empty field is an error instead of silently
+  // turning into "keep everything" (0).
+  const retentionDays = Number(retentionInput);
+  const retentionValid = retentionInput.trim() !== ""
+    && Number.isInteger(retentionDays)
+    && retentionDays >= 0
+    && retentionDays <= MAX_RETENTION_DAYS;
+
+  // Purging runs immediately and independently of the automatic retention pass.
+  const purgeSessionEvents = async (mode: PurgeMode) => {
+    setPurgeState("pending");
+    setPurgeError(null);
+    setPurgeResult(null);
+    try {
+      const response = await fetchAPI<PurgeSessionEventsResponse>(
+        "maintenance/purge-session-events",
+        {},
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode, days: retentionDays, vacuum: true }),
+        },
+      );
+      setPurgeResult(response);
+      setPurgeState("success");
+      setPurgeConfirm(null);
+    } catch (error) {
+      setPurgeState("error");
+      setPurgeError(errorMessage(error));
+    }
+  };
+
   const saveCollectorSettings = async () => {
     if (!collectors) return;
     setSaveState("pending");
@@ -331,6 +438,7 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
         paths: pathsText.split(/\r?\n/).map((path) => path.trim()).filter(Boolean),
       })),
       pricing_sync_interval: pricingInterval,
+      session_event_retention_days: retentionDays,
     };
     try {
       await fetchAPI<SettingsUpdateResponse>("settings/collectors", {}, {
@@ -392,6 +500,24 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
       const message = errorMessage(error);
       setPricingSyncError(message.includes("404") ? t("pricingRefreshEndpointUnavailable") : message);
     }
+  };
+
+  const checkForUpdates = async () => {
+    if (updateState === "pending") return;
+    setUpdateState("pending");
+    setUpdateError(null);
+    try {
+      setUpdateCheck(await fetchAPI<UpdateCheck>("update-check", {}));
+      setUpdateState("success");
+    } catch {
+      setUpdateState("error");
+      setUpdateError(t("updateCheckFailed"));
+    }
+  };
+
+  const openExternal = (url: string) => {
+    if (!isTrustedExternalUrl(url)) return;
+    void invoke("open_external_url", { url }).catch(() => {});
   };
 
   const togglePinnedModel = (model: string) => {
@@ -457,17 +583,14 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
 
   return (
     <div className="min-w-0 w-full max-w-5xl pb-8">
-      {section === "data-sources" && <section id="data-sources">
-        <div className="mb-4">
-          <h2 className="text-base font-semibold tracking-tight">{t("collectorSettings")}</h2>
-          <p className="mt-1 text-sm leading-5 text-muted-foreground">{t("collectorSettingsDetail")}</p>
-        </div>
+      {section === "data-sources" && <section id="data-sources" className="space-y-4">
+        <PageHeader title={t("collectorSettings")} hint={t("collectorSettingsDetail")} />
         {settingsLoading ? (
           <p className="py-8 text-sm text-muted-foreground">{t("loadingSettings")}</p>
         ) : settingsError ? (
           <div className="py-6">
-            <p className="break-words text-sm text-red-500">{settingsError}</p>
-            <button type="button" onClick={() => { void loadCollectorSettings(); }} className="mt-3 inline-flex items-center gap-2 rounded border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted">
+            <p className="break-words text-sm text-danger">{settingsError}</p>
+            <button type="button" onClick={() => { void loadCollectorSettings(); }} className="btn btn-quiet mt-3">
               <RefreshCw className="h-4 w-4" /> {t("retry")}
             </button>
           </div>
@@ -477,12 +600,12 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
               const label = t(COLLECTOR_LABELS[collector.name]);
               const supportsReplay = FULL_RETROSPECTIVE.has(collector.name);
               return (
-                <div key={collector.name} className="grid min-w-0 gap-4 rounded-md bg-card/55 px-4 py-4 lg:grid-cols-[14rem_minmax(0,1fr)_10rem]">
+                <div key={collector.name} className="panel grid min-w-0 gap-4 px-4 py-4 lg:grid-cols-[14rem_minmax(0,1fr)_10rem]">
                   <div className="min-w-0">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                       <h3 className="text-sm font-medium">{label}</h3>
-                      <p className="mt-1 text-[10px] text-muted-foreground tabular-nums">
+                      <p className="mt-1 text-2xs text-muted-foreground tabular-nums">
                         {t("collectorCapabilityCount", { supported: supportsReplay ? 2 : 1, total: 2 })}
                       </p>
                       </div>
@@ -493,36 +616,36 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
                       />
                     </div>
                     <div className="mt-3 flex flex-wrap gap-1.5" aria-label={t("collectorCapabilities")}>
-                      <span className="inline-flex items-center gap-1.5 rounded bg-accent-dim px-2 py-1 text-[10px] font-medium text-accent">
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-accent-dim px-2 py-1 text-2xs font-medium text-accent">
                         <BarChart3 className="h-3 w-3" aria-hidden="true" />
                         {t("tokenUsageCapability")}
                         <CircleCheck className="h-3 w-3" aria-hidden="true" />
                       </span>
-                      <span className={`inline-flex items-center gap-1.5 rounded px-2 py-1 text-[10px] font-medium ${supportsReplay ? "bg-accent-dim text-accent" : "bg-muted text-muted-foreground"}`}>
+                      <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-2xs font-medium ${supportsReplay ? "bg-accent-dim text-accent" : "bg-muted text-muted-foreground"}`}>
                         <MessageSquareText className="h-3 w-3" aria-hidden="true" />
                         {t("sessionReplayCapability")}
                         {supportsReplay ? <CircleCheck className="h-3 w-3" aria-hidden="true" /> : <CircleMinus className="h-3 w-3" aria-hidden="true" />}
                       </span>
                     </div>
                   </div>
-                  <label className="min-w-0 text-[10px] text-muted-foreground">
+                  <label className="min-w-0 text-2xs text-muted-foreground">
                     <span className="mb-1 block">{t("collectorPaths")}</span>
                     <textarea
                       aria-label={`${t("collectorPaths")} ${label}`}
                       value={collector.pathsText}
                       onChange={(event) => updateCollector(collector.name, { pathsText: event.target.value })}
                       rows={Math.max(2, collector.pathsText.split(/\r?\n/).length)}
-                      className="w-full resize-y rounded border border-border bg-card px-2.5 py-2 font-mono text-xs text-foreground outline-none focus:border-accent"
+                      className="field h-auto py-2 font-mono resize-y"
                     />
                   </label>
-                  <label className="min-w-0 text-[10px] text-muted-foreground">
+                  <label className="min-w-0 text-2xs text-muted-foreground">
                     <span className="mb-1 block">{t("scanInterval")}</span>
                     <input
                       type="text"
                       aria-label={`${t("scanInterval")} ${label}`}
                       value={collector.scan_interval}
                       onChange={(event) => updateCollector(collector.name, { scan_interval: event.target.value })}
-                      className="h-9 w-full rounded border border-border bg-card px-2.5 font-mono text-xs text-foreground outline-none focus:border-accent"
+                      className="field"
                     />
                   </label>
                 </div>
@@ -534,7 +657,7 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
                 aria-label={t("saveCollectorSettings")}
                 onClick={() => { void saveCollectorSettings(); }}
                 disabled={saveState === "pending" || saveState === "restartPending"}
-                className="inline-flex h-9 items-center gap-2 rounded bg-accent px-3 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-50"
+                className="btn btn-primary"
               >
                 <Save className="h-4 w-4" /> {saveState === "pending" ? t("savingSettings") : t("save")}
               </button>
@@ -542,67 +665,62 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
             {saveState === "success" && <p className="pb-3 text-xs text-green">{t("settingsSavedAndRestarted")}</p>}
             {saveState === "restartError" && (
               <div className="flex flex-wrap items-center gap-3 pb-3">
-                <p className="text-xs text-amber-600">{t("settingsSavedRestartFailed")}</p>
-                <button type="button" onClick={() => { void restartAfterSave(); }} className="inline-flex items-center gap-2 rounded border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted">
+                <p className="text-xs text-warning">{t("settingsSavedRestartFailed")}</p>
+                <button type="button" onClick={() => { void restartAfterSave(); }} className="btn btn-quiet">
                   <RefreshCw className="h-4 w-4" /> {t("retryRestart")}
                 </button>
               </div>
             )}
-            {saveError && <p className="pb-3 break-words text-xs text-red-500">{saveError}</p>}
+            {saveError && <p className="pb-3 break-words text-xs text-danger">{saveError}</p>}
           </div>
         ) : null}
       </section>}
 
-      {section === "pricing" && <section id="pricing">
-        <h2 className="text-base font-semibold tracking-tight">{t("pricingSourceTitle")}</h2>
-        <p className="mt-1 max-w-2xl text-sm leading-5 text-muted-foreground">{t("pricingSourceDetail")}</p>
+      {section === "pricing" && <section id="pricing" className="space-y-5">
+        <PageHeader title={t("pricingSourceTitle")} hint={t("pricingSourceDetail")} />
 
-        <div className="mt-5 rounded-md bg-card/60 p-4">
-          <div className="flex min-w-0 flex-wrap items-start justify-between gap-4">
-            <div>
-              <p className="text-sm font-medium">{t("defaultPricingCatalog")}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{t("defaultPricingCatalogDetail")}</p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                aria-label={t("refreshPricing")}
-                onClick={() => { void refreshPricing(); }}
-                disabled={pricingSyncState === "pending"}
-                className="inline-flex h-9 items-center gap-2 rounded bg-accent px-3 text-xs font-medium text-white transition-colors hover:bg-accent/90 active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <RefreshCw className={`h-4 w-4 ${pricingSyncState === "pending" ? "animate-spin" : ""}`} />
-                {pricingSyncState === "pending" ? t("refreshingPricing") : t("refreshPricing")}
-              </button>
-            </div>
-          </div>
-
-          <dl className="mt-4 grid gap-px overflow-hidden rounded border border-border bg-border sm:grid-cols-3">
-            <div className="bg-card px-3 py-3">
-              <dt className="text-[10px] text-muted-foreground">{t("pricingProvider")}</dt>
+        <Panel
+          title={t("defaultPricingCatalog")}
+          hint={t("defaultPricingCatalogDetail")}
+          actions={
+            <button
+              type="button"
+              aria-label={t("refreshPricing")}
+              onClick={() => { void refreshPricing(); }}
+              disabled={pricingSyncState === "pending"}
+              className="btn btn-primary"
+            >
+              <RefreshCw className={`h-4 w-4 ${pricingSyncState === "pending" ? "animate-spin" : ""}`} />
+              {pricingSyncState === "pending" ? t("refreshingPricing") : t("refreshPricing")}
+            </button>
+          }
+        >
+          <dl className="grid gap-3 sm:grid-cols-3">
+            <div className="inset px-3 py-3">
+              <dt className="text-2xs text-muted-foreground">{t("pricingProvider")}</dt>
               <dd className="mt-1 text-xs font-medium">{pricingCatalog?.source || "LiteLLM"}</dd>
             </div>
-            <div className="bg-card px-3 py-3">
-              <dt className="text-[10px] text-muted-foreground">{t("pricingLastUpdated")}</dt>
-              <dd className="mt-1 font-mono text-xs tabular-nums">
+            <div className="inset px-3 py-3">
+              <dt className="text-2xs text-muted-foreground">{t("pricingLastUpdated")}</dt>
+              <dd className="mt-1 text-xs tabular-nums">
                 {pricingCatalog?.pricing_last_synced_at
                   ? new Date(pricingCatalog.pricing_last_synced_at).toLocaleString(i18n.language)
                   : pricingCatalogState === "pending" ? t("loadingPricing") : t("notAvailable")}
               </dd>
             </div>
-            <div className="bg-card px-3 py-3">
-              <dt className="text-[10px] text-muted-foreground">{t("pricingModels")}</dt>
-              <dd className="mt-1 font-mono text-xs font-semibold tabular-nums">
+            <div className="inset px-3 py-3">
+              <dt className="text-2xs text-muted-foreground">{t("pricingModels")}</dt>
+              <dd className="mt-1 text-xs font-semibold tabular-nums">
                 {pricingCatalog ? pricingCatalog.models.length : pricingCatalogState === "pending" ? "..." : "-"}
               </dd>
             </div>
           </dl>
 
           {pricingSyncState === "success" && <p className="mt-3 text-xs text-green">{t("pricingRefreshed")}</p>}
-          {pricingSyncError && <p className="mt-3 break-words text-xs text-red-500">{t("pricingRefreshFailed")}: {pricingSyncError}</p>}
-        </div>
+          {pricingSyncError && <p className="mt-3 break-words text-xs text-danger">{t("pricingRefreshFailed")}: {pricingSyncError}</p>}
+        </Panel>
 
-        <section className="mt-6" aria-labelledby="pricing-catalog-title">
+        <section className="space-y-3" aria-labelledby="pricing-catalog-title">
           <div className="flex min-w-0 flex-wrap items-end justify-between gap-3">
             <div>
               <h3 id="pricing-catalog-title" className="text-sm font-semibold">{t("pricingCatalogTitle")}</h3>
@@ -616,22 +734,22 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
                 value={pricingCatalogSearch}
                 onChange={(event) => setPricingCatalogSearch(event.target.value)}
                 placeholder={t("searchPricingModels")}
-                className="h-9 w-full rounded border border-border bg-card pl-8 pr-2.5 text-xs text-foreground outline-none focus:border-accent"
+                className="field pl-8 pr-2.5"
               />
             </label>
           </div>
 
-          <div className="mt-3 flex h-[clamp(18rem,48vh,32rem)] min-w-0 flex-col overflow-hidden rounded border border-border bg-card">
+          <div className="flex h-[clamp(18rem,48vh,32rem)] min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-card">
             {pricingCatalogState === "pending" && (
               <p className="m-auto text-sm text-muted-foreground">{t("loadingPricing")}</p>
             )}
             {pricingCatalogState === "error" && (
               <div className="m-auto px-5 text-center">
-                <p className="break-words text-sm text-red-500">{pricingCatalogError}</p>
+                <p className="break-words text-sm text-danger">{pricingCatalogError}</p>
                 <button
                   type="button"
                   onClick={() => { void loadPricingCatalog(); }}
-                  className="mt-3 inline-flex items-center gap-2 rounded border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
+                  className="btn btn-quiet mx-auto mt-3"
                 >
                   <RefreshCw className="h-3.5 w-3.5" /> {t("retry")}
                 </button>
@@ -639,12 +757,12 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
             )}
             {pricingCatalogState === "success" && pricingCatalog && (
               <>
-                <div className="border-b border-border px-3 py-2 text-[10px] text-muted-foreground">
+                <div className="border-b border-border px-3 py-2 text-2xs text-muted-foreground">
                   {t("pricingModelCount", { count: visiblePricingModels.length })}
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto">
                   <table className="w-full min-w-[46rem] text-left text-xs">
-                    <thead className="sticky top-0 z-10 bg-muted text-muted-foreground">
+                    <thead className="sticky top-0 z-10 bg-subtle text-muted-foreground">
                       <tr>
                         <th className="w-12 px-3 py-2 font-medium">{t("pinned")}</th>
                         <th className="px-3 py-2 font-medium">{t("model")}</th>
@@ -656,7 +774,7 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
                     </thead>
                     <tbody className="divide-y divide-border">
                       {visiblePricingModels.map((entry) => (
-                        <tr key={entry.model} className="hover:bg-muted/50">
+                        <tr key={entry.model} className="hover:bg-subtle">
                           <td className="px-3 py-2">
                             <button
                               type="button"
@@ -669,10 +787,10 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
                             </button>
                           </td>
                           <td className="max-w-[24rem] truncate px-3 py-2 font-mono" title={entry.model}>{entry.model}</td>
-                          <td className="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums">{formatPricePerMillion(entry.input_cost_per_token)}</td>
-                          <td className="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums">{formatPricePerMillion(entry.output_cost_per_token)}</td>
-                          <td className="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums">{formatPricePerMillion(entry.cache_read_input_token_cost)}</td>
-                          <td className="whitespace-nowrap px-3 py-2 text-right font-mono tabular-nums">{formatPricePerMillion(entry.cache_creation_input_token_cost)}</td>
+                          <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{formatPricePerMillion(entry.input_cost_per_token)}</td>
+                          <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{formatPricePerMillion(entry.output_cost_per_token)}</td>
+                          <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{formatPricePerMillion(entry.cache_read_input_token_cost)}</td>
+                          <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{formatPricePerMillion(entry.cache_creation_input_token_cost)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -686,15 +804,15 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
           </div>
         </section>
 
-        <div className="mt-5 flex min-w-0 flex-wrap items-end justify-between gap-4">
-          <label className="w-48 text-[10px] text-muted-foreground">
+        <div className="flex min-w-0 flex-wrap items-end justify-between gap-4">
+          <label className="w-48 text-2xs text-muted-foreground">
             <span className="mb-1 block">{t("pricingSyncInterval")}</span>
             <input
               type="text"
               aria-label={t("pricingSyncInterval")}
               value={pricingInterval}
               onChange={(event) => { setPricingInterval(event.target.value); setSaveState("idle"); setSaveError(null); }}
-              className="h-9 w-full rounded border border-border bg-card px-2.5 font-mono text-xs text-foreground outline-none focus:border-accent"
+              className="field"
             />
           </label>
           <button
@@ -702,13 +820,13 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
             aria-label={t("savePricingSettings")}
             onClick={() => { void saveCollectorSettings(); }}
             disabled={saveState === "pending" || saveState === "restartPending" || settingsLoading}
-            className="inline-flex h-9 items-center gap-2 rounded border border-border px-3 text-xs font-medium transition-colors hover:bg-muted active:translate-y-px disabled:opacity-50"
+            className="btn btn-quiet"
           >
             <Save className="h-4 w-4" /> {saveState === "pending" ? t("savingSettings") : t("save")}
           </button>
         </div>
         {saveState === "success" && <p className="mt-2 text-xs text-green">{t("settingsSavedAndRestarted")}</p>}
-        {saveError && <p className="mt-2 break-words text-xs text-red-500">{saveError}</p>}
+        {saveError && <p className="mt-2 break-words text-xs text-danger">{saveError}</p>}
 
         <button
           type="button"
@@ -757,7 +875,7 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
             >
               {t("pricingSourceLink")}
             </a>
-            <label className="mt-4 block min-w-0 text-[10px] text-muted-foreground">
+            <label className="mt-4 block min-w-0 text-2xs text-muted-foreground">
               <span className="mb-1 block">{t("pricingFile")}</span>
               <input
                 ref={pricingFileInputRef}
@@ -769,7 +887,7 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
                   setPricingImportState("idle");
                   setPricingImportError(null);
                 }}
-                className="block h-9 w-full min-w-0 cursor-pointer rounded border border-border bg-card px-2 py-1.5 text-xs text-foreground file:mr-2 file:rounded file:border-0 file:bg-muted file:px-2 file:py-1 file:text-xs file:font-medium"
+                className="block h-9 w-full min-w-0 cursor-pointer rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground file:mr-2 file:rounded file:border-0 file:bg-muted file:px-2 file:py-1 file:text-xs file:font-medium"
               />
             </label>
             <div className="mt-4 flex justify-end">
@@ -778,46 +896,239 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
                 aria-label={t("importPricing")}
                 onClick={() => { void importPricing(); }}
                 disabled={!pricingFile || pricingImportState === "pending"}
-                className="inline-flex h-9 items-center gap-2 rounded bg-accent px-3 text-xs font-medium text-white hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+                className="btn btn-primary"
               >
                 <Upload className="h-4 w-4" />
                 {pricingImportState === "pending" ? t("importingPricing") : t("importPricing")}
               </button>
             </div>
             {pricingImportState === "success" && <p className="mt-3 text-xs text-green">{t("pricingImported")}</p>}
-            {pricingImportError && <p className="mt-3 break-words text-xs text-red-500">{t("pricingImportFailed")}: {pricingImportError}</p>}
+            {pricingImportError && <p className="mt-3 break-words text-xs text-danger">{t("pricingImportFailed")}: {pricingImportError}</p>}
           </section>
         </div>
       )}
 
-      {section === "index-diagnostics" && <section id="index-diagnostics">
-        <h2 className="text-base font-semibold tracking-tight">{t("sessionIndex")}</h2>
-        <p className="mt-1 text-sm leading-5 text-muted-foreground">{t("sessionIndexDetail")}</p>
+      {section === "index-diagnostics" && <section id="index-diagnostics" className="space-y-4">
+        <PageHeader title={t("sessionIndex")} hint={t("sessionIndexDetail")} />
+        <Panel bodyClassName="p-4">
         <button
           type="button"
           ref={rebuildTriggerRef}
           aria-label={t("rebuildSessionIndex")}
           aria-disabled={rebuildState === "pending" || rebuildState === "restartPending"}
           onClick={() => { if (rebuildState !== "pending" && rebuildState !== "restartPending") setConfirmRebuild(true); }}
-          className="mt-4 inline-flex items-center gap-2 rounded border border-border px-3 py-2 text-xs font-medium hover:bg-muted aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+          className="btn btn-quiet w-fit aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
         >
           <Database className="h-4 w-4" /> {rebuildState === "pending" || rebuildState === "restartPending" ? t("rebuildingIndex") : t("rebuildSessionIndex")}
         </button>
         {rebuildState === "success" && <p className="mt-3 text-xs text-green">{t("rebuildStartedAndRestarted")}</p>}
         {rebuildState === "restartError" && (
           <div className="mt-3 flex flex-wrap items-center gap-3">
-            <p className="text-xs text-amber-600">{t("rebuildCompletedRestartFailed")}</p>
-            <button type="button" onClick={() => { void restartAfterRebuild(); }} className="inline-flex items-center gap-2 rounded border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted">
+            <p className="text-xs text-warning">{t("rebuildCompletedRestartFailed")}</p>
+            <button type="button" onClick={() => { void restartAfterRebuild(); }} className="btn btn-quiet">
               <RefreshCw className="h-4 w-4" /> {t("retryRestart")}
             </button>
           </div>
         )}
-        {rebuildError && <p className="mt-3 break-words text-xs text-red-500">{rebuildError}</p>}
+        {rebuildError && <p className="mt-3 break-words text-xs text-danger">{rebuildError}</p>}
+        </Panel>
       </section>}
 
-      {section === "preferences" && <section id="preferences">
-        <h2 className="mb-4 text-base font-semibold tracking-tight">{t("desktopPreferences")}</h2>
-        <div className="pb-5">
+      {section === "session-content" && <section id="session-content" className="space-y-4">
+        <PageHeader title={t("sessionContentTitle")} hint={t("sessionContentDetail")} />
+        <Panel
+          title={t("sessionRetentionDays")}
+          hint={t("sessionRetentionHint")}
+          actions={
+            <button
+              type="button"
+              aria-label={t("saveCollectorSettings")}
+              onClick={() => { void saveCollectorSettings(); }}
+              disabled={!retentionValid || saveState === "pending" || saveState === "restartPending"}
+              className="btn btn-primary"
+            >
+              <Save className="h-4 w-4" /> {saveState === "pending" ? t("savingSettings") : t("save")}
+            </button>
+          }
+        >
+          <input
+            type="number"
+            aria-label={t("sessionRetentionDays")}
+            value={retentionInput}
+            min={0}
+            max={MAX_RETENTION_DAYS}
+            onChange={(event) => {
+              setRetentionInput(event.target.value);
+              setSaveState("idle");
+              setSaveError(null);
+            }}
+            className="field w-28"
+          />
+          {!retentionValid && <p className="mt-2 text-xs text-danger">{t("sessionRetentionInvalid", { max: MAX_RETENTION_DAYS })}</p>}
+          {saveState === "success" && <p className="mt-2 text-xs text-green">{t("settingsSavedAndRestarted")}</p>}
+          {saveState === "restartError" && (
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <p className="text-xs text-warning">{t("settingsSavedRestartFailed")}</p>
+              <button type="button" onClick={() => { void restartAfterSave(); }} className="btn btn-quiet">
+                <RefreshCw className="h-4 w-4" /> {t("retryRestart")}
+              </button>
+            </div>
+          )}
+          {saveError && <p className="mt-2 break-words text-xs text-danger">{saveError}</p>}
+        </Panel>
+
+        <Panel title={t("sessionPurgeTitle")} hint={t("sessionPurgeDetail")}>
+          {purgeConfirm === null ? (
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={!retentionValid || purgeState === "pending"}
+                onClick={() => { setPurgeConfirm("retention"); }}
+                className="btn btn-quiet"
+              >
+                <Trash2 className="h-4 w-4" /> {t("sessionPurgeRetentionAction", { days: retentionDays })}
+              </button>
+              <button
+                type="button"
+                disabled={purgeState === "pending"}
+                onClick={() => { setPurgeConfirm("all"); }}
+                className="btn btn-danger"
+              >
+                <Trash2 className="h-4 w-4" /> {t("sessionPurgeAllAction")}
+              </button>
+            </div>
+          ) : (
+            <div role="alert" className="alert-danger p-3">
+              <p className="text-xs leading-5">
+                {purgeConfirm === "retention"
+                  ? t("sessionPurgeRetentionConfirm", { days: retentionDays })
+                  : t("sessionPurgeAllConfirm")}
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={purgeState === "pending"}
+                  onClick={() => { void purgeSessionEvents(purgeConfirm); }}
+                  className="btn btn-danger-solid"
+                >
+                  {purgeState === "pending" ? t("purgingSessionContent") : t("confirmPurge")}
+                </button>
+                <button
+                  type="button"
+                  disabled={purgeState === "pending"}
+                  onClick={() => { setPurgeConfirm(null); }}
+                  className="btn btn-quiet"
+                >
+                  {t("cancel")}
+                </button>
+              </div>
+            </div>
+          )}
+          {purgeState === "success" && purgeResult && (
+            <div className="mt-3 text-xs text-green">
+              <p>{t("sessionPurgeDone", { deleted: purgeResult.deleted })}</p>
+              {purgeResult.bytes_freed > 0 && (
+                <p>{t("sessionPurgeFreed", { size: `${(purgeResult.bytes_freed / 1048576).toFixed(1)} MB` })}</p>
+              )}
+            </div>
+          )}
+          {purgeError && <p className="mt-3 break-words text-xs text-danger">{purgeError}</p>}
+        </Panel>
+      </section>}
+
+      {section === "about" && <section id="about" className="about-page w-full max-w-4xl space-y-6">
+        <PageHeader title={t("aboutTitle")} hint={t("aboutDetail")} />
+        <div className="about-info-grid grid gap-px overflow-hidden border-y border-border bg-border sm:grid-cols-[1.15fr_0.85fr]">
+          <section className="about-info-pane about-version bg-background p-5 sm:p-6" aria-labelledby="about-version-title">
+            <h2 id="about-version-title" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("appInfoTitle")}</h2>
+            <div className="mt-3 flex flex-wrap items-end justify-between gap-4">
+              <div>
+                <p className="text-2xl font-semibold tracking-tight">{appInfo?.version || "..."}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{t("author")}: Hongshuo Wang</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <button type="button" className="btn btn-primary" onClick={() => { void checkForUpdates(); }} disabled={updateState === "pending"}>
+                  <RefreshCw className={`h-4 w-4 ${updateState === "pending" ? "animate-spin" : ""}`} />
+                  {updateState === "pending" ? t("checkingForUpdates") : t("checkForUpdates")}
+                </button>
+                {updateState === "success" && updateCheck && (
+                  !updateCheck.release_found ? <span className="text-xs text-muted-foreground">{t("noPublicRelease")}</span>
+                    : updateCheck.update_available ? (
+                      <button type="button" className="btn btn-quiet" onClick={() => { if (updateCheck.url) openExternal(updateCheck.url); }} disabled={!updateCheck.url}>
+                        <ExternalLink className="h-4 w-4" /> {t("updateAvailable", { version: updateCheck.latest_version })}
+                      </button>
+                    ) : <span className="text-xs text-green">{t("upToDate")}</span>
+                )}
+                {updateError && <span className="break-words text-xs text-danger">{updateError}</span>}
+              </div>
+            </div>
+          </section>
+          <section className="about-info-pane bg-card p-5 sm:p-6" aria-labelledby="about-links-title">
+            <div className="flex items-center justify-between gap-3">
+              <h2 id="about-links-title" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("githubRepository")}</h2>
+              <button type="button" className="icon-button repository-action text-muted-foreground" aria-label={t("githubRepository")} title={t("githubRepository")} onClick={() => { if (appInfo) openExternal(appInfo.repository); }} disabled={!appInfo}>
+                <GitHubIcon className="h-5 w-5" />
+              </button>
+            </div>
+            <p className="mt-3 break-all text-sm font-medium">hongshuo-wang/agent-usage-desktop</p>
+            <p className="mt-2 text-xs text-muted-foreground">{t("author")}: Hongshuo Wang</p>
+          </section>
+        </div>
+        <section className="release-history" aria-labelledby="release-history-title">
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <h2 id="release-history-title" className="text-sm font-semibold">{t("changelogTitle")}</h2>
+              <p className="mt-1 text-xs text-muted-foreground">{t("changelogDetail")}</p>
+            </div>
+            <button type="button" className="icon-button text-muted-foreground hover:text-accent" aria-label={t("viewAllReleases")} title={t("viewAllReleases")} onClick={() => openExternal(RELEASES_URL)}>
+              <ArrowUpRight className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="mt-3 border-y border-border">
+            {releasesState === "pending" && <p className="py-5 text-xs text-muted-foreground">{t("loadingReleases")}</p>}
+            {releasesState === "error" && <p className="py-5 text-xs text-muted-foreground">{t("releasesUnavailable")}</p>}
+            {releasesState === "success" && releases.length === 0 && <p className="py-5 text-xs text-muted-foreground">{t("noReleases")}</p>}
+            {releasesState === "success" && releases.map((release) => (
+              <button key={release.html_url} type="button" className="release-link" onClick={() => openExternal(release.html_url)}>
+                <span className="release-link-copy">
+                  <span className="release-link-title">{release.tag_name}{release.name && release.name !== release.tag_name ? ` · ${release.name}` : ""}</span>
+                  <span className="release-link-detail">{new Date(release.published_at).toLocaleDateString(i18n.language.startsWith("zh") ? "zh-CN" : "en-US")}</span>
+                  {releaseSummary(release.body, i18n.language).map((summary) => (
+                    <span key={summary} className="release-link-summary">{summary}</span>
+                  ))}
+                </span>
+                <span className="release-link-icon" aria-hidden="true"><ArrowUpRight className="h-5 w-5" /></span>
+              </button>
+            ))}
+          </div>
+        </section>
+        <Panel title={t("supportTitle")} hint={t("supportDetail")}>
+          <div className="support-grid grid overflow-hidden border-y border-border sm:grid-cols-2 sm:divide-x sm:divide-border">
+            <section className="support-option flex items-center gap-4 py-5 sm:pr-6" aria-labelledby="wechat-support-title">
+              <button ref={wechatQrTriggerRef} type="button" className="qr-trigger shrink-0 rounded-lg bg-white p-1 outline-none focus-visible:ring-2 focus-visible:ring-accent" aria-label={t("zoomWechatQr")} onClick={() => setWechatQrOpen(true)}>
+                <img src="/support/wechat.png" alt="" className="h-28 w-28 object-contain" />
+              </button>
+              <div className="min-w-0">
+                <h3 id="wechat-support-title" className="text-sm font-semibold">{t("wechatSupport")}</h3>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">{t("wechatSupportDetail")}</p>
+              </div>
+            </section>
+            <section className="support-option flex min-h-36 flex-col justify-between border-t border-border py-5 sm:border-t-0 sm:pl-6" aria-labelledby="kofi-support-title">
+              <div>
+                <h3 id="kofi-support-title" className="text-sm font-semibold">Ko-fi</h3>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">{t("kofiSupportDetail")}</p>
+              </div>
+              <button type="button" className="btn btn-quiet support-kofi mt-5 self-start" onClick={() => openExternal(KOFI_URL)}>
+                <Heart className="h-4 w-4 support-heart" /> {t("openKofi")}
+              </button>
+            </section>
+          </div>
+        </Panel>
+      </section>}
+
+      {section === "preferences" && <section id="preferences" className="space-y-5">
+        <PageHeader title={t("desktopPreferences")} />
+        <div>
           <h3 className="mb-4 text-sm font-semibold">{t("appearanceAndLanguage")}</h3>
           <div className="grid gap-5 sm:grid-cols-2">
             <div>
@@ -839,17 +1150,17 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
           </div>
         </div>
         <div className="space-y-2">
-          <div className="flex items-center justify-between gap-4 rounded-md bg-card/55 px-3 py-3">
+          <div className="inset flex items-center justify-between gap-4 px-3 py-3">
             <span className="text-sm">{t("autostart")}</span>
             <Toggle checked={autostart} disabled={autostartPending} label={t("autostart")} onChange={() => { void handleAutostartToggle(); }} />
           </div>
-          {autostartError && <p className="py-2 text-xs text-red-500">{t("autostartUpdateFailed")}</p>}
-          <div className="flex items-center justify-between gap-4 rounded-md bg-card/55 px-3 py-3">
+          {autostartError && <p className="py-2 text-xs text-danger">{t("autostartUpdateFailed")}</p>}
+          <div className="inset flex items-center justify-between gap-4 px-3 py-3">
             <span className="text-sm">{t("notification")}</span>
             <Toggle checked={notificationsEnabled} disabled={notificationsPending} label={t("notification")} onChange={() => { void handleNotificationsToggle(); }} />
           </div>
-          {notificationError && <p className="py-2 text-xs text-red-500">{t("notificationUpdateFailed")}</p>}
-          <label className="block rounded-md bg-card/55 px-3 py-3 text-xs text-muted-foreground">
+          {notificationError && <p className="py-2 text-xs text-danger">{t("notificationUpdateFailed")}</p>}
+          <label className="inset block px-3 py-3 text-xs text-muted-foreground">
             <span className="mb-1 block">{t("dailyCostThreshold")}</span>
             <span className="flex items-center gap-2">
               <input
@@ -859,7 +1170,7 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
                 min={0}
                 step={1}
                 onChange={(event) => handleThresholdChange(Number(event.target.value))}
-                className="h-9 w-28 rounded border border-border bg-card px-2.5 font-mono text-sm text-foreground"
+                className="field w-28"
               />
               <span>USD</span>
             </span>
@@ -867,19 +1178,45 @@ export default function Settings({ section = "data-sources" }: { section?: Syste
         </div>
       </section>}
 
+      {wechatQrOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-5" role="presentation" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) {
+            setWechatQrOpen(false);
+            wechatQrTriggerRef.current?.focus();
+          }
+        }}>
+          <section role="dialog" aria-modal="true" aria-labelledby="wechat-qr-dialog-title" className="relative w-full max-w-md rounded-lg bg-white p-4 shadow-xl" onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              setWechatQrOpen(false);
+              wechatQrTriggerRef.current?.focus();
+            }
+          }}>
+            <div className="mb-3 flex items-center justify-between gap-3 text-[#0e1723]">
+              <h2 id="wechat-qr-dialog-title" className="text-sm font-semibold">{t("wechatSupport")}</h2>
+              <button ref={wechatQrCloseRef} type="button" className="icon-button" aria-label={t("closeQrPreview")} onClick={() => {
+                setWechatQrOpen(false);
+                wechatQrTriggerRef.current?.focus();
+              }}>
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <img src="/support/wechat.png" alt={t("wechatQrAlt")} className="mx-auto aspect-square w-full max-w-sm object-contain" />
+          </section>
+        </div>
+      )}
+
       {section === "index-diagnostics" && confirmRebuild && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="presentation">
-          <section ref={rebuildDialogRef} role="dialog" aria-modal="true" aria-labelledby="confirm-rebuild-title" onKeyDown={handleRebuildDialogKeyDown} className="w-full max-w-md rounded border border-border bg-background p-5 shadow-xl">
+          <section ref={rebuildDialogRef} role="dialog" aria-modal="true" aria-labelledby="confirm-rebuild-title" onKeyDown={handleRebuildDialogKeyDown} className="w-full max-w-md rounded-xl border border-border bg-background p-5 shadow-xl">
             <div className="flex items-start gap-3">
-              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-accent" />
-              <div>
+              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-warning" /><div>
                 <h2 id="confirm-rebuild-title" className="text-sm font-semibold">{t("confirmRebuildTitle")}</h2>
                 <p className="mt-2 text-xs leading-5 text-muted-foreground">{t("confirmRebuildDetail")}</p>
               </div>
             </div>
             <div className="mt-5 flex justify-end gap-2">
-              <button ref={rebuildCancelRef} type="button" onClick={closeRebuildDialog} className="rounded border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted">{t("cancel")}</button>
-              <button type="button" aria-label={t("confirmRebuild")} onClick={() => { void rebuildSessionIndex(); }} className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90">{t("confirmRebuild")}</button>
+              <button ref={rebuildCancelRef} type="button" onClick={closeRebuildDialog} className="btn btn-quiet">{t("cancel")}</button>
+              <button type="button" aria-label={t("confirmRebuild")} onClick={() => { void rebuildSessionIndex(); }} className="btn btn-primary">{t("confirmRebuild")}</button>
             </div>
           </section>
         </div>

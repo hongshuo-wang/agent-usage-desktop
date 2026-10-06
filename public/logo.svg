@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 820 820" role="img" aria-labelledby="title description">
+  <title id="title">Agent Usage logo</title>
+  <desc id="description">A blue U-shaped usage meter containing three colorful source bars.</desc>
+  <rect x="14" y="14" width="792" height="792" rx="184" fill="#F2F8FF" stroke="#D7E9FA" stroke-width="28"/>
+  <path
+    d="M218 220V392C218 514 302 598 410 598C518 598 602 514 602 392V220"
+    fill="none"
+    stroke="#1677EA"
+    stroke-width="76"
+    stroke-linecap="round"
+  />
+  <rect x="278" y="362" width="64" height="118" rx="32" fill="#53B7F2"/>
+  <rect x="378" y="278" width="64" height="202" rx="32" fill="#2EC4A6"/>
+  <rect x="478" y="326" width="64" height="154" rx="32" fill="#FF7968"/>
+</svg>

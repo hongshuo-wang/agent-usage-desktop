@@ -58,7 +58,7 @@ func TestSettingsCollectorsGetUsesWhitelist(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if len(response) != 2 || response["collectors"] == nil || response["pricing_sync_interval"] == nil {
+	if len(response) != 3 || response["collectors"] == nil || response["pricing_sync_interval"] == nil || response["session_event_retention_days"] == nil {
 		t.Fatalf("unexpected response keys: %#v", response)
 	}
 	body := strings.ToLower(w.Body.String())
@@ -74,10 +74,14 @@ func TestSettingsCollectorsGetUsesWhitelist(t *testing.T) {
 			Paths        []string `json:"paths"`
 			ScanInterval string   `json:"scan_interval"`
 		} `json:"collectors"`
-		PricingSyncInterval string `json:"pricing_sync_interval"`
+		PricingSyncInterval       string `json:"pricing_sync_interval"`
+		SessionEventRetentionDays int    `json:"session_event_retention_days"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &typed); err != nil {
 		t.Fatal(err)
+	}
+	if typed.SessionEventRetentionDays != 30 {
+		t.Fatalf("retention=%d, want 30", typed.SessionEventRetentionDays)
 	}
 	if len(typed.Collectors) != 5 || len(typed.Collectors[0].Paths) != 2 || typed.Collectors[0].Name != "claude" || typed.Collectors[0].ScanInterval != "1m0s" {
 		t.Fatalf("collectors=%+v", typed.Collectors)

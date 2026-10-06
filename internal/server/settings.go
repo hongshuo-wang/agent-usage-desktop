@@ -23,9 +23,14 @@ type collectorSetting struct {
 }
 
 type collectorSettingsResponse struct {
-	Collectors          []collectorSetting `json:"collectors"`
-	PricingSyncInterval string             `json:"pricing_sync_interval"`
+	Collectors                []collectorSetting `json:"collectors"`
+	PricingSyncInterval       string             `json:"pricing_sync_interval"`
+	SessionEventRetentionDays *int               `json:"session_event_retention_days"`
 }
+
+// maximumRetentionDays bounds the retention setting so a typo cannot pin the
+// index to an absurd horizon. 0 means "keep indexed content forever".
+const maximumRetentionDays = 3650
 
 func collectorSettingsFromConfig(cfg *config.Config) collectorSettingsResponse {
 	collectors := []struct {
@@ -38,9 +43,11 @@ func collectorSettingsFromConfig(cfg *config.Config) collectorSettingsResponse {
 		{"opencode", cfg.Collectors.OpenCode},
 		{"pi", cfg.Collectors.Pi},
 	}
+	retentionDays := cfg.Storage.SessionEventRetentionDays
 	response := collectorSettingsResponse{
-		Collectors:          make([]collectorSetting, 0, len(collectors)),
-		PricingSyncInterval: cfg.Pricing.SyncInterval.String(),
+		Collectors:                make([]collectorSetting, 0, len(collectors)),
+		PricingSyncInterval:       cfg.Pricing.SyncInterval.String(),
+		SessionEventRetentionDays: &retentionDays,
 	}
 	for _, collector := range collectors {
 		response.Collectors = append(response.Collectors, collectorSetting{
@@ -102,6 +109,14 @@ func (s *Server) handleCollectorSettingsPut(w http.ResponseWriter, r *http.Reque
 		badRequest(w, err)
 		return
 	}
+	retentionDays := 0
+	if request.SessionEventRetentionDays != nil {
+		retentionDays = *request.SessionEventRetentionDays
+		if retentionDays < 0 || retentionDays > maximumRetentionDays {
+			badRequest(w, fmt.Errorf("session_event_retention_days must be between 0 and %d", maximumRetentionDays))
+			return
+		}
+	}
 
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
@@ -116,9 +131,22 @@ func (s *Server) handleCollectorSettingsPut(w http.ResponseWriter, r *http.Reque
 	cfg.Collectors.OpenCode = updates["opencode"]
 	cfg.Collectors.Pi = updates["pi"]
 	cfg.Pricing.SyncInterval = pricingInterval
+	retentionChanged := false
+	if request.SessionEventRetentionDays != nil {
+		retentionChanged = cfg.Storage.SessionEventRetentionDays != retentionDays
+		cfg.Storage.SessionEventRetentionDays = retentionDays
+	}
 	if err := config.Save(s.configPath, cfg); err != nil {
 		serverError(w, err)
 		return
+	}
+	// The retention pass runs once per day, so a changed setting would otherwise
+	// wait up to 24h to take effect on the next start.
+	if retentionChanged {
+		if err := s.db.ForgetPruneThrottle(); err != nil {
+			serverError(w, err)
+			return
+		}
 	}
 	writeJSON(w, map[string]bool{"restart_required": true})
 }

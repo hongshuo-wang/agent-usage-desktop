@@ -12,7 +12,7 @@ interface Props {
 function InspectorField({ label, value, fallback, mono = false }: { label: string; value: string; fallback: string; mono?: boolean }) {
   return (
     <div className="border-b border-border py-3 last:border-b-0">
-      <dt className="text-[10px] font-medium uppercase text-muted-foreground">{label}</dt>
+      <dt className="label">{label}</dt>
       <dd className={`mt-1 whitespace-pre-wrap break-words text-xs leading-5 ${mono ? "font-mono" : ""}`}>{value || fallback}</dd>
     </div>
   );
@@ -22,11 +22,11 @@ export default function EventInspector({ event, onClose, t }: Props) {
   const fallback = t("sourceDataUnavailable");
 
   return (
-    <aside data-testid="event-inspector" className="session-event-inspector flex min-h-0 min-w-0 flex-col border-l border-border bg-card/30">
+    <aside data-testid="event-inspector" className="session-event-inspector flex min-h-0 min-w-0 flex-col border-l border-border">
       <header className="flex min-w-0 items-center gap-2 border-b border-border px-3 py-3">
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-sm font-semibold">{t("eventInspector")}</h2>
-          <p className="truncate text-[10px] text-muted-foreground">{event.source_event_type || event.event_type} / {event.id}</p>
+          <p className="truncate text-2xs tabular-nums text-muted-foreground">{event.source_event_type || event.event_type} / {event.id}</p>
         </div>
         <button type="button" aria-label={t("closeInspector")} onClick={onClose} className="flex h-8 w-8 shrink-0 items-center justify-center rounded hover:bg-muted">
           <X className="h-4 w-4" />

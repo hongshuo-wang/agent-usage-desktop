@@ -113,6 +113,8 @@ describe("application settings", () => {
 
     view.rerender(<Settings section="index-diagnostics" />);
     expect(screen.getByRole("heading", { name: "sessionIndex" })).toBeVisible();
+    view.rerender(<Settings section="session-content" />);
+    expect(screen.getByRole("heading", { name: "sessionContentTitle" })).toBeVisible();
 
     view.rerender(<Settings section="preferences" />);
     expect(screen.getByRole("heading", { name: "desktopPreferences" })).toBeVisible();
@@ -548,5 +550,128 @@ describe("application settings", () => {
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
+  });
+  const settingsWithRetention = { ...settings, session_event_retention_days: 90 };
+
+  it("loads, validates and saves the session retention window", async () => {
+    vi.mocked(fetchAPI).mockImplementation(async (path, _params, init) => {
+      if (path === "settings/collectors" && init?.method === "PUT") return { restart_required: true } as never;
+      if (path === "settings/collectors") return settingsWithRetention as never;
+      throw new Error(`unexpected path ${path}`);
+    });
+    const user = userEvent.setup();
+    render(<Settings section="session-content" />);
+    const input = await screen.findByLabelText("sessionRetentionDays");
+    expect(input).toHaveValue(90);
+
+    // Clearing the field must block the save instead of meaning "keep forever".
+    await user.clear(input);
+    expect(screen.getByText("sessionRetentionInvalid")).toBeVisible();
+    expect(screen.getByRole("button", { name: "saveCollectorSettings" })).toBeDisabled();
+
+    await user.type(input, "7");
+    await user.click(screen.getByRole("button", { name: "saveCollectorSettings" }));
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("restart_sidecar"));
+    const putCalls = vi.mocked(fetchAPI).mock.calls.filter(([path, , init]) => (
+      path === "settings/collectors" && init?.method === "PUT"
+    ));
+    expect(putCalls).toHaveLength(1);
+    const body = JSON.parse(String(putCalls[0][2]?.body));
+    expect(body.session_event_retention_days).toBe(7);
+    expect(body.collectors).toHaveLength(5);
+    expect(screen.getByText("settingsSavedAndRestarted")).toBeVisible();
+  });
+
+  it("links release history to GitHub and shows both support methods", async () => {
+    vi.mocked(fetchAPI).mockImplementation(async (path) => {
+      if (path === "app-info") return { version: "2.0.0", repository: "https://github.com/hongshuo-wang/agent-usage-desktop" } as never;
+      if (path === "update-check") return { current_version: "2.0.0", release_found: true, latest_version: "v2.0.0", update_available: false } as never;
+      if (path === "releases") return [
+        { tag_name: "v2.0.0", html_url: "https://github.com/hongshuo-wang/agent-usage-desktop/releases/tag/v2.0.0", name: "2.0.0", body: "", published_at: "2026-07-29T00:00:00Z" },
+        { tag_name: "v1.1.0", html_url: "https://github.com/hongshuo-wang/agent-usage-desktop/releases/tag/v1.1.0", name: "", body: "", published_at: "2026-06-01T00:00:00Z" },
+      ] as never;
+      throw new Error(`unexpected path ${path}`);
+    });
+    const user = userEvent.setup();
+    render(<Settings section="about" />);
+
+    await screen.findByText("2.0.0");
+    expect(screen.getByRole("heading", { name: "wechatSupport" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Ko-fi" })).toBeVisible();
+    const qrTrigger = screen.getByRole("button", { name: "zoomWechatQr" });
+    await user.click(qrTrigger);
+    expect(screen.getByRole("dialog", { name: "wechatSupport" })).toBeVisible();
+    expect(screen.getByRole("img", { name: "wechatQrAlt" })).toBeVisible();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "wechatSupport" })).not.toBeInTheDocument();
+    expect(qrTrigger).toHaveFocus();
+
+    expect(screen.getByRole("button", { name: /v2.0.0/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: /v1.1.0/ })).toBeVisible();
+    expect(screen.getAllByRole("button", { name: /v2.0.0|v1.1.0/ })).toHaveLength(2);
+
+    await user.click(screen.getByRole("button", { name: /v2.0.0/ }));
+
+    expect(invoke).toHaveBeenCalledWith("open_external_url", {
+      url: "https://github.com/hongshuo-wang/agent-usage-desktop/releases/tag/v2.0.0",
+    });
+  });
+
+  it("purges session content beyond the retention window only after confirmation", async () => {
+    vi.mocked(fetchAPI).mockImplementation(async (path, _params, init) => {
+      if (path === "settings/collectors") return settingsWithRetention as never;
+      if (path === "maintenance/purge-session-events" && init?.method === "POST") {
+        return { deleted: 12, vacuumed: true, bytes_freed: 3 * 1048576 } as never;
+      }
+      throw new Error(`unexpected path ${path}`);
+    });
+    const user = userEvent.setup();
+    render(<Settings section="session-content" />);
+    await user.click(await screen.findByRole("button", { name: "sessionPurgeRetentionAction" }));
+    expect(vi.mocked(fetchAPI).mock.calls.filter(([path]) => path === "maintenance/purge-session-events")).toHaveLength(0);
+    expect(screen.getByText("sessionPurgeRetentionConfirm")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "confirmPurge" }));
+
+    expect(await screen.findByText("sessionPurgeDone")).toBeVisible();
+    expect(screen.getByText("sessionPurgeFreed")).toBeVisible();
+    const purgeCalls = vi.mocked(fetchAPI).mock.calls.filter(([path]) => path === "maintenance/purge-session-events");
+    expect(purgeCalls).toHaveLength(1);
+    expect(JSON.parse(String(purgeCalls[0][2]?.body))).toEqual({ mode: "retention", days: 90, vacuum: true });
+  });
+
+  it("wipes every indexed session event in all mode", async () => {
+    vi.mocked(fetchAPI).mockImplementation(async (path, _params, init) => {
+      if (path === "settings/collectors") return settingsWithRetention as never;
+      if (path === "maintenance/purge-session-events" && init?.method === "POST") {
+        return { deleted: 214910, vacuumed: true, bytes_freed: 0 } as never;
+      }
+      throw new Error(`unexpected path ${path}`);
+    });
+    const user = userEvent.setup();
+    render(<Settings section="session-content" />);
+    await user.click(await screen.findByRole("button", { name: "sessionPurgeAllAction" }));
+    expect(screen.getByText("sessionPurgeAllConfirm")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "confirmPurge" }));
+
+    expect(await screen.findByText("sessionPurgeDone")).toBeVisible();
+    const purgeCalls = vi.mocked(fetchAPI).mock.calls.filter(([path]) => path === "maintenance/purge-session-events");
+    expect(JSON.parse(String(purgeCalls[0][2]?.body))).toEqual({ mode: "all", days: 90, vacuum: true });
+  });
+
+  it("surfaces a purge failure and keeps the confirmation open", async () => {
+    vi.mocked(fetchAPI).mockImplementation(async (path, _params, init) => {
+      if (path === "settings/collectors") return settingsWithRetention as never;
+      if (path === "maintenance/purge-session-events" && init?.method === "POST") throw new Error("purge rejected");
+      throw new Error(`unexpected path ${path}`);
+    });
+    const user = userEvent.setup();
+    render(<Settings section="session-content" />);
+    await user.click(await screen.findByRole("button", { name: "sessionPurgeAllAction" }));
+    await user.click(screen.getByRole("button", { name: "confirmPurge" }));
+
+    expect(await screen.findByText("purge rejected")).toBeVisible();
+    expect(screen.getByText("sessionPurgeAllConfirm")).toBeVisible();
   });
 });

@@ -5,6 +5,9 @@ use tauri_plugin_shell::ShellExt;
 
 const LITELLM_PRICING_URL: &str =
     "https://cdn.jsdelivr.net/gh/BerriAI/litellm@main/model_prices_and_context_window.json";
+const REPOSITORY_URL: &str = "https://github.com/hongshuo-wang/agent-usage-desktop";
+const RELEASES_URL: &str = "https://github.com/hongshuo-wang/agent-usage-desktop/releases";
+const KOFI_URL: &str = "https://ko-fi.com/hongshuo-wang";
 
 fn read_settings(app: &tauri::AppHandle) -> serde_json::Value {
     let path = app.path().app_data_dir().unwrap().join("settings.json");
@@ -27,10 +30,18 @@ pub fn get_sidecar_port(state: State<SidecarState>) -> u16 {
     state.port.load(Ordering::Relaxed)
 }
 
+fn is_allowed_external_url(url: &str) -> bool {
+    url == LITELLM_PRICING_URL
+        || url == REPOSITORY_URL
+        || url == KOFI_URL
+        || url == RELEASES_URL
+        || url.starts_with(&format!("{RELEASES_URL}/"))
+}
+
 #[tauri::command]
 #[allow(deprecated)]
 pub fn open_external_url(app: AppHandle, url: String) -> Result<(), String> {
-    if url != LITELLM_PRICING_URL {
+    if !is_allowed_external_url(&url) {
         return Err("external URL is not allowed".into());
     }
     app.shell()
@@ -74,8 +85,15 @@ pub async fn restart_sidecar(app: tauri::AppHandle) -> Result<u16, String> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn external_url_command_is_exposed() {
-        let _ = super::open_external_url;
+    fn external_url_allowlist_includes_release_index_and_versions() {
+        assert!(super::is_allowed_external_url(super::RELEASES_URL));
+        assert!(super::is_allowed_external_url(&format!(
+            "{}/tag/v2.0.0",
+            super::RELEASES_URL
+        )));
+        assert!(!super::is_allowed_external_url(
+            "https://github.com/other/repository/releases"
+        ));
     }
 
     #[test]
