@@ -186,7 +186,7 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| {
+        .run(|app, event| match event {
             // Every graceful exit ends here — tray Quit, Cmd+Q, an Apple Event
             // quit. Only the tray menu used to kill the sidecar, so quits that
             // went around it left the Go process running and still holding the
@@ -194,8 +194,17 @@ fn main() {
             // ponytail: a hard kill (SIGKILL, crash) reaches no handler and the
             // sidecar survives. Watching the parent pid from the Go side would
             // cover that if it ever matters.
-            if let tauri::RunEvent::Exit = event {
-                sidecar::kill_sidecar(app);
+            tauri::RunEvent::Exit => sidecar::kill_sidecar(app),
+            // Red-X hides the window instead of closing it, so after a while
+            // the app has no visible window. Clicking the dock icon then fires
+            // Reopen on macOS — without this the app looks dead until quit +
+            // relaunch.
+            tauri::RunEvent::Reopen { .. } => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
             }
+            _ => {}
         });
 }
