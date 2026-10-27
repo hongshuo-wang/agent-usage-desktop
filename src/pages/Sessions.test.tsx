@@ -312,6 +312,31 @@ describe("session retrospective center", () => {
     expect(within(timeline).getByText("Rate limit exceeded")).toBeVisible();
   });
 
+  it("folds a tool call and its result into one card and labels each model step", async () => {
+    const user = userEvent.setup();
+    mockContracts([summary()], [
+      event({ id: 61, event_type: "user_message", role: "user", content: "Pair it" }),
+      event({ id: 62, content: "Checking the folder" }),
+      event({ id: 63, event_type: "tool_call", tool_name: "shell", tool_call_id: "call-9", tool_input: '{"command":"ls"}', content: "" }),
+      event({ id: 64, event_type: "tool_result", role: "tool", tool_call_id: "call-9", tool_output: "a.go", content: "" }),
+      event({ id: 65, content: "One file" }),
+    ]);
+    renderSessions();
+
+    const turn = await screen.findByTestId("session-turn-61");
+    await user.click(turn.querySelector("summary") as Element);
+
+    expect(screen.getAllByTestId(/^session-step-/)).toHaveLength(3);
+    expect(within(turn).getByTestId("session-step-62")).toHaveTextContent("stepNumber");
+    expect(within(turn).getByTestId("session-step-62")).toHaveTextContent("turnToolCalls");
+
+    const pair = within(turn).getByTestId("event-pair-63");
+    expect(pair).toHaveTextContent('{"command":"ls"}');
+    expect(pair).toHaveTextContent("a.go");
+    expect(within(turn).queryByTestId("event-card-63")).not.toBeInTheDocument();
+    expect(within(turn).queryByTestId("event-card-64")).not.toBeInTheDocument();
+  });
+
   it("folds each question together with its answer into one collapsed round", async () => {
     const user = userEvent.setup();
     mockContracts([summary()], [

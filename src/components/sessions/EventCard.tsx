@@ -20,6 +20,12 @@ function initiallyExpanded(event: SessionEvent): boolean {
   return true;
 }
 
+// A pair folds the call and its result into one card, so the default follows the
+// result: long output stays collapsed until asked for.
+function pairInitiallyExpanded(result: SessionEvent): boolean {
+  return visibleValue(result).length <= LONG_RESULT_LENGTH;
+}
+
 export function formatEventTime(timestamp: string, fallback: string): string {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return fallback;
@@ -77,6 +83,66 @@ export default function EventCard({ event, onInspect, t }: { event: SessionEvent
         </pre>
       )}
       {!expanded && <p className="mt-1 text-2xs text-muted-foreground">{t("eventCollapsed")}</p>}
+    </article>
+  );
+}
+
+/**
+ * One tool call with the result that answered it, so a call and its output read
+ * as a single step instead of two unrelated cards.
+ */
+export function ToolPairCard({ call, result, onInspect, t }: { call: SessionEvent; result: SessionEvent; onInspect: (event: SessionEvent) => void; t: Translate }) {
+  const [expanded, setExpanded] = useState(() => pairInitiallyExpanded(result));
+  const failed = result.event_status.toLowerCase() === "error";
+  const output = visibleValue(result);
+
+  return (
+    <article
+      data-testid={`event-pair-${call.id}`}
+      tabIndex={0}
+      onClick={() => onInspect(call)}
+      onKeyDown={(keyEvent) => {
+        if (keyEvent.target === keyEvent.currentTarget && (keyEvent.key === "Enter" || keyEvent.key === " ")) {
+          onInspect(call);
+        }
+      }}
+      className={`px-3 py-2.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent ${failed ? "inset-danger" : "inset hover:bg-accent-dim"}`}
+    >
+      <header className="flex min-w-0 items-center gap-2">
+        {failed ? <AlertCircle aria-hidden="true" className="h-4 w-4 text-danger" /> : <Terminal aria-hidden="true" className="h-4 w-4 text-accent" />}
+        <span className="min-w-0 truncate text-xs font-semibold">{call.tool_name || t("eventType_tool_call")}</span>
+        {failed && <span className="chip chip-danger shrink-0">{t("eventType_error")}</span>}
+        {call.duration_ms !== null && <span className="ml-auto shrink-0 text-2xs tabular-nums text-muted-foreground">{call.duration_ms}ms</span>}
+        <time dateTime={call.timestamp} className={`${call.duration_ms === null ? "ml-auto " : ""}shrink-0 text-2xs tabular-nums text-muted-foreground`}>
+          {formatEventTime(call.timestamp, t("sourceDataUnavailable"))}
+        </time>
+        <button
+          type="button"
+          aria-label={t(expanded ? "collapseEvent" : "expandEvent")}
+          onClick={(clickEvent) => { clickEvent.stopPropagation(); setExpanded((current) => !current); }}
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded hover:bg-muted"
+        >
+          {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        </button>
+      </header>
+      {expanded ? (
+        <div className="mt-2 flex flex-col gap-2">
+          {visibleValue(call) && (
+            <div>
+              <p className="text-2xs text-muted-foreground">{t("toolInput")}</p>
+              <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 text-foreground">
+                {visibleValue(call)}
+              </pre>
+            </div>
+          )}
+          <div>
+            <p className="text-2xs text-muted-foreground">{t("toolOutput")}</p>
+            <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 text-foreground">
+              {output || t("sourceDataUnavailable")}
+            </pre>
+          </div>
+        </div>
+      ) : <p className="mt-1 text-2xs text-muted-foreground">{t("eventCollapsed")}</p>}
     </article>
   );
 }

@@ -2,7 +2,7 @@ import { ArrowLeft, ChevronRight, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 import type { SessionEvent, SessionSummary } from "../../lib/types";
 import { fmtCost, fmtTokens } from "../../lib/utils";
-import EventCard, { formatEventTime } from "./EventCard";
+import EventCard, { ToolPairCard, formatEventTime } from "./EventCard";
 import { sessionStatusLabels } from "./SessionList";
 import { presentProjectKey } from "../../lib/queryPresentation";
 import { humanizeSessionTitle, isReadableSessionEvent, isTransportArtifactContent, shortProjectName } from "../../lib/sessionPresentation";
@@ -137,7 +137,24 @@ export default function SessionTimeline({
                   </time>
                 </summary>
                 <div className="flex flex-col gap-2 border-t border-border p-2">
-                  {turn.events.map((item) => <EventCard key={item.id} event={item} onInspect={onInspect} t={t} />)}
+                  {turn.steps.map((step) => (
+                    <section key={step.key} data-testid={`session-step-${step.key}`} className="flex flex-col gap-2">
+                      {turn.steps.length > 1 && (
+                        <header className="flex min-w-0 items-center gap-2 px-1 text-2xs text-muted-foreground">
+                          <span className="chip shrink-0">
+                            {step.index === null ? t("sessionOpening") : t("stepNumber", { n: step.index })}
+                          </span>
+                          {step.toolCalls > 0 && <span className="truncate">{t("turnToolCalls", { count: step.toolCalls })}</span>}
+                          <time dateTime={step.events[0].timestamp} className="ml-auto shrink-0 tabular-nums">
+                            {formatEventTime(step.events[0].timestamp, t("sourceDataUnavailable"))}
+                          </time>
+                        </header>
+                      )}
+                      {step.items.map((item) => item.kind === "tool"
+                        ? <ToolPairCard key={item.key} call={item.call} result={item.result} onInspect={onInspect} t={t} />
+                        : <EventCard key={item.key} event={item.event} onInspect={onInspect} t={t} />)}
+                    </section>
+                  ))}
                 </div>
               </details>
             ))}

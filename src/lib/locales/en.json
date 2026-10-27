@@ -169,6 +169,7 @@
   "malformedLines": "malformed lines",
   "sessionRetrospective": "Session retrospective",
   "roundNumber": "Round {{n}}",
+  "stepNumber": "Step {{n}}",
   "sessionOpening": "Opening",
   "turnToolCalls": "{{count}} tool calls",
   "loadingSessions": "Loading sessions",

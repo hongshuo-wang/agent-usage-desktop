@@ -169,6 +169,7 @@
   "malformedLines": "行解析异常",
   "sessionRetrospective": "会话复盘",
   "roundNumber": "第 {{n}} 轮",
+  "stepNumber": "第 {{n}} 步",
   "sessionOpening": "开场",
   "turnToolCalls": "{{count}} 次工具调用",
   "loadingSessions": "正在加载会话",
