@@ -40,6 +40,24 @@ func TestRunInitialCollectionSyncsAfterAllHistoricalScans(t *testing.T) {
 
 var _ collector.Collector = orderingCollector{}
 
+// A release build reports its version as the git tag ("v2.1.0") and a local build
+// as a bare number, so the re-scan gate must treat them as the same release.
+func TestNormalizedVersionMatchesTagAndBareForms(t *testing.T) {
+	for _, test := range []struct{ version, want string }{
+		{"v2.1.0", "2.1.0"},
+		{"2.1.0", "2.1.0"},
+		{" v2.1.0 ", "2.1.0"},
+		{"2.1.1-rc.1", "2.1.1-rc.1"},
+	} {
+		if got := normalizedVersion(test.version); got != test.want {
+			t.Errorf("normalizedVersion(%q) = %q, want %q", test.version, got, test.want)
+		}
+	}
+	if normalizedVersion("v2.1.0") != normalizedVersion("2.1.0") {
+		t.Error("a release build and a local build of the same version must not trigger a re-scan")
+	}
+}
+
 // The pipe check is the only thing standing between the parent watch and
 // breaking standalone use: answer yes for anything EOF-prone and the server
 // exits the moment it starts.

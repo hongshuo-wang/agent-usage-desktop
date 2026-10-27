@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hongshuo-wang/agent-usage-desktop/internal/collector"
@@ -17,7 +18,7 @@ import (
 )
 
 var (
-	version = "2.1.0"
+	version = "2.1.1"
 	commit  = "none"
 	date    = "unknown"
 )
@@ -92,6 +93,15 @@ func isPipe(f *os.File) bool {
 	return err == nil && info.Mode()&os.ModeNamedPipe != 0
 }
 
+// normalizedVersion strips the git-tag prefix releases are built with. Release
+// sidecars get the tag as their version ("v2.1.0") while local builds default to
+// a bare "2.1.0"; comparing the raw strings would wipe the scan state every time
+// a release build and a local build alternate. Only the bare number gates the
+// re-scan; the raw value still identifies the build everywhere it is displayed.
+func normalizedVersion(v string) string {
+	return strings.TrimPrefix(strings.TrimSpace(v), "v")
+}
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "version" {
 		fmt.Printf("agent-usage-desktop %s (commit: %s, built: %s)\n", version, commit, date)
@@ -122,14 +132,15 @@ func main() {
 
 	// Check if version changed — if so, reset scan state to force full re-scan
 	// (needed when prompt counting logic or other parsing changes)
+	currentVersion := normalizedVersion(version)
 	lastVer, _ := db.GetMeta("version")
-	if lastVer != "" && lastVer != version {
+	if lastVer != "" && normalizedVersion(lastVer) != currentVersion {
 		log.Printf("version changed (%s -> %s), resetting scan state for full re-scan", lastVer, version)
 		if err := db.ResetScanState(); err != nil {
 			log.Printf("reset scan state: %v", err)
 		}
 	}
-	db.SetMeta("version", version)
+	db.SetMeta("version", currentVersion)
 
 	// Start web server first so health check is immediately available.
 	// Data initialization (pricing sync, collector scan) runs in the background.
