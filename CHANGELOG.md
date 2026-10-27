@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-10-27
+
+### English
+
+#### Highlights
+
+- Grouped each session round into model steps, and folded a tool call together with the result that answered it into a single card.
+- Collapsed corner radii onto one two-step scale: 4px for controls, 8px for surfaces.
+- Restored the window when the app is reopened from the Dock, so a hidden window no longer leaves the app unreachable until a restart.
+- Normalized the version before deciding to rebuild the index, so alternating between a release build and a local build no longer forces a full re-scan.
+
+### 中文
+
+#### 主要更新
+
+- 会话时间线按模型步骤分组，工具调用与其结果合并为一张卡片。
+- 圆角统一为两档尺度：控件 4px，面层 8px。
+- 从 Dock 重新激活应用时恢复窗口，隐藏后的窗口不再需要重启应用才能打开。
+- 判断是否重建索引前先归一化版本号，发行版与本地构建交替运行不再触发全量重扫。
+
 ## [2.1.0] - 2026-10-03
 
 ### English

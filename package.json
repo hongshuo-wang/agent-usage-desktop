@@ -1,6 +1,6 @@
 {
   "name": "agent-usage-desktop",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Local usage, cost, throughput, and session analytics for AI coding agents",
   "scripts": {
     "dev": "vite",

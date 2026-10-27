@@ -1,6 +1,6 @@
 {
   "productName": "Agent Usage",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "identifier": "com.agentusage.desktop",
   "build": {
     "beforeDevCommand": "npm run build:sidecar && npm run dev",
