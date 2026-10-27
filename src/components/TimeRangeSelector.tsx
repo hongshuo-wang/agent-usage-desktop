@@ -196,7 +196,7 @@ export default function TimeRangeSelector({ preset, onRefresh, filters, onFilter
                 type="button"
                 aria-label={`${t("removeFilter")} ${chip.value}`}
                 onClick={() => apply({ [chip.key]: "" })}
-                className="rounded-full p-0.5 hover:bg-accent/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                className="rounded-sm p-0.5 hover:bg-accent/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               >
                 <X className="h-3 w-3" aria-hidden="true" />
               </button>

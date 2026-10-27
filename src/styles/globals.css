@@ -29,6 +29,15 @@
   --color-green: #1f8a5b;
   --color-danger: #c8402f;
   --color-warning: #96650a;
+
+  /* Two corner steps only: controls sit at 4px, surfaces at 8px. Tailwind's
+     sm/md/lg/xl collapse onto the same pair so no component gets a third value. */
+  --radius-control: 4px;
+  --radius-surface: 8px;
+  --radius-sm: 4px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+  --radius-xl: 8px;
 }
 
 .dark {
@@ -65,7 +74,7 @@
 
 * { scrollbar-width: thin; scrollbar-color: #cbd1d8 transparent; }
 button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
-.icon-button { display: inline-flex; height: 2rem; width: 2rem; align-items: center; justify-content: center; border-radius: .5rem; }
+.icon-button { display: inline-flex; height: 2rem; width: 2rem; align-items: center; justify-content: center; border-radius: var(--radius-control); }
 .icon-button:hover { background: var(--color-muted); }
 
 /* Shared content surfaces stay quiet; hierarchy comes from spacing and dividers. */
@@ -91,8 +100,8 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
   .panel-title { min-width: 0; font-size: .875rem; font-weight: 650; letter-spacing: -.01em; }
   .panel-hint { min-width: 0; font-size: .75rem; color: var(--color-muted-foreground); }
   .panel-body { min-width: 0; flex: 1; padding: 0 0 .75rem; }
-  .inset { border-radius: .5rem; background: var(--color-subtle); }
-  .inset-danger { border-radius: .5rem; background: color-mix(in srgb, var(--color-danger) 9%, transparent); }
+  .inset { border-radius: var(--radius-control); background: var(--color-subtle); }
+  .inset-danger { border-radius: var(--radius-control); background: color-mix(in srgb, var(--color-danger) 9%, transparent); }
 
   .label {
     font-size: .6875rem;
@@ -108,7 +117,7 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
     min-width: 0;
     align-items: center;
     gap: .3rem;
-    border-radius: 999px;
+    border-radius: var(--radius-control);
     padding: .125rem .5rem;
     font-size: .6875rem;
     font-weight: 500;
@@ -125,7 +134,7 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
     flex-shrink: 0;
     align-items: center;
     gap: .4rem;
-    border-radius: .5rem;
+    border-radius: var(--radius-control);
     padding: 0 .75rem;
     font-size: .75rem;
     font-weight: 600;
@@ -150,7 +159,7 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 
   .alert-danger {
     border: 1px solid color-mix(in srgb, var(--color-danger) 40%, transparent);
-    border-radius: .5rem;
+    border-radius: var(--radius-control);
     background: color-mix(in srgb, var(--color-danger) 8%, transparent);
   }
 
@@ -159,7 +168,7 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
     width: 100%;
     min-width: 0;
     border: 1px solid var(--color-border);
-    border-radius: .5rem;
+    border-radius: var(--radius-control);
     background: var(--color-background);
     padding: 0 .625rem;
     font-size: .75rem;
@@ -176,7 +185,7 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
     align-items: center;
     gap: .35rem;
     border: 1px solid var(--color-border);
-    border-radius: .5rem;
+    border-radius: var(--radius-control);
     background: var(--color-background);
     padding: 0 .55rem;
   }
@@ -209,7 +218,7 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
     left: 0;
     width: 21rem;
     border: 1px solid var(--color-border);
-    border-radius: .75rem;
+    border-radius: var(--radius-surface);
     background: var(--color-card);
     box-shadow: 0 16px 40px color-mix(in srgb, var(--color-foreground) 16%, transparent);
     padding: .75rem;
@@ -224,7 +233,7 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
     height: 1.75rem;
     width: 1.75rem;
     place-items: center;
-    border-radius: .4rem;
+    border-radius: var(--radius-control);
     color: var(--color-muted-foreground);
     transition: background-color .15s ease, color .15s ease, transform .15s ease;
   }
@@ -239,7 +248,7 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
     height: 1.9rem;
     width: 1.9rem;
     place-items: center;
-    border-radius: .45rem;
+    border-radius: var(--radius-control);
     color: var(--color-foreground);
     font-size: .75rem;
     font-variant-numeric: tabular-nums;
@@ -254,14 +263,14 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
   .rdp-range-middle .rdp-day-button { color: var(--color-accent); }
   .rdp-range-start, .rdp-range-end { background: transparent; }
   .rdp-range-start .rdp-day-button, .rdp-range-end .rdp-day-button { background: var(--color-accent); color: var(--color-on-accent); font-weight: 700; }
-  .rdp-range-start { border-radius: .45rem 0 0 .45rem; }
-  .rdp-range-end { border-radius: 0 .45rem .45rem 0; }
-  .rdp-range-start.rdp-range-end { border-radius: .45rem; }
+  .rdp-range-start { border-radius: var(--radius-control) 0 0 var(--radius-control); }
+  .rdp-range-end { border-radius: 0 var(--radius-control) var(--radius-control) 0; }
+  .rdp-range-start.rdp-range-end { border-radius: var(--radius-control); }
 
   /* Floating rail: the app shell's only chrome. */
   .rail {
     border: 1px solid var(--color-border);
-    border-radius: 1rem;
+    border-radius: var(--radius-surface);
     background: var(--color-card);
   }
   .rail-link {
@@ -270,7 +279,7 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
     min-width: 0;
     align-items: center;
     gap: .625rem;
-    border-radius: .625rem;
+    border-radius: var(--radius-control);
     padding: .5rem .625rem;
     font-size: .8125rem;
     font-weight: 500;
@@ -297,7 +306,7 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
     display: grid;
     flex-shrink: 0;
     place-items: center;
-    border-radius: .875rem;
+    border-radius: var(--radius-surface);
     border: 1px solid var(--color-border);
     background: var(--color-card);
   }
@@ -401,7 +410,7 @@ button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
     height: 2.25rem;
     place-items: center;
     border: 1px solid var(--color-border);
-    border-radius: 999px;
+    border-radius: var(--radius-surface);
     color: var(--color-muted-foreground);
     transition: background-color .2s ease, border-color .2s ease, color .2s ease, translate .2s ease, rotate .2s ease;
   }

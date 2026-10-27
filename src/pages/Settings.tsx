@@ -616,12 +616,12 @@ export default function Settings({ section = "data-sources" }: { section?: Setti
                       />
                     </div>
                     <div className="mt-3 flex flex-wrap gap-1.5" aria-label={t("collectorCapabilities")}>
-                      <span className="inline-flex items-center gap-1.5 rounded-full bg-accent-dim px-2 py-1 text-2xs font-medium text-accent">
+                      <span className="inline-flex items-center gap-1.5 rounded-sm bg-accent-dim px-2 py-1 text-2xs font-medium text-accent">
                         <BarChart3 className="h-3 w-3" aria-hidden="true" />
                         {t("tokenUsageCapability")}
                         <CircleCheck className="h-3 w-3" aria-hidden="true" />
                       </span>
-                      <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-2xs font-medium ${supportsReplay ? "bg-accent-dim text-accent" : "bg-muted text-muted-foreground"}`}>
+                      <span className={`inline-flex items-center gap-1.5 rounded-sm px-2 py-1 text-2xs font-medium ${supportsReplay ? "bg-accent-dim text-accent" : "bg-muted text-muted-foreground"}`}>
                         <MessageSquareText className="h-3 w-3" aria-hidden="true" />
                         {t("sessionReplayCapability")}
                         {supportsReplay ? <CircleCheck className="h-3 w-3" aria-hidden="true" /> : <CircleMinus className="h-3 w-3" aria-hidden="true" />}
